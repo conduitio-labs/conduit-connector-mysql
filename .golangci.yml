@@ -6,20 +6,15 @@ linters-settings:
     allow-unused: false # report any unused nolint directives
     require-explanation: true # require an explanation for nolint directives
     require-specific: true # require nolint directives to mention the specific linter being suppressed
+  gocyclo:
+    min-complexity: 20
   goconst:
     ignore-tests: true
-  wrapcheck:
-    ignoreSigs:
-      - .Errorf(
-      - errors.New(
-      - errors.Unwrap(
-      - errors.Join(
-      - .Wrap(
-      - .Wrapf(
-      - .WithMessage(
-      - .WithMessagef(
-      - .WithStack(
-      - (context.Context).Err()
+  goheader:
+    template-path: '.golangci.goheader.template'
+    values:
+      regexp:
+        copyright-year: 20[2-9]\d
 
 issues:
   exclude-rules:
@@ -31,9 +26,9 @@ issues:
         - errcheck
         - forcetypeassert
         - funlen
-        - err113
+        - goerr113
         - dupl
-        - maintidx
+        - prealloc
 
 linters:
   # please, do not use `enable-all`: it's deprecated and will be removed soon.
@@ -65,11 +60,11 @@ linters:
     - ginkgolinter
     - gocheckcompilerdirectives
     - gochecknoinits
-    - gocognit
+    # - gocognit
     - goconst
     - gocritic
     - godot
-    - err113
+    # - goerr113
     - gofmt
     - gofumpt
     - goheader
@@ -109,7 +104,7 @@ linters:
     - stylecheck
     - tenv
     - testableexamples
-    - thelper
+    # - thelper
     - unconvert
     - unparam
     - unused

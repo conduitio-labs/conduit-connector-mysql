@@ -29,3 +29,11 @@ install-tools:
 .PHONY: lint
 lint:
 	golangci-lint run
+
+.PHONY: up
+up:
+	docker compose -f test/docker-compose.yml up --quiet-pull -d --wait 
+
+.PHONY: down
+down:
+	docker compose -f test/docker-compose.yml down -v

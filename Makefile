@@ -37,3 +37,7 @@ up:
 .PHONY: down
 down:
 	docker compose -f test/docker-compose.yml down -v
+
+.PHONY: connect
+connect:
+	docker exec -it test-db-1 mysql -u root -p'password' testdb

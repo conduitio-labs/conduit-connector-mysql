@@ -22,6 +22,7 @@ import (
 	"fmt"
 
 	sdk "github.com/conduitio/conduit-connector-sdk"
+
 	// apply mysql driver.
 	_ "github.com/go-sql-driver/mysql"
 )
@@ -29,14 +30,15 @@ import (
 type Source struct {
 	sdk.UnimplementedSource
 
-	config           SourceConfig
-	lastPositionRead sdk.Position //nolint:unused // this is just an example
+	config SourceConfig
 
 	db *sql.DB
 }
 
 type SourceConfig struct {
 	Config
+
+	Tables []string `json:"tables" validate:"required"`
 }
 
 func NewSource() sdk.Source {
@@ -59,13 +61,11 @@ func (s *Source) Configure(ctx context.Context, cfg map[string]string) error {
 	return nil
 }
 
-func (s *Source) Open(ctx context.Context, _ sdk.Position) error {
-	dataSourceName := fmt.Sprintf("%s:%s@/%s", s.config.User, s.config.Password, s.config.Database)
-	db, err := sql.Open("mysql", dataSourceName)
+func (s *Source) Open(ctx context.Context, _ sdk.Position) (err error) {
+	s.db, err = connect(s.config.Config)
 	if err != nil {
 		return fmt.Errorf("failed to connect to mysql: %w", err)
 	}
-	s.db = db
 
 	sdk.Logger(ctx).Info().Msg("opened source connector")
 	return nil

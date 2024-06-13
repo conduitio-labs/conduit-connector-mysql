@@ -40,4 +40,4 @@ down:
 
 .PHONY: connect
 connect:
-	docker exec -it test-db-1 mysql -u root -p'password' testdb
+	docker exec -it mysql_db mysql -u root -p'meroxaadmin' meroxadb

@@ -1,4 +1,4 @@
-# Conduit Connector for <resource>
+# Conduit Connector for MySQL
 
 [Conduit](https://conduit.io) connector for <resource>.
 

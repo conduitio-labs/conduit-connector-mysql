@@ -35,9 +35,9 @@ func TestSource(t *testing.T) {
 
 	err := source.Configure(ctx, SourceConfig{
 		Config: Config{
-			Database: "testdb",
-			User:     "user",
-			Password: "password",
+			Database: "meroxadb",
+			User:     "meroxauser",
+			Password: "meroxapass",
 		},
 	}.toMap())
 	is.NoErr(err)

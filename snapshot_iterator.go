@@ -27,18 +27,16 @@ type Iterator interface {
 	Teardown(context.Context) error
 }
 
-//go:generate stringer -type=Type -trimprefix Type
-
-type Type int
+type PositionType int
 
 const (
-	TypeInitial Type = iota
-	TypeSnapshot
-	TypeCDC
+	PositionTypeInitial PositionType = iota
+	PositionTypeSnapshot
+	PositionTypeCDC
 )
 
 type Position struct {
-	Type      Type              `json:"type"`
+	Type      PositionType      `json:"type"`
 	Snapshots SnapshotPositions `json:"snapshots,omitempty"`
 }
 
@@ -58,6 +56,22 @@ type SnapshotPosition struct {
 	SnapshotEnd int64 `json:"snapshot_end"`
 }
 
+type SnapshotKey struct {
+	Table string `json:"table"`
+	Key   string `json:"key"`
+	Value int64  `json:"value"`
+}
+
+func (key SnapshotKey) ToSDKData() sdk.Data {
+	bs, err := json.Marshal(key)
+	if err != nil {
+		// This should never happen, all Position structs should be valid.
+		panic(err)
+	}
+
+	return sdk.RawData(bs)
+}
+
 type snapshotIterator struct {
 	db     *sql.DB
 	tables []string
@@ -70,28 +84,39 @@ type snapshotIterator struct {
 	data chan FetchData
 }
 
-func newSnapshotIterator(ctx context.Context, db *sql.DB, tables []string) (Iterator, error) {
+type snapshotIteratorConfig struct {
+	Position  Position
+	Tables    []string
+	TableKeys map[string]string
+}
+
+func newSnapshotIterator(
+	ctx context.Context,
+	db *sql.DB,
+	config snapshotIteratorConfig,
+) (Iterator, error) {
 	t, _ := tomb.WithContext(ctx)
 
 	it := &snapshotIterator{
-		db:     db,
-		tables: tables,
-		lastPosition: Position{
-			Type:      TypeInitial,
-			Snapshots: map[string]SnapshotPosition{},
-		},
-		acks: csync.WaitGroup{},
-		t:    t,
-		data: make(chan FetchData),
+		db:           db,
+		tables:       config.Tables,
+		lastPosition: config.Position,
+		acks:         csync.WaitGroup{},
+		t:            t,
+		data:         make(chan FetchData),
 	}
 
 	for _, table := range it.tables {
+		key, ok := config.TableKeys[table]
+		if !ok {
+			return nil, fmt.Errorf("table %q not found in table keys", table)
+		}
+
 		worker := NewFetchWorker(db, it.data, FetchConfig{
-			Table:       table,
-			Key:         "id",
-			FetchSize:   1000,
-			LastRead:    0,
-			SnapshotEnd: 0,
+			Table:     table,
+			Key:       key,
+			FetchSize: 1000,
+			Position:  it.lastPosition,
 		})
 
 		t.Go(func() error {
@@ -147,14 +172,15 @@ func (s *snapshotIterator) Teardown(ctx context.Context) error {
 
 func (s *snapshotIterator) buildRecord(d FetchData) sdk.Record {
 	// merge this position with latest position
-	s.lastPosition.Type = TypeSnapshot
+	s.lastPosition.Type = PositionTypeSnapshot
 	s.lastPosition.Snapshots[d.Table] = d.Position
 
 	pos := s.lastPosition.ToSDKPosition()
 	metadata := make(sdk.Metadata)
 	metadata["postgres.table"] = d.Table
+	key := d.Key.ToSDKData()
 
-	return sdk.Util.Source.NewRecordSnapshot(pos, metadata, d.Key, d.Payload)
+	return sdk.Util.Source.NewRecordSnapshot(pos, metadata, key, d.Payload)
 }
 
 const defaultFetchSize = 50000
@@ -163,8 +189,9 @@ type FetchConfig struct {
 	Table       string
 	Key         string
 	FetchSize   int
+	Position    Position
+	SnapshotEnd int
 	LastRead    int64
-	SnapshotEnd int64
 }
 
 func NewFetchWorker(db *sql.DB, out chan<- FetchData, c FetchConfig) *FetchWorker {
@@ -188,7 +215,7 @@ type FetchWorker struct {
 }
 
 type FetchData struct {
-	Key      sdk.StructuredData
+	Key      SnapshotKey
 	Payload  sdk.StructuredData
 	Position SnapshotPosition
 	Table    string
@@ -273,7 +300,7 @@ func (f *FetchWorker) fetch(ctx context.Context, tx *sql.Tx) error {
 				return fmt.Errorf("failed to scan row: %w", err)
 			}
 
-			data, err := f.buildFetchData(fields, values)
+			data := f.buildFetchData(fields, values)
 			if err != nil {
 				return fmt.Errorf("failed to build fetch data: %w", err)
 			}
@@ -298,25 +325,39 @@ func (f *FetchWorker) fetch(ctx context.Context, tx *sql.Tx) error {
 	return nil
 }
 
-func (f *FetchWorker) buildFetchData(fields []string, values []any) (FetchData, error) {
-	key, payload := make(sdk.StructuredData), make(sdk.StructuredData)
+func (f *FetchWorker) buildFetchData(fields []string, values []any) FetchData {
+
+	payload := make(sdk.StructuredData)
 	var lastRead int64
 
 	for i, field := range fields {
 		payload[field] = values[i]
-		if field == f.conf.Key {
-			lastRead = values[i].(int64)
-		}
 	}
 
-	key[f.conf.Key] = lastRead
+	if val, ok := payload[f.conf.Key]; ok {
+		if lastRead, ok = val.(int64); !ok {
+			sdk.Logger(context.Background()).Fatal().Msgf(
+				"key %s not found in payload",
+				f.conf.Key,
+			)
+		}
+	} else {
+		lastRead = 0
+	}
+
+	key := SnapshotKey{
+		Table: f.conf.Table,
+		Key:   f.conf.Key,
+		Value: lastRead,
+	}
+
 	f.conf.LastRead = lastRead
 
 	return FetchData{
 		Key:     key,
 		Payload: payload,
 		Table:   f.conf.Table,
-	}, nil
+	}
 }
 
 func (f *FetchWorker) send(ctx context.Context, data FetchData) error {

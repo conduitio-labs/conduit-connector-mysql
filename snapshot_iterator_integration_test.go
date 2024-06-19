@@ -2,17 +2,17 @@ package mysql
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"testing"
 	"time"
 
 	sdk "github.com/conduitio/conduit-connector-sdk"
+	"github.com/jmoiron/sqlx"
 	"github.com/matryer/is"
 )
 
-func createTestConnection(is *is.I) *sql.DB {
+func createTestConnection(is *is.I) *sqlx.DB {
 	db, err := connect(Config{
 		Host:     "127.0.0.1",
 		Port:     3306,
@@ -32,7 +32,7 @@ type TestTables struct{}
 
 var testTables TestTables
 
-func (TestTables) drop(is *is.I, db *sql.DB) {
+func (TestTables) drop(is *is.I, db *sqlx.DB) {
 	dropOrdersTableQuery := `DROP TABLE IF EXISTS orders`
 	_, err := db.Exec(dropOrdersTableQuery)
 	is.NoErr(err)
@@ -42,7 +42,7 @@ func (TestTables) drop(is *is.I, db *sql.DB) {
 	is.NoErr(err)
 }
 
-func (TestTables) create(is *is.I, db *sql.DB) {
+func (TestTables) create(is *is.I, db *sqlx.DB) {
 	createUsersTableQuery := `
 	CREATE TABLE users (
 		id INT AUTO_INCREMENT PRIMARY KEY,
@@ -67,7 +67,7 @@ func (TestTables) create(is *is.I, db *sql.DB) {
 	is.NoErr(err)
 }
 
-func (TestTables) insertData(is *is.I, db *sql.DB) {
+func (TestTables) insertData(is *is.I, db *sqlx.DB) {
 	for i := 1; i <= totalRowsPerTabl; i++ {
 		insertUsersRowQuery := fmt.Sprintf(`
 		INSERT INTO users (username, email) 
@@ -94,7 +94,11 @@ func TestSnapshotIterator_EmptyTable(t *testing.T) {
 	testTables.drop(is, db)
 	testTables.create(is, db)
 
-	it, err := newSnapshotIterator(ctx, db, tables)
+	it, err := newSnapshotIterator(ctx, db, snapshotIteratorConfig{
+		Position:  Position{},
+		Tables:    tables,
+		TableKeys: map[string]string{},
+	})
 	is.NoErr(err)
 
 	ctx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
@@ -116,7 +120,11 @@ func TestSnapshotIterator_MultipleTables(t *testing.T) {
 	testTables.create(is, db)
 	testTables.insertData(is, db)
 
-	it, err := newSnapshotIterator(ctx, db, tables)
+	it, err := newSnapshotIterator(ctx, db, snapshotIteratorConfig{
+		Position:  Position{},
+		Tables:    tables,
+		TableKeys: map[string]string{},
+	})
 	is.NoErr(err)
 
 	var recs []sdk.Record

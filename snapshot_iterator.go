@@ -10,6 +10,7 @@ import (
 
 	"github.com/conduitio/conduit-commons/csync"
 	sdk "github.com/conduitio/conduit-connector-sdk"
+	"github.com/jmoiron/sqlx"
 	"gopkg.in/tomb.v2"
 )
 
@@ -73,7 +74,7 @@ func (key SnapshotKey) ToSDKData() sdk.Data {
 }
 
 type snapshotIterator struct {
-	db     *sql.DB
+	db     *sqlx.DB
 	tables []string
 
 	lastPosition Position
@@ -92,7 +93,7 @@ type snapshotIteratorConfig struct {
 
 func newSnapshotIterator(
 	ctx context.Context,
-	db *sql.DB,
+	db *sqlx.DB,
 	config snapshotIteratorConfig,
 ) (Iterator, error) {
 	t, _ := tomb.WithContext(ctx)
@@ -194,7 +195,7 @@ type FetchConfig struct {
 	LastRead    int64
 }
 
-func NewFetchWorker(db *sql.DB, out chan<- FetchData, c FetchConfig) *FetchWorker {
+func NewFetchWorker(db *sqlx.DB, out chan<- FetchData, c FetchConfig) *FetchWorker {
 	f := &FetchWorker{
 		conf: c,
 		db:   db,
@@ -210,7 +211,7 @@ func NewFetchWorker(db *sql.DB, out chan<- FetchData, c FetchConfig) *FetchWorke
 
 type FetchWorker struct {
 	conf FetchConfig
-	db   *sql.DB
+	db   *sqlx.DB
 	out  chan<- FetchData
 }
 

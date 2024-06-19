@@ -18,10 +18,10 @@ package mysql
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 
 	sdk "github.com/conduitio/conduit-connector-sdk"
+	"github.com/jmoiron/sqlx"
 
 	// apply mysql driver.
 	_ "github.com/go-sql-driver/mysql"
@@ -32,7 +32,7 @@ type Source struct {
 
 	config SourceConfig
 
-	db *sql.DB
+	db *sqlx.DB
 }
 
 type SourceConfig struct {

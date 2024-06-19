@@ -7,6 +7,7 @@ require (
 	github.com/conduitio/conduit-connector-sdk v0.9.1
 	github.com/go-sql-driver/mysql v1.8.1
 	github.com/golangci/golangci-lint v1.59.1
+	github.com/jmoiron/sqlx v1.3.5
 	github.com/matryer/is v1.4.1
 	gopkg.in/tomb.v2 v2.0.0-20161208151619-d5d1b5820637
 )

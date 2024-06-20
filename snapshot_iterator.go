@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/conduitio/conduit-commons/csync"
@@ -15,6 +16,8 @@ import (
 )
 
 var ErrIteratorDone = errors.New("snapshot complete")
+
+const defaultFetchSize = 50000
 
 // Iterator is an object that can iterate over a queue of records.
 type Iterator interface {
@@ -60,7 +63,7 @@ type SnapshotPosition struct {
 type SnapshotKey struct {
 	Table string `json:"table"`
 	Key   string `json:"key"`
-	Value int64  `json:"value"`
+	Value int    `json:"value"`
 }
 
 func (key SnapshotKey) ToSDKData() sdk.Data {
@@ -86,9 +89,9 @@ type snapshotIterator struct {
 }
 
 type snapshotIteratorConfig struct {
-	Position  Position
-	Tables    []string
-	TableKeys map[string]string
+	StartPosition Position
+	Database      string
+	Tables        []string
 }
 
 func newSnapshotIterator(
@@ -98,26 +101,30 @@ func newSnapshotIterator(
 ) (Iterator, error) {
 	t, _ := tomb.WithContext(ctx)
 
+	tableKeys, err := getTableKeys(db, config.Database, config.Tables)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get table keys: %w", err)
+	}
+
 	it := &snapshotIterator{
 		db:           db,
 		tables:       config.Tables,
-		lastPosition: config.Position,
+		lastPosition: config.StartPosition,
 		acks:         csync.WaitGroup{},
 		t:            t,
 		data:         make(chan FetchData),
 	}
 
 	for _, table := range it.tables {
-		key, ok := config.TableKeys[table]
+		key, ok := tableKeys[table]
 		if !ok {
 			return nil, fmt.Errorf("table %q not found in table keys", table)
 		}
 
 		worker := NewFetchWorker(db, it.data, FetchConfig{
-			Table:     table,
-			Key:       key,
-			FetchSize: 1000,
-			Position:  it.lastPosition,
+			Table:         table,
+			Key:           key,
+			StartPosition: it.lastPosition,
 		})
 
 		t.Go(func() error {
@@ -184,15 +191,13 @@ func (s *snapshotIterator) buildRecord(d FetchData) sdk.Record {
 	return sdk.Util.Source.NewRecordSnapshot(pos, metadata, key, d.Payload)
 }
 
-const defaultFetchSize = 50000
-
 type FetchConfig struct {
-	Table       string
-	Key         string
-	FetchSize   int
-	Position    Position
-	SnapshotEnd int
-	LastRead    int64
+	Table         string
+	Key           string
+	FetchSize     int
+	StartPosition Position
+	SnapshotEnd   int
+	LastRead      int
 }
 
 func NewFetchWorker(db *sqlx.DB, out chan<- FetchData, c FetchConfig) *FetchWorker {
@@ -225,7 +230,7 @@ type FetchData struct {
 func (f *FetchWorker) Run(ctx context.Context) error {
 	start := time.Now().UTC()
 
-	tx, err := f.db.BeginTx(ctx, &sql.TxOptions{
+	tx, err := f.db.BeginTxx(ctx, &sql.TxOptions{
 		Isolation: sql.LevelRepeatableRead,
 		ReadOnly:  true,
 	})
@@ -253,20 +258,36 @@ func (f *FetchWorker) Run(ctx context.Context) error {
 	return nil
 }
 
-func (f *FetchWorker) updateSnapshotEnd(ctx context.Context, tx *sql.Tx) error {
+func (f *FetchWorker) updateSnapshotEnd(ctx context.Context, tx *sqlx.Tx) error {
 	if f.conf.SnapshotEnd > 0 {
 		return nil
 	}
 
-	query := fmt.Sprintf("SELECT MAX(%s) FROM %s", f.conf.Key, f.conf.Table)
-	if err := tx.QueryRowContext(ctx, query).Scan(&f.conf.SnapshotEnd); err != nil {
-		return fmt.Errorf("failed to query max on %q.%q: %w", f.conf.Table, f.conf.Key, err)
+	var maxValueRow struct {
+		MaxValue *int `db:"max_value"`
+	}
+
+	query := fmt.Sprintf("SELECT MAX(%s) as max_value FROM %s", f.conf.Key, f.conf.Table)
+	row := tx.QueryRowxContext(ctx, query)
+	if err := row.StructScan(&maxValueRow); err != nil {
+		return fmt.Errorf("failed to get max value: %w", err)
+	}
+
+	if err := row.Err(); err != nil {
+		return fmt.Errorf("failed to get max value: %w", err)
+	}
+
+	if maxValueRow.MaxValue == nil {
+		// table is empty
+		f.conf.SnapshotEnd = 0
+	} else {
+		f.conf.SnapshotEnd = *maxValueRow.MaxValue
 	}
 
 	return nil
 }
 
-func (f *FetchWorker) fetch(ctx context.Context, tx *sql.Tx) error {
+func (f *FetchWorker) fetch(ctx context.Context, tx *sqlx.Tx) error {
 	query := fmt.Sprintf(`
 		SELECT *
 		FROM %s
@@ -278,65 +299,52 @@ func (f *FetchWorker) fetch(ctx context.Context, tx *sql.Tx) error {
 		f.conf.Key, f.conf.FetchSize,
 	)
 
-	for {
-		rows, err := tx.QueryContext(ctx, query, f.conf.LastRead, f.conf.SnapshotEnd)
-		if err != nil {
-			return fmt.Errorf("failed to query rows: %w", err)
+	rows, err := tx.QueryContext(ctx, query, f.conf.LastRead, f.conf.SnapshotEnd)
+	if err != nil {
+		return fmt.Errorf("failed to query rows: %w", err)
+	}
+	defer rows.Close()
+
+	fields, err := rows.Columns()
+	if err != nil {
+		return fmt.Errorf("failed to get columns: %w", err)
+	}
+
+	for rows.Next() {
+		values := make([]any, len(fields))
+		valuePtrs := make([]any, len(fields))
+		for i := range values {
+			valuePtrs[i] = &values[i]
 		}
 
-		fields, err := rows.Columns()
-		if err != nil {
-			return fmt.Errorf("failed to get columns: %w", err)
+		if err := rows.Scan(valuePtrs...); err != nil {
+			return fmt.Errorf("failed to scan row: %w", err)
 		}
 
-		var nfetched int
-		for rows.Next() {
-			values := make([]any, len(fields))
-			valuePtrs := make([]any, len(fields))
-			for i := range values {
-				valuePtrs[i] = &values[i]
-			}
+		data := f.buildFetchData(fields, values)
 
-			if err := rows.Scan(valuePtrs...); err != nil {
-				return fmt.Errorf("failed to scan row: %w", err)
-			}
-
-			data := f.buildFetchData(fields, values)
-			if err != nil {
-				return fmt.Errorf("failed to build fetch data: %w", err)
-			}
-
-			if err := f.send(ctx, data); err != nil {
-				return fmt.Errorf("failed to send record: %w", err)
-			}
-
-			nfetched++
+		if err := f.send(ctx, data); err != nil {
+			return fmt.Errorf("failed to send record: %w", err)
 		}
+	}
 
-		if err := rows.Err(); err != nil {
-			return fmt.Errorf("failed to read rows: %w", err)
-		}
-		rows.Close()
-
-		if nfetched == 0 {
-			break
-		}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("failed to read rows: %w", err)
 	}
 
 	return nil
 }
 
 func (f *FetchWorker) buildFetchData(fields []string, values []any) FetchData {
-
 	payload := make(sdk.StructuredData)
-	var lastRead int64
+	var lastRead int
 
 	for i, field := range fields {
 		payload[field] = values[i]
 	}
 
 	if val, ok := payload[f.conf.Key]; ok {
-		if lastRead, ok = val.(int64); !ok {
+		if lastRead, ok = val.(int); !ok {
 			sdk.Logger(context.Background()).Fatal().Msgf(
 				"key %s not found in payload",
 				f.conf.Key,
@@ -368,4 +376,45 @@ func (f *FetchWorker) send(ctx context.Context, data FetchData) error {
 	case f.out <- data:
 		return nil
 	}
+}
+
+func getTableKeys(db *sqlx.DB, database string, tables []string) (map[string]string, error) {
+	primaryKeys := make(map[string]string)
+
+	var formattedTables []string
+	for _, table := range tables {
+		formattedTables = append(formattedTables, fmt.Sprintf("'%s'", table))
+	}
+	tableNameIn := strings.Join(formattedTables, ",")
+
+	type Row struct {
+		Column_Name string `db:"COLUMN_NAME"`
+		Table_Name  string `db:"TABLE_NAME"`
+	}
+
+	var rows []Row
+	query := fmt.Sprintf(`
+		SELECT TABLE_NAME, COLUMN_NAME 
+		FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE 
+		WHERE 
+			CONSTRAINT_NAME = 'PRIMARY' 
+			AND TABLE_SCHEMA = ?
+			AND TABLE_NAME IN (%s);
+	`, tableNameIn)
+	err := db.Select(&rows, query, database)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get primary keys from tables: %w", err)
+	}
+
+	for _, row := range rows {
+		primaryKeys[row.Table_Name] = row.Column_Name
+	}
+
+	for _, table := range tables {
+		if _, ok := primaryKeys[table]; !ok {
+			return nil, fmt.Errorf("table %q has no primary key", table)
+		}
+	}
+
+	return primaryKeys, nil
 }

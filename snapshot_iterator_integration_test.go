@@ -95,11 +95,12 @@ func TestSnapshotIterator_EmptyTable(t *testing.T) {
 	testTables.create(is, db)
 
 	it, err := newSnapshotIterator(ctx, db, snapshotIteratorConfig{
-		Position:  Position{},
-		Tables:    tables,
-		TableKeys: map[string]string{},
+		StartPosition: Position{},
+		Database:      "meroxadb",
+		Tables:        tables,
 	})
 	is.NoErr(err)
+	defer func() { is.NoErr(it.Teardown(ctx)) }()
 
 	ctx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
 	defer cancel()
@@ -121,11 +122,11 @@ func TestSnapshotIterator_MultipleTables(t *testing.T) {
 	testTables.insertData(is, db)
 
 	it, err := newSnapshotIterator(ctx, db, snapshotIteratorConfig{
-		Position:  Position{},
-		Tables:    tables,
-		TableKeys: map[string]string{},
+		Database: "meroxadb",
+		Tables:   tables,
 	})
 	is.NoErr(err)
+	defer func() { is.NoErr(it.Teardown(ctx)) }()
 
 	var recs []sdk.Record
 	for {

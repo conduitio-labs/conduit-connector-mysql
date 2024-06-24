@@ -122,6 +122,10 @@ func TestSnapshotIterator_MultipleTables(t *testing.T) {
 	testTables.insertData(is, db)
 
 	it, err := newSnapshotIterator(ctx, db, snapshotIteratorConfig{
+		StartPosition: Position{
+			Type:      PositionTypeInitial,
+			Snapshots: map[string]SnapshotPosition{},
+		},
 		Database: "meroxadb",
 		Tables:   tables,
 	})
@@ -129,6 +133,7 @@ func TestSnapshotIterator_MultipleTables(t *testing.T) {
 	defer func() { is.NoErr(it.Teardown(ctx)) }()
 
 	var recs []sdk.Record
+
 	for {
 		ctx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
 		defer cancel()

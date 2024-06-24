@@ -99,7 +99,7 @@ func newSnapshotIterator(
 	db *sqlx.DB,
 	config snapshotIteratorConfig,
 ) (Iterator, error) {
-	t, _ := tomb.WithContext(ctx)
+	t, ctx := tomb.WithContext(ctx)
 
 	tableKeys, err := getTableKeys(db, config.Database, config.Tables)
 	if err != nil {
@@ -129,7 +129,7 @@ func newSnapshotIterator(
 
 		t.Go(func() error {
 			//nolint:staticcheck // This is the correct usage of tomb.Context
-			ctx := it.t.Context(nil)
+			sdk.Logger(ctx).Info().Msgf("starting fetcher for table %q", table)
 
 			if err := worker.Run(ctx); err != nil {
 				return fmt.Errorf("fetcher for table %q exited: %w", table, err)
@@ -137,6 +137,7 @@ func newSnapshotIterator(
 			return nil
 		})
 	}
+
 	go func() {
 		<-it.t.Dead()
 		close(it.data)
@@ -246,12 +247,13 @@ func (f *FetchWorker) Run(ctx context.Context) error {
 	if err := f.updateSnapshotEnd(ctx, tx); err != nil {
 		return fmt.Errorf("failed to update fetch limit: %w", err)
 	}
+	sdk.Logger(ctx).Trace().Msgf("fetch limit updated to %d", f.conf.SnapshotEnd)
 
 	if err := f.fetch(ctx, tx); err != nil {
 		return fmt.Errorf("failed to fetch rows: %w", err)
 	}
 
-	sdk.Logger(ctx).Info().Msgf(
+	sdk.Logger(ctx).Trace().Msgf(
 		"snapshot completed for table %q, elapsed time: %v",
 		f.conf.Table, time.Since(start),
 	)
@@ -321,7 +323,7 @@ func (f *FetchWorker) fetch(ctx context.Context, tx *sqlx.Tx) error {
 			return fmt.Errorf("failed to scan row: %w", err)
 		}
 
-		data := f.buildFetchData(fields, values)
+		data := f.buildFetchData(ctx, fields, values)
 
 		if err := f.send(ctx, data); err != nil {
 			return fmt.Errorf("failed to send record: %w", err)
@@ -335,7 +337,7 @@ func (f *FetchWorker) fetch(ctx context.Context, tx *sqlx.Tx) error {
 	return nil
 }
 
-func (f *FetchWorker) buildFetchData(fields []string, values []any) FetchData {
+func (f *FetchWorker) buildFetchData(ctx context.Context, fields []string, values []any) FetchData {
 	payload := make(sdk.StructuredData)
 	var lastRead int
 
@@ -345,10 +347,7 @@ func (f *FetchWorker) buildFetchData(fields []string, values []any) FetchData {
 
 	if val, ok := payload[f.conf.Key]; ok {
 		if lastRead, ok = val.(int); !ok {
-			sdk.Logger(context.Background()).Fatal().Msgf(
-				"key %s not found in payload",
-				f.conf.Key,
-			)
+			sdk.Logger(ctx).Error().Msgf("key %s not found in payload", f.conf.Key)
 		}
 	} else {
 		lastRead = 0

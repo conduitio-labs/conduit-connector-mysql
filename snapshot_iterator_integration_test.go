@@ -123,7 +123,6 @@ func TestSnapshotIterator_MultipleTables(t *testing.T) {
 
 	it, err := newSnapshotIterator(ctx, db, snapshotIteratorConfig{
 		StartPosition: Position{
-			Type:      PositionTypeInitial,
 			Snapshots: map[string]SnapshotPosition{},
 		},
 		Database: "meroxadb",

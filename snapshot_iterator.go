@@ -31,16 +31,7 @@ type Iterator interface {
 	Teardown(context.Context) error
 }
 
-type PositionType int
-
-const (
-	PositionTypeInitial PositionType = iota
-	PositionTypeSnapshot
-	PositionTypeCDC
-)
-
 type Position struct {
-	Type      PositionType      `json:"type"`
 	Snapshots SnapshotPositions `json:"snapshots,omitempty"`
 }
 
@@ -180,8 +171,6 @@ func (s *snapshotIterator) Teardown(ctx context.Context) error {
 }
 
 func (s *snapshotIterator) buildRecord(d FetchData) sdk.Record {
-	// merge this position with latest position
-	s.lastPosition.Type = PositionTypeSnapshot
 	s.lastPosition.Snapshots[d.Table] = d.Position
 
 	pos := s.lastPosition.ToSDKPosition()

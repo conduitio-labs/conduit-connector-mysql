@@ -4,12 +4,8 @@ VERSION=$(shell git describe --tags --dirty --always)
 build:
 	go build -ldflags "-X 'github.com/conduitio-labs/conduit-connector-mysql.version=${VERSION}'" -o conduit-connector-mysql cmd/connector/main.go
 
-.PHONY: test
-test:
-	go test $(GOTEST_FLAGS) -race ./...
-
 .PHONY: test-integration
-test-integration:
+test-integration: up-database
 	# run required docker containers, execute integration tests, stop containers after tests
 	docker compose -f test/docker-compose.yml up -d
 	go test $(GOTEST_FLAGS) -v -race ./...; ret=$$?; \
@@ -30,9 +26,13 @@ install-tools:
 lint:
 	golangci-lint run ./...
 
+.PHONY: up-database
+up-database:
+	docker compose -f test/docker-compose.yml up --quiet-pull -d db --wait
+
 .PHONY: up
 up:
-	docker compose -f test/docker-compose.yml up --quiet-pull -d --wait 
+	docker compose -f test/docker-compose.yml up --wait
 
 .PHONY: down
 down:

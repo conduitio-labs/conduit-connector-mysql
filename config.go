@@ -14,6 +14,8 @@
 
 package mysql
 
+import "fmt"
+
 type Config struct {
 	Host     string `json:"host" validate:"required"`
 	Port     int    `json:"port" default:"3306"`
@@ -24,6 +26,8 @@ type Config struct {
 
 func (c Config) toMap() map[string]string {
 	return map[string]string{
+		"host":     c.Host,
+		"port":     fmt.Sprintf("%d", c.Port),
 		"user":     c.User,
 		"password": c.Password,
 		"database": c.Database,

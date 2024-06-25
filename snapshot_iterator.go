@@ -1,3 +1,17 @@
+// Copyright © 2024 Meroxa, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package mysql
 
 import (
@@ -119,7 +133,6 @@ func newSnapshotIterator(
 		})
 
 		t.Go(func() error {
-			//nolint:staticcheck // This is the correct usage of tomb.Context
 			sdk.Logger(ctx).Info().Msgf("starting fetcher for table %q", table)
 
 			if err := worker.Run(ctx); err != nil {
@@ -140,7 +153,7 @@ func newSnapshotIterator(
 func (s *snapshotIterator) Next(ctx context.Context) (rec sdk.Record, err error) {
 	select {
 	case <-ctx.Done():
-		return sdk.Record{}, ctx.Err()
+		return sdk.Record{}, fmt.Errorf("context cancelled: %w", ctx.Err())
 	case d, ok := <-s.data:
 		if !ok { // closed
 			if err := s.t.Err(); err != nil {
@@ -157,12 +170,12 @@ func (s *snapshotIterator) Next(ctx context.Context) (rec sdk.Record, err error)
 	}
 }
 
-func (s *snapshotIterator) Ack(ctx context.Context, pos sdk.Position) error {
+func (s *snapshotIterator) Ack(_ context.Context, _ sdk.Position) error {
 	s.acks.Done()
 	return nil
 }
 
-func (s *snapshotIterator) Teardown(ctx context.Context) error {
+func (s *snapshotIterator) Teardown(_ context.Context) error {
 	if s.t != nil {
 		s.t.Kill(errors.New("tearing down snapshot iterator"))
 	}
@@ -360,7 +373,7 @@ func (f *FetchWorker) buildFetchData(ctx context.Context, fields []string, value
 func (f *FetchWorker) send(ctx context.Context, data FetchData) error {
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		return fmt.Errorf("context cancelled: %w", ctx.Err())
 	case f.out <- data:
 		return nil
 	}
@@ -369,15 +382,15 @@ func (f *FetchWorker) send(ctx context.Context, data FetchData) error {
 func getTableKeys(db *sqlx.DB, database string, tables []string) (map[string]string, error) {
 	primaryKeys := make(map[string]string)
 
-	var formattedTables []string
+	formattedTables := make([]string, 0, len(tables))
 	for _, table := range tables {
 		formattedTables = append(formattedTables, fmt.Sprintf("'%s'", table))
 	}
 	tableNameIn := strings.Join(formattedTables, ",")
 
 	type Row struct {
-		Column_Name string `db:"COLUMN_NAME"`
-		Table_Name  string `db:"TABLE_NAME"`
+		ColumnName string `db:"COLUMN_NAME"`
+		TableName  string `db:"TABLE_NAME"`
 	}
 
 	var rows []Row
@@ -395,7 +408,7 @@ func getTableKeys(db *sqlx.DB, database string, tables []string) (map[string]str
 	}
 
 	for _, row := range rows {
-		primaryKeys[row.Table_Name] = row.Column_Name
+		primaryKeys[row.TableName] = row.ColumnName
 	}
 
 	for _, table := range tables {

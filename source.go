@@ -21,6 +21,7 @@ import (
 	"fmt"
 
 	sdk "github.com/conduitio/conduit-connector-sdk"
+
 	// apply mysql driver.
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
@@ -32,6 +33,8 @@ type Source struct {
 	config SourceConfig
 
 	db *sqlx.DB
+
+	iterator Iterator
 }
 
 type SourceConfig struct {
@@ -66,27 +69,27 @@ func (s *Source) Open(ctx context.Context, _ sdk.Position) (err error) {
 		return fmt.Errorf("failed to connect to mysql: %w", err)
 	}
 
+	s.iterator, err = newSnapshotIterator(ctx, s.db, snapshotIteratorConfig{
+		StartPosition: Position{},
+		Database:      s.config.Database,
+		Tables:        s.config.Tables,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create snapshot iterator: %w", err)
+	}
 	sdk.Logger(ctx).Info().Msg("opened source connector")
+
 	return nil
 }
 
-func (s *Source) Read(_ context.Context) (sdk.Record, error) {
-	return sdk.Record{}, nil
+func (s *Source) Read(ctx context.Context) (sdk.Record, error) {
+	return s.iterator.Next(ctx)
 }
 
-func (s *Source) Ack(_ context.Context, _ sdk.Position) error {
-	// Ack signals to the implementation that the record with the supplied
-	// position was successfully processed. This method might be called after
-	// the context of Read is already cancelled, since there might be
-	// outstanding acks that need to be delivered. When Teardown is called it is
-	// guaranteed there won't be any more calls to Ack.
-	// Ack can be called concurrently with Read.
-	return nil
+func (s *Source) Ack(ctx context.Context, _ sdk.Position) error {
+	return s.iterator.Ack(ctx, sdk.Position{})
 }
 
-func (s *Source) Teardown(_ context.Context) error {
-	// Teardown signals to the plugin that there will be no more calls to any
-	// other function. After Teardown returns, the plugin should be ready for a
-	// graceful shutdown.
-	return nil
+func (s *Source) Teardown(ctx context.Context) error {
+	return s.iterator.Teardown(ctx)
 }

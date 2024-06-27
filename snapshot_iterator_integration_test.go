@@ -24,6 +24,7 @@ import (
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/jmoiron/sqlx"
 	"github.com/matryer/is"
+	"github.com/rs/zerolog"
 )
 
 func createTestConnection(is *is.I) *sqlx.DB {
@@ -37,6 +38,11 @@ func createTestConnection(is *is.I) *sqlx.DB {
 	is.NoErr(err)
 
 	return db
+}
+
+func testContext(t *testing.T) context.Context {
+	logger := zerolog.New(zerolog.NewTestWriter(t))
+	return logger.WithContext(context.Background())
 }
 
 var (
@@ -102,7 +108,7 @@ func (TestTables) insertData(is *is.I, db *sqlx.DB) {
 }
 
 func TestSnapshotIterator_EmptyTable(t *testing.T) {
-	ctx := context.Background()
+	ctx := testContext(t)
 	is := is.New(t)
 
 	db := createTestConnection(is)
@@ -128,7 +134,8 @@ func TestSnapshotIterator_EmptyTable(t *testing.T) {
 }
 
 func TestSnapshotIterator_MultipleTables(t *testing.T) {
-	ctx := context.Background()
+	ctx := testContext(t)
+
 	is := is.New(t)
 
 	db := createTestConnection(is)

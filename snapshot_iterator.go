@@ -58,6 +58,14 @@ func (p Position) ToSDKPosition() sdk.Position {
 	return v
 }
 
+func ParseSDKPosition(p sdk.Position) (Position, error) {
+	var pos Position
+	if err := json.Unmarshal(p, &pos); err != nil {
+		return Position{}, fmt.Errorf("failed to parse position: %w", err)
+	}
+	return pos, nil
+}
+
 type SnapshotPositions map[string]SnapshotPosition
 
 type SnapshotPosition struct {
@@ -99,11 +107,31 @@ type snapshotIteratorConfig struct {
 	Tables        []string
 }
 
+func (s *snapshotIteratorConfig) initAndValidate() error {
+	if s.StartPosition.Snapshots == nil {
+		s.StartPosition.Snapshots = make(map[string]SnapshotPosition)
+	}
+
+	if s.Database == "" {
+		return fmt.Errorf("database is required")
+	}
+
+	if len(s.Tables) == 0 {
+		return fmt.Errorf("tables is required")
+	}
+
+	return nil
+}
+
 func newSnapshotIterator(
 	ctx context.Context,
 	db *sqlx.DB,
 	config snapshotIteratorConfig,
 ) (Iterator, error) {
+	if err := config.initAndValidate(); err != nil {
+		return nil, fmt.Errorf("invalid snapshot iterator config: %w", err)
+	}
+
 	t, ctx := tomb.WithContext(ctx)
 
 	tableKeys, err := getTableKeys(db, config.Database, config.Tables)
@@ -325,7 +353,10 @@ func (f *FetchWorker) fetch(ctx context.Context, tx *sqlx.Tx) error {
 			return fmt.Errorf("failed to scan row: %w", err)
 		}
 
-		data := f.buildFetchData(ctx, fields, values)
+		data, err := f.buildFetchData(ctx, fields, values)
+		if err != nil {
+			return fmt.Errorf("failed to build fetch data: %w", err)
+		}
 
 		if err := f.send(ctx, data); err != nil {
 			return fmt.Errorf("failed to send record: %w", err)
@@ -339,20 +370,15 @@ func (f *FetchWorker) fetch(ctx context.Context, tx *sqlx.Tx) error {
 	return nil
 }
 
-func (f *FetchWorker) buildFetchData(ctx context.Context, fields []string, values []any) FetchData {
+func (f *FetchWorker) buildFetchData(ctx context.Context, fields []string, values []any) (FetchData, error) {
 	payload := make(sdk.StructuredData)
-	var lastRead int
-
 	for i, field := range fields {
 		payload[field] = values[i]
 	}
 
-	if val, ok := payload[f.conf.Key]; ok {
-		if lastRead, ok = val.(int); !ok {
-			sdk.Logger(ctx).Error().Msgf("key %s not found in payload", f.conf.Key)
-		}
-	} else {
-		lastRead = 0
+	lastRead, err := primaryKeyFromData(f.conf.Key, payload)
+	if err != nil {
+		return FetchData{}, fmt.Errorf("failed to get primary key from payload: %w", err)
 	}
 
 	key := SnapshotKey{
@@ -367,7 +393,7 @@ func (f *FetchWorker) buildFetchData(ctx context.Context, fields []string, value
 		Key:     key,
 		Payload: payload,
 		Table:   f.conf.Table,
-	}
+	}, nil
 }
 
 func (f *FetchWorker) send(ctx context.Context, data FetchData) error {
@@ -418,4 +444,28 @@ func getTableKeys(db *sqlx.DB, database string, tables []string) (map[string]str
 	}
 
 	return primaryKeys, nil
+}
+
+func primaryKeyFromData(key string, data sdk.StructuredData) (int, error) {
+	val, ok := data[key]
+	if !ok {
+		return 0, fmt.Errorf("key %s not found in payload", key)
+	}
+
+	switch val := val.(type) {
+	case int:
+		return val, nil
+	case int32:
+		return int(val), nil
+	case int64:
+		return int(val), nil
+	case uint:
+		return int(val), nil
+	case uint32:
+		return int(val), nil
+	case uint64:
+		return int(val), nil
+	default:
+		return 0, fmt.Errorf("key %s has unexpected type %T", key, val)
+	}
 }

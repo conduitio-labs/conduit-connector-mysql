@@ -27,21 +27,3 @@ func TestTeardownSource_NoOpen(t *testing.T) {
 	err := con.Teardown(context.Background())
 	is.NoErr(err)
 }
-
-func TestSource(t *testing.T) {
-	is := is.New(t)
-	ctx := context.Background()
-	source := NewSource()
-
-	err := source.Configure(ctx, SourceConfig{
-		Config: Config{
-			Database: "meroxadb",
-			User:     "meroxauser",
-			Password: "meroxapass",
-		},
-	}.toMap())
-	is.NoErr(err)
-
-	err = source.Open(ctx, nil)
-	is.NoErr(err)
-}

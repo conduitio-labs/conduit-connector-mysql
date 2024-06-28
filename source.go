@@ -92,6 +92,10 @@ func (s *Source) Ack(ctx context.Context, _ sdk.Position) error {
 }
 
 func (s *Source) Teardown(ctx context.Context) error {
-	//nolint:wrapcheck // error already wrapped in iterator
-	return s.iterator.Teardown(ctx)
+	if s.iterator != nil {
+		//nolint:wrapcheck // error already wrapped in iterator
+		return s.iterator.Teardown(ctx)
+	}
+
+	return nil
 }

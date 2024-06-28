@@ -21,7 +21,6 @@ import (
 	"fmt"
 
 	sdk "github.com/conduitio/conduit-connector-sdk"
-
 	// apply mysql driver.
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
@@ -69,10 +68,10 @@ func (s *Source) Open(ctx context.Context, _ sdk.Position) (err error) {
 		return fmt.Errorf("failed to connect to mysql: %w", err)
 	}
 
-	s.iterator, err = newSnapshotIterator(ctx, s.db, snapshotIteratorConfig{
-		StartPosition: Position{},
-		Database:      s.config.Database,
-		Tables:        s.config.Tables,
+	s.iterator, err = newSnapshotIterator(ctx, snapshotIteratorConfig{
+		db:       s.db,
+		database: s.config.Database,
+		tables:   s.config.Tables,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create snapshot iterator: %w", err)
@@ -83,13 +82,16 @@ func (s *Source) Open(ctx context.Context, _ sdk.Position) (err error) {
 }
 
 func (s *Source) Read(ctx context.Context) (sdk.Record, error) {
+	//nolint:wrapcheck // error already wrapped in iterator
 	return s.iterator.Next(ctx)
 }
 
 func (s *Source) Ack(ctx context.Context, _ sdk.Position) error {
+	//nolint:wrapcheck // error already wrapped in iterator
 	return s.iterator.Ack(ctx, sdk.Position{})
 }
 
 func (s *Source) Teardown(ctx context.Context) error {
+	//nolint:wrapcheck // error already wrapped in iterator
 	return s.iterator.Teardown(ctx)
 }

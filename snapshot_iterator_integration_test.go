@@ -116,10 +116,10 @@ func TestSnapshotIterator_EmptyTable(t *testing.T) {
 	testTables.drop(is, db)
 	testTables.create(is, db)
 
-	it, err := newSnapshotIterator(ctx, db, snapshotIteratorConfig{
-		StartPosition: Position{},
-		Database:      "meroxadb",
-		Tables:        tables,
+	it, err := newSnapshotIterator(ctx, snapshotIteratorConfig{
+		db:       db,
+		database: "meroxadb",
+		tables:   tables,
 	})
 	is.NoErr(err)
 	defer func() { is.NoErr(it.Teardown(ctx)) }()
@@ -144,18 +144,126 @@ func TestSnapshotIterator_MultipleTables(t *testing.T) {
 	testTables.create(is, db)
 	testTables.insertData(is, db)
 
-	it, err := newSnapshotIterator(ctx, db, snapshotIteratorConfig{
-		StartPosition: Position{
-			Snapshots: map[string]SnapshotPosition{},
-		},
-		Database: "meroxadb",
-		Tables:   tables,
+	it, err := newSnapshotIterator(ctx, snapshotIteratorConfig{
+		db:       db,
+		database: "meroxadb",
+		tables:   tables,
 	})
 	is.NoErr(err)
 	defer func() { is.NoErr(it.Teardown(ctx)) }()
 
 	var recs []sdk.Record
 
+	for {
+		rec, err := it.Next(ctx)
+		if errors.Is(err, ErrIteratorDone) {
+			break
+		}
+		is.NoErr(err)
+
+		recs = append(recs, rec)
+
+		err = it.Ack(ctx, rec.Position)
+		is.NoErr(err)
+	}
+
+	is.Equal(len(recs), 100) // received a different amount of records
+	for _, rec := range recs {
+		is.Equal(rec.Operation, sdk.OperationSnapshot)
+	}
+}
+
+func TestSnapshotIterator_SmallFetchSize(t *testing.T) {
+	ctx := testContext(t)
+	is := is.New(t)
+
+	db := createTestConnection(is)
+
+	testTables.drop(is, db)
+	testTables.create(is, db)
+	testTables.insertData(is, db)
+
+	it, err := newSnapshotIterator(ctx, snapshotIteratorConfig{
+		db:       db,
+		database: "meroxadb",
+		tables:   tables,
+	})
+	is.NoErr(err)
+	defer func() { is.NoErr(it.Teardown(ctx)) }()
+
+	var recs []sdk.Record
+
+	for {
+		rec, err := it.Next(ctx)
+		if errors.Is(err, ErrIteratorDone) {
+			break
+		}
+		is.NoErr(err)
+
+		recs = append(recs, rec)
+
+		err = it.Ack(ctx, rec.Position)
+		is.NoErr(err)
+	}
+
+	is.Equal(len(recs), 100) // received a different amount of records
+	for _, rec := range recs {
+		is.Equal(rec.Operation, sdk.OperationSnapshot)
+	}
+}
+
+func TestSnapshotIterator_RestartOnPosition(t *testing.T) {
+	ctx := testContext(t)
+
+	is := is.New(t)
+
+	db := createTestConnection(is)
+
+	testTables.drop(is, db)
+	testTables.create(is, db)
+	testTables.insertData(is, db)
+
+	// Read the first 10 records
+
+	var breakPosition position
+	{
+		it, err := newSnapshotIterator(ctx, snapshotIteratorConfig{
+			db:       db,
+			database: "meroxadb",
+			tables:   tables,
+		})
+		is.NoErr(err)
+		defer func() { is.NoErr(it.Teardown(ctx)) }()
+
+		var recs []sdk.Record
+		for i := 0; i < 10; i++ {
+			rec, err := it.Next(ctx)
+			if errors.Is(err, ErrIteratorDone) {
+				break
+			}
+			is.NoErr(err)
+
+			recs = append(recs, rec)
+
+			err = it.Ack(ctx, rec.Position)
+			is.NoErr(err)
+		}
+
+		breakPosition, err = parseSDKPosition(recs[len(recs)-1].Position)
+		is.NoErr(err)
+	}
+
+	// read the remaining 90 records
+
+	it, err := newSnapshotIterator(ctx, snapshotIteratorConfig{
+		db:            db,
+		startPosition: breakPosition,
+		database:      "meroxadb",
+		tables:        tables,
+	})
+	is.NoErr(err)
+
+	var recs []sdk.Record
 	for {
 		ctx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
 		defer cancel()
@@ -171,7 +279,7 @@ func TestSnapshotIterator_MultipleTables(t *testing.T) {
 		is.NoErr(err)
 	}
 
-	is.Equal(len(recs), 100) // received a different amount of records
+	is.Equal(len(recs), 90)
 	for _, rec := range recs {
 		is.Equal(rec.Operation, sdk.OperationSnapshot)
 	}

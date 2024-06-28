@@ -16,12 +16,9 @@ package mysql
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
-	"time"
 
 	"github.com/conduitio/conduit-commons/csync"
 	sdk "github.com/conduitio/conduit-connector-sdk"
@@ -45,11 +42,11 @@ type Iterator interface {
 	Teardown(context.Context) error
 }
 
-type Position struct {
-	Snapshots SnapshotPositions `json:"snapshots,omitempty"`
+type position struct {
+	Snapshots snapshotPositions `json:"snapshots,omitempty"`
 }
 
-func (p Position) ToSDKPosition() sdk.Position {
+func (p position) ToSDKPosition() sdk.Position {
 	v, err := json.Marshal(p)
 	if err != nil {
 		// This should never happen, all Position structs should be valid.
@@ -58,28 +55,37 @@ func (p Position) ToSDKPosition() sdk.Position {
 	return v
 }
 
-func ParseSDKPosition(p sdk.Position) (Position, error) {
-	var pos Position
+func (p position) Clone() position {
+	var newPosition position
+	newPosition.Snapshots = make(map[tableName]snapshotPosition)
+	for k, v := range p.Snapshots {
+		newPosition.Snapshots[k] = v
+	}
+	return newPosition
+}
+
+func parseSDKPosition(p sdk.Position) (position, error) {
+	var pos position
 	if err := json.Unmarshal(p, &pos); err != nil {
-		return Position{}, fmt.Errorf("failed to parse position: %w", err)
+		return position{}, fmt.Errorf("failed to parse position: %w", err)
 	}
 	return pos, nil
 }
 
-type SnapshotPositions map[string]SnapshotPosition
+type snapshotPositions map[tableName]snapshotPosition
 
-type SnapshotPosition struct {
-	LastRead    int64 `json:"last_read"`
-	SnapshotEnd int64 `json:"snapshot_end"`
+type snapshotPosition struct {
+	LastRead    int `json:"last_read"`
+	SnapshotEnd int `json:"snapshot_end"`
 }
 
-type SnapshotKey struct {
-	Table string `json:"table"`
-	Key   string `json:"key"`
-	Value int    `json:"value"`
+type snapshotKey struct {
+	Table tableName      `json:"table"`
+	Key   primaryKeyName `json:"key"`
+	Value int            `json:"value"`
 }
 
-func (key SnapshotKey) ToSDKData() sdk.Data {
+func (key snapshotKey) ToSDKData() sdk.Data {
 	bs, err := json.Marshal(key)
 	if err != nil {
 		// This should never happen, all Position structs should be valid.
@@ -89,100 +95,115 @@ func (key SnapshotKey) ToSDKData() sdk.Data {
 	return sdk.RawData(bs)
 }
 
-type snapshotIterator struct {
-	db     *sqlx.DB
-	tables []string
+type (
+	// fetchData is the data that is fetched from a table row. As the iterator
+	// fetches rows from multiple tables, reading records from one table affects the
+	// position of records of other tables. Each table is fetched concurrently, so
+	// in order to prevent data races fetchData builds records within the snapshot
+	// iterator itself.
+	fetchData struct {
+		key      snapshotKey
+		payload  sdk.StructuredData
+		position snapshotPosition
+	}
+	snapshotIterator struct {
+		db           *sqlx.DB
+		t            *tomb.Tomb
+		data         chan fetchData
+		acks         csync.WaitGroup
+		fetchSize    int
+		lastPosition position
+	}
+	snapshotIteratorConfig struct {
+		db            *sqlx.DB
+		fetchSize     int
+		startPosition position
+		database      string
+		tables        []string
+	}
+)
 
-	lastPosition Position
+type (
+	primaryKeyName string
+	tableName      string
+	TableKeys      map[tableName]primaryKeyName
+)
 
-	acks csync.WaitGroup
-	t    *tomb.Tomb
-
-	data chan FetchData
-}
-
-type snapshotIteratorConfig struct {
-	StartPosition Position
-	Database      string
-	Tables        []string
-}
-
-func (s *snapshotIteratorConfig) initAndValidate() error {
-	if s.StartPosition.Snapshots == nil {
-		s.StartPosition.Snapshots = make(map[string]SnapshotPosition)
+func (config *snapshotIteratorConfig) init() (TableKeys, error) {
+	if config.startPosition.Snapshots == nil {
+		config.startPosition.Snapshots = make(map[tableName]snapshotPosition)
 	}
 
-	if s.Database == "" {
-		return fmt.Errorf("database is required")
+	if config.fetchSize == 0 {
+		config.fetchSize = defaultFetchSize
 	}
 
-	if len(s.Tables) == 0 {
-		return fmt.Errorf("tables is required")
+	if config.database == "" {
+		return nil, fmt.Errorf("database is required")
+	}
+	if len(config.tables) == 0 {
+		return nil, fmt.Errorf("tables is required")
 	}
 
-	return nil
+	tableKeys := make(TableKeys)
+
+	for _, table := range config.tables {
+		primaryKey, err := getPrimaryKey(config.db, config.database, table)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get primary key for table %q: %w", table, err)
+		}
+
+		tableKeys[tableName(table)] = primaryKey
+	}
+
+	return tableKeys, nil
 }
 
 func newSnapshotIterator(
 	ctx context.Context,
-	db *sqlx.DB,
 	config snapshotIteratorConfig,
 ) (Iterator, error) {
-	if err := config.initAndValidate(); err != nil {
+	tableKeys, err := config.init()
+	if err != nil {
 		return nil, fmt.Errorf("invalid snapshot iterator config: %w", err)
 	}
 
-	t, ctx := tomb.WithContext(ctx)
-
-	tableKeys, err := getTableKeys(db, config.Database, config.Tables)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get table keys: %w", err)
+	iterator := &snapshotIterator{
+		db:        config.db,
+		t:         &tomb.Tomb{},
+		data:      make(chan fetchData),
+		acks:      csync.WaitGroup{},
+		fetchSize: config.fetchSize,
 	}
 
-	it := &snapshotIterator{
-		db:           db,
-		tables:       config.Tables,
-		lastPosition: config.StartPosition,
-		acks:         csync.WaitGroup{},
-		t:            t,
-		data:         make(chan FetchData),
-	}
-
-	for _, table := range it.tables {
-		key, ok := tableKeys[table]
-		if !ok {
-			return nil, fmt.Errorf("table %q not found in table keys", table)
-		}
-
-		worker := NewFetchWorker(db, it.data, FetchConfig{
-			Table:         table,
-			Key:           key,
-			StartPosition: it.lastPosition,
+	for table, primaryKey := range tableKeys {
+		worker := newFetchWorker(iterator.db, iterator.data, fetchWorkerConfig{
+			lastPosition: iterator.lastPosition,
+			table:        table,
+			fetchSize:    iterator.fetchSize,
+			primaryKey:   primaryKey,
 		})
-
-		t.Go(func() error {
-			sdk.Logger(ctx).Info().Msgf("starting fetcher for table %q", table)
-
-			if err := worker.Run(ctx); err != nil {
-				return fmt.Errorf("fetcher for table %q exited: %w", table, err)
-			}
-			return nil
+		iterator.t.Go(func() error {
+			return worker.run(ctx)
 		})
 	}
 
+	// close the data channel when all tomb goroutines are done, which will happen:
+	// - when all records are fetched from all tables
+	// - when the iterator teardown method is called
 	go func() {
-		<-it.t.Dead()
-		close(it.data)
+		<-iterator.t.Dead()
+		close(iterator.data)
 	}()
 
-	return it, nil
+	return iterator, nil
 }
 
-func (s *snapshotIterator) Next(ctx context.Context) (rec sdk.Record, err error) {
+func (s *snapshotIterator) Next(ctx context.Context) (sdk.Record, error) {
 	select {
 	case <-ctx.Done():
 		return sdk.Record{}, fmt.Errorf("context cancelled: %w", ctx.Err())
-	case d, ok := <-s.data:
+	case data, ok := <-s.data:
 		if !ok { // closed
 			if err := s.t.Err(); err != nil {
 				return sdk.Record{}, fmt.Errorf("fetchers exited unexpectedly: %w", err)
@@ -194,7 +215,7 @@ func (s *snapshotIterator) Next(ctx context.Context) (rec sdk.Record, err error)
 		}
 
 		s.acks.Add(1)
-		return s.buildRecord(d), nil
+		return s.buildRecord(data), nil
 	}
 }
 
@@ -211,243 +232,19 @@ func (s *snapshotIterator) Teardown(_ context.Context) error {
 	return nil
 }
 
-func (s *snapshotIterator) buildRecord(d FetchData) sdk.Record {
-	s.lastPosition.Snapshots[d.Table] = d.Position
+func (s *snapshotIterator) buildRecord(d fetchData) sdk.Record {
+	s.lastPosition.Snapshots[d.key.Table] = d.position
 
 	pos := s.lastPosition.ToSDKPosition()
 	metadata := make(sdk.Metadata)
-	metadata["postgres.table"] = d.Table
-	key := d.Key.ToSDKData()
+	metadata["postgres.table"] = string(d.key.Table)
+	key := d.key.ToSDKData()
 
-	return sdk.Util.Source.NewRecordSnapshot(pos, metadata, key, d.Payload)
+	return sdk.Util.Source.NewRecordSnapshot(pos, metadata, key, d.payload)
 }
 
-type FetchConfig struct {
-	Table         string
-	Key           string
-	FetchSize     int
-	StartPosition Position
-	SnapshotEnd   int
-	LastRead      int
-}
-
-func NewFetchWorker(db *sqlx.DB, out chan<- FetchData, c FetchConfig) *FetchWorker {
-	f := &FetchWorker{
-		conf: c,
-		db:   db,
-		out:  out,
-	}
-
-	if f.conf.FetchSize == 0 {
-		f.conf.FetchSize = defaultFetchSize
-	}
-
-	return f
-}
-
-type FetchWorker struct {
-	conf FetchConfig
-	db   *sqlx.DB
-	out  chan<- FetchData
-}
-
-type FetchData struct {
-	Key      SnapshotKey
-	Payload  sdk.StructuredData
-	Position SnapshotPosition
-	Table    string
-}
-
-func (f *FetchWorker) Run(ctx context.Context) error {
-	start := time.Now().UTC()
-
-	tx, err := f.db.BeginTxx(ctx, &sql.TxOptions{
-		Isolation: sql.LevelRepeatableRead,
-		ReadOnly:  true,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to start tx: %w", err)
-	}
-	defer func() {
-		if err := tx.Rollback(); err != nil {
-			sdk.Logger(ctx).Err(err).Msg("error on tx rollback")
-		}
-	}()
-
-	if err := f.updateSnapshotEnd(ctx, tx); err != nil {
-		return fmt.Errorf("failed to update fetch limit: %w", err)
-	}
-	sdk.Logger(ctx).Trace().Msgf("fetch limit updated to %d", f.conf.SnapshotEnd)
-
-	if err := f.fetch(ctx, tx); err != nil {
-		return fmt.Errorf("failed to fetch rows: %w", err)
-	}
-
-	sdk.Logger(ctx).Trace().Msgf(
-		"snapshot completed for table %q, elapsed time: %v",
-		f.conf.Table, time.Since(start),
-	)
-	return nil
-}
-
-func (f *FetchWorker) updateSnapshotEnd(ctx context.Context, tx *sqlx.Tx) error {
-	if f.conf.SnapshotEnd > 0 {
-		return nil
-	}
-
-	var maxValueRow struct {
-		MaxValue *int `db:"max_value"`
-	}
-
-	query := fmt.Sprintf("SELECT MAX(%s) as max_value FROM %s", f.conf.Key, f.conf.Table)
-	row := tx.QueryRowxContext(ctx, query)
-	if err := row.StructScan(&maxValueRow); err != nil {
-		return fmt.Errorf("failed to get max value: %w", err)
-	}
-
-	if err := row.Err(); err != nil {
-		return fmt.Errorf("failed to get max value: %w", err)
-	}
-
-	if maxValueRow.MaxValue == nil {
-		// table is empty
-		f.conf.SnapshotEnd = 0
-	} else {
-		f.conf.SnapshotEnd = *maxValueRow.MaxValue
-	}
-
-	return nil
-}
-
-func (f *FetchWorker) fetch(ctx context.Context, tx *sqlx.Tx) error {
-	query := fmt.Sprintf(`
-		SELECT *
-		FROM %s
-		WHERE %s > ? AND %s <= ?
-		ORDER BY %s LIMIT %d
-	`,
-		f.conf.Table,
-		f.conf.Key, f.conf.Key,
-		f.conf.Key, f.conf.FetchSize,
-	)
-
-	rows, err := tx.QueryContext(ctx, query, f.conf.LastRead, f.conf.SnapshotEnd)
-	if err != nil {
-		return fmt.Errorf("failed to query rows: %w", err)
-	}
-	defer rows.Close()
-
-	fields, err := rows.Columns()
-	if err != nil {
-		return fmt.Errorf("failed to get columns: %w", err)
-	}
-
-	for rows.Next() {
-		values := make([]any, len(fields))
-		valuePtrs := make([]any, len(fields))
-		for i := range values {
-			valuePtrs[i] = &values[i]
-		}
-
-		if err := rows.Scan(valuePtrs...); err != nil {
-			return fmt.Errorf("failed to scan row: %w", err)
-		}
-
-		data, err := f.buildFetchData(ctx, fields, values)
-		if err != nil {
-			return fmt.Errorf("failed to build fetch data: %w", err)
-		}
-
-		if err := f.send(ctx, data); err != nil {
-			return fmt.Errorf("failed to send record: %w", err)
-		}
-	}
-
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("failed to read rows: %w", err)
-	}
-
-	return nil
-}
-
-func (f *FetchWorker) buildFetchData(ctx context.Context, fields []string, values []any) (FetchData, error) {
-	payload := make(sdk.StructuredData)
-	for i, field := range fields {
-		payload[field] = values[i]
-	}
-
-	lastRead, err := primaryKeyFromData(f.conf.Key, payload)
-	if err != nil {
-		return FetchData{}, fmt.Errorf("failed to get primary key from payload: %w", err)
-	}
-
-	key := SnapshotKey{
-		Table: f.conf.Table,
-		Key:   f.conf.Key,
-		Value: lastRead,
-	}
-
-	f.conf.LastRead = lastRead
-
-	return FetchData{
-		Key:     key,
-		Payload: payload,
-		Table:   f.conf.Table,
-	}, nil
-}
-
-func (f *FetchWorker) send(ctx context.Context, data FetchData) error {
-	select {
-	case <-ctx.Done():
-		return fmt.Errorf("context cancelled: %w", ctx.Err())
-	case f.out <- data:
-		return nil
-	}
-}
-
-func getTableKeys(db *sqlx.DB, database string, tables []string) (map[string]string, error) {
-	primaryKeys := make(map[string]string)
-
-	formattedTables := make([]string, 0, len(tables))
-	for _, table := range tables {
-		formattedTables = append(formattedTables, fmt.Sprintf("'%s'", table))
-	}
-	tableNameIn := strings.Join(formattedTables, ",")
-
-	type Row struct {
-		ColumnName string `db:"COLUMN_NAME"`
-		TableName  string `db:"TABLE_NAME"`
-	}
-
-	var rows []Row
-	query := fmt.Sprintf(`
-		SELECT TABLE_NAME, COLUMN_NAME 
-		FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE 
-		WHERE 
-			CONSTRAINT_NAME = 'PRIMARY' 
-			AND TABLE_SCHEMA = ?
-			AND TABLE_NAME IN (%s);
-	`, tableNameIn)
-	err := db.Select(&rows, query, database)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get primary keys from tables: %w", err)
-	}
-
-	for _, row := range rows {
-		primaryKeys[row.TableName] = row.ColumnName
-	}
-
-	for _, table := range tables {
-		if _, ok := primaryKeys[table]; !ok {
-			return nil, fmt.Errorf("table %q has no primary key", table)
-		}
-	}
-
-	return primaryKeys, nil
-}
-
-func primaryKeyFromData(key string, data sdk.StructuredData) (int, error) {
-	val, ok := data[key]
+func primaryKeyValueFromData(key primaryKeyName, data sdk.StructuredData) (int, error) {
+	val, ok := data[string(key)]
 	if !ok {
 		return 0, fmt.Errorf("key %s not found in payload", key)
 	}
@@ -468,4 +265,28 @@ func primaryKeyFromData(key string, data sdk.StructuredData) (int, error) {
 	default:
 		return 0, fmt.Errorf("key %s has unexpected type %T", key, val)
 	}
+}
+
+func getPrimaryKey(db *sqlx.DB, database, table string) (primaryKeyName, error) {
+	var primaryKey struct {
+		ColumnName primaryKeyName `db:"COLUMN_NAME"`
+	}
+
+	row := db.QueryRowx(`
+		SELECT COLUMN_NAME 
+		FROM information_schema.key_column_usage 
+		WHERE 
+			constraint_name = 'PRIMARY' 
+			AND table_schema = ?
+			AND table_name = ?
+	`, database, table)
+
+	if err := row.StructScan(&primaryKey); err != nil {
+		return "", fmt.Errorf("failed to get primary key from table %s: %w", table, err)
+	}
+	if err := row.Err(); err != nil {
+		return "", fmt.Errorf("failed to scan primary key from table %s: %w", table, err)
+	}
+
+	return primaryKey.ColumnName, nil
 }

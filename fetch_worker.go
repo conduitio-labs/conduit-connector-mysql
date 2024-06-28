@@ -62,6 +62,7 @@ func (w *fetchWorker) run(ctx context.Context) error {
 		}
 
 		for _, row := range rows {
+			lastRead++
 			position := snapshotPosition{
 				LastRead:    lastRead,
 				SnapshotEnd: snapshotEnd,
@@ -72,7 +73,6 @@ func (w *fetchWorker) run(ctx context.Context) error {
 			}
 
 			w.data <- data
-			lastRead++
 		}
 	}
 
@@ -85,7 +85,10 @@ func (w *fetchWorker) getMaxValue(ctx context.Context) (int, error) {
 		MaxValue *int `db:"max_value"`
 	}
 
-	query := fmt.Sprintf("SELECT MAX(%s) as max_value FROM %s", w.config.primaryKey, w.config.table)
+	query := fmt.Sprintf(
+		"SELECT MAX(%s) as max_value FROM %s",
+		w.config.primaryKey, w.config.table,
+	)
 	row := w.db.QueryRowxContext(ctx, query)
 	if err := row.StructScan(&maxValueRow); err != nil {
 		return 0, fmt.Errorf("failed to get max value: %w", err)
@@ -135,8 +138,8 @@ func (w *fetchWorker) selectRowsChunk(
 	}()
 
 	for rows.Next() {
-		row := sdk.StructuredData{}
-		if err := rows.StructScan(&row); err != nil {
+		row := map[string]any{}
+		if err := rows.MapScan(row); err != nil {
 			logDataEvt.Msg("failed to scan row")
 			return nil, fmt.Errorf("failed to scan row: %w", err)
 		}
@@ -169,4 +172,28 @@ func (w *fetchWorker) buildFetchData(
 		payload:  payload,
 		position: position,
 	}, nil
+}
+
+func primaryKeyValueFromData(key primaryKeyName, data sdk.StructuredData) (int, error) {
+	val, ok := data[string(key)]
+	if !ok {
+		return 0, fmt.Errorf("key %s not found in payload", key)
+	}
+
+	switch val := val.(type) {
+	case int:
+		return val, nil
+	case int32:
+		return int(val), nil
+	case int64:
+		return int(val), nil
+	case uint:
+		return int(val), nil
+	case uint32:
+		return int(val), nil
+	case uint64:
+		return int(val), nil
+	default:
+		return 0, fmt.Errorf("key %s has unexpected type %T", key, val)
+	}
 }

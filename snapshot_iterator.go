@@ -168,12 +168,17 @@ func newSnapshotIterator(
 		return nil, fmt.Errorf("invalid snapshot iterator config: %w", err)
 	}
 
+	// start position is mutable, so in order to avoid unexpected behaviour in
+	// tests we clone it.
+	lastPosition := config.startPosition.Clone()
+
 	iterator := &snapshotIterator{
-		db:        config.db,
-		t:         &tomb.Tomb{},
-		data:      make(chan fetchData),
-		acks:      csync.WaitGroup{},
-		fetchSize: config.fetchSize,
+		db:           config.db,
+		t:            &tomb.Tomb{},
+		data:         make(chan fetchData),
+		acks:         csync.WaitGroup{},
+		fetchSize:    config.fetchSize,
+		lastPosition: lastPosition,
 	}
 
 	for table, primaryKey := range tableKeys {
@@ -241,30 +246,6 @@ func (s *snapshotIterator) buildRecord(d fetchData) sdk.Record {
 	key := d.key.ToSDKData()
 
 	return sdk.Util.Source.NewRecordSnapshot(pos, metadata, key, d.payload)
-}
-
-func primaryKeyValueFromData(key primaryKeyName, data sdk.StructuredData) (int, error) {
-	val, ok := data[string(key)]
-	if !ok {
-		return 0, fmt.Errorf("key %s not found in payload", key)
-	}
-
-	switch val := val.(type) {
-	case int:
-		return val, nil
-	case int32:
-		return int(val), nil
-	case int64:
-		return int(val), nil
-	case uint:
-		return int(val), nil
-	case uint32:
-		return int(val), nil
-	case uint64:
-		return int(val), nil
-	default:
-		return 0, fmt.Errorf("key %s has unexpected type %T", key, val)
-	}
 }
 
 func getPrimaryKey(db *sqlx.DB, database, table string) (primaryKeyName, error) {

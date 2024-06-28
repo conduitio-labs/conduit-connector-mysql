@@ -19,7 +19,6 @@ import (
 	"errors"
 	"fmt"
 	"testing"
-	"time"
 
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/jmoiron/sqlx"
@@ -124,8 +123,6 @@ func TestSnapshotIterator_EmptyTable(t *testing.T) {
 	is.NoErr(err)
 	defer func() { is.NoErr(it.Teardown(ctx)) }()
 
-	ctx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
-	defer cancel()
 	_, err = it.Next(ctx)
 	if errors.Is(err, ErrIteratorDone) {
 		return
@@ -265,8 +262,6 @@ func TestSnapshotIterator_RestartOnPosition(t *testing.T) {
 
 	var recs []sdk.Record
 	for {
-		ctx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
-		defer cancel()
 		rec, err := it.Next(ctx)
 		if errors.Is(err, ErrIteratorDone) {
 			break

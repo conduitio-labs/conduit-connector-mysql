@@ -10,11 +10,20 @@ Run `make build` to build the connector.
 
 Run `make test` to run all the unit tests. Run `make test-integration` to run the integration tests.
 
-The Docker compose file at `test/docker-compose.yml` can be used to run the required resource locally.
+The Docker compose file at `test/docker-compose.yml` can be used to run the required resource locally. It includes [adminer](https://www.adminer.org/) for database management.
 
 ## Source
 
 A source connector pulls data from an external resource and pushes it to downstream resources via Conduit.
+It (will) operate in two modes: snapshot and CDC. Currently only snapshot mode is supported.
+
+### Snapshot mode
+
+Snapshot mode is the first stage of the source sync process. It reads all rows from the configured tables as record snapshots.
+
+### CDC mode (planned)
+
+CDC mode is the second stage of the source sync process. It listens to the configured tables for changes and pushes them to downstream resources.
 
 ### Configuration
 
@@ -27,22 +36,8 @@ A source connector pulls data from an external resource and pushes it to downstr
 | `database` | The name of the specific MySQL database to connect to  | true     |               |
 | `tables`   | The list of tables to pull data from                   | true     |               |
 
-## Destination
-
-A destination connector pushes data from upstream resources to an external resource via Conduit.
-
-### Configuration
-
-| name                       | description                                | required | default value |
-| -------------------------- | ------------------------------------------ | -------- | ------------- |
-| `destination_config_param` | Description of `destination_config_param`. | true     | 1000          |
-
-## Known Issues & Limitations
-
-- Known issue A
-- Limitation A
-
 ## Planned work
 
-- [ ] Item A
-- [ ] Item B
+- [ ] Support for source connector cdc mode
+- [ ] Support for destination connector
+- [ ] Support for [multicollection writes](https://meroxa.com/blog/conduit-0.10-comes-with-multiple-collections-support/)

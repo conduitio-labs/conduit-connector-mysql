@@ -9,17 +9,47 @@ import (
 
 func (SourceConfig) Parameters() map[string]sdk.Parameter {
 	return map[string]sdk.Parameter{
-		"foo": {
+		"database": {
 			Default:     "",
-			Description: "foo is named foo and must be provided by the user.",
+			Description: "",
 			Type:        sdk.ParameterTypeString,
 			Validations: []sdk.Validation{
 				sdk.ValidationRequired{},
 			},
 		},
-		"global_config_param_name": {
+		"host": {
 			Default:     "",
-			Description: "global_config_param_name is named global_config_param_name and needs to be provided by the user.",
+			Description: "",
+			Type:        sdk.ParameterTypeString,
+			Validations: []sdk.Validation{
+				sdk.ValidationRequired{},
+			},
+		},
+		"password": {
+			Default:     "",
+			Description: "",
+			Type:        sdk.ParameterTypeString,
+			Validations: []sdk.Validation{
+				sdk.ValidationRequired{},
+			},
+		},
+		"port": {
+			Default:     "3306",
+			Description: "",
+			Type:        sdk.ParameterTypeInt,
+			Validations: []sdk.Validation{},
+		},
+		"tables": {
+			Default:     "",
+			Description: "",
+			Type:        sdk.ParameterTypeString,
+			Validations: []sdk.Validation{
+				sdk.ValidationRequired{},
+			},
+		},
+		"user": {
+			Default:     "",
+			Description: "",
 			Type:        sdk.ParameterTypeString,
 			Validations: []sdk.Validation{
 				sdk.ValidationRequired{},

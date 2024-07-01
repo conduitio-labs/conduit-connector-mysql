@@ -4,14 +4,8 @@ VERSION=$(shell git describe --tags --dirty --always)
 build:
 	go build -ldflags "-X 'github.com/conduitio-labs/conduit-connector-mysql.version=${VERSION}'" -o conduit-connector-mysql cmd/connector/main.go
 
-.PHONY: test
-test:
-	go test $(GOTEST_FLAGS) -race ./...
-
 .PHONY: test-integration
-test-integration:
-	# run required docker containers, execute integration tests, stop containers after tests
-	docker compose -f test/docker-compose.yml up -d
+test-integration: up-database
 	go test $(GOTEST_FLAGS) -v -race ./...; ret=$$?; \
 		docker compose -f test/docker-compose.yml down; \
 		exit $$ret
@@ -28,12 +22,24 @@ install-tools:
 
 .PHONY: lint
 lint:
-	golangci-lint run
+	golangci-lint run ./...
+
+.PHONY: up-database
+up-database:
+	docker compose -f test/docker-compose.yml up --quiet-pull -d db --wait
+
+.PHONY: up-database
+up-adminer:
+	docker compose -f test/docker-compose.yml up --quiet-pull -d adminer --wait
 
 .PHONY: up
 up:
-	docker compose -f test/docker-compose.yml up --quiet-pull -d --wait 
+	docker compose -f test/docker-compose.yml up --wait
 
 .PHONY: down
 down:
-	docker compose -f test/docker-compose.yml down -v
+	docker compose -f test/docker-compose.yml down -v --remove-orphans
+
+.PHONY: connect
+connect:
+	docker exec -it mysql_db mysql -u root -p'meroxaadmin' meroxadb

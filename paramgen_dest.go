@@ -9,6 +9,14 @@ import (
 
 func (DestinationConfig) Parameters() map[string]sdk.Parameter {
 	return map[string]sdk.Parameter{
+		"database": {
+			Default:     "",
+			Description: "",
+			Type:        sdk.ParameterTypeString,
+			Validations: []sdk.Validation{
+				sdk.ValidationRequired{},
+			},
+		},
 		"destinationConfigParam": {
 			Default:     "yes",
 			Description: "destinationConfigParam must be either yes or no (defaults to yes).",
@@ -17,9 +25,31 @@ func (DestinationConfig) Parameters() map[string]sdk.Parameter {
 				sdk.ValidationInclusion{List: []string{"yes", "no"}},
 			},
 		},
-		"global_config_param_name": {
+		"host": {
 			Default:     "",
-			Description: "global_config_param_name is named global_config_param_name and needs to be provided by the user.",
+			Description: "",
+			Type:        sdk.ParameterTypeString,
+			Validations: []sdk.Validation{
+				sdk.ValidationRequired{},
+			},
+		},
+		"password": {
+			Default:     "",
+			Description: "",
+			Type:        sdk.ParameterTypeString,
+			Validations: []sdk.Validation{
+				sdk.ValidationRequired{},
+			},
+		},
+		"port": {
+			Default:     "3306",
+			Description: "",
+			Type:        sdk.ParameterTypeInt,
+			Validations: []sdk.Validation{},
+		},
+		"user": {
+			Default:     "",
+			Description: "",
 			Type:        sdk.ParameterTypeString,
 			Validations: []sdk.Validation{
 				sdk.ValidationRequired{},

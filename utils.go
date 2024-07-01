@@ -14,10 +14,22 @@
 
 package mysql
 
-type Config struct {
-	Host     string `json:"host" validate:"required"`
-	Port     int    `json:"port" default:"3306"`
-	User     string `json:"user" validate:"required"`
-	Password string `json:"password" validate:"required"`
-	Database string `json:"database" validate:"required"`
+import (
+	"fmt"
+
+	//
+	_ "github.com/go-sql-driver/mysql"
+	"github.com/jmoiron/sqlx"
+)
+
+func connect(config Config) (*sqlx.DB, error) {
+	dataSourceName := fmt.Sprintf(
+		"%s:%s@tcp(%s:%d)/%s",
+		config.User, config.Password, config.Host, config.Port, config.Database,
+	)
+	db, err := sqlx.Open("mysql", dataSourceName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open connection: %w", err)
+	}
+	return db, nil
 }

@@ -27,7 +27,7 @@ import (
 )
 
 func createTestConnection(is *is.I) *sqlx.DB {
-	db, err := connect(Config{
+	db, err := newSqlxDB(Config{
 		Host:     "127.0.0.1",
 		Port:     3306,
 		User:     "root",
@@ -124,7 +124,7 @@ func TestSnapshotIterator_EmptyTable(t *testing.T) {
 	defer func() { is.NoErr(it.Teardown(ctx)) }()
 
 	_, err = it.Next(ctx)
-	if errors.Is(err, ErrIteratorDone) {
+	if errors.Is(err, ErrSnapshotIteratorDone) {
 		return
 	}
 	is.NoErr(err)
@@ -153,7 +153,7 @@ func TestSnapshotIterator_MultipleTables(t *testing.T) {
 
 	for {
 		rec, err := it.Next(ctx)
-		if errors.Is(err, ErrIteratorDone) {
+		if errors.Is(err, ErrSnapshotIteratorDone) {
 			break
 		}
 		is.NoErr(err)
@@ -192,7 +192,7 @@ func TestSnapshotIterator_SmallFetchSize(t *testing.T) {
 
 	for {
 		rec, err := it.Next(ctx)
-		if errors.Is(err, ErrIteratorDone) {
+		if errors.Is(err, ErrSnapshotIteratorDone) {
 			break
 		}
 		is.NoErr(err)
@@ -235,7 +235,7 @@ func TestSnapshotIterator_RestartOnPosition(t *testing.T) {
 		var recs []sdk.Record
 		for i := 0; i < 10; i++ {
 			rec, err := it.Next(ctx)
-			if errors.Is(err, ErrIteratorDone) {
+			if errors.Is(err, ErrSnapshotIteratorDone) {
 				break
 			}
 			is.NoErr(err)
@@ -263,7 +263,7 @@ func TestSnapshotIterator_RestartOnPosition(t *testing.T) {
 	var recs []sdk.Record
 	for {
 		rec, err := it.Next(ctx)
-		if errors.Is(err, ErrIteratorDone) {
+		if errors.Is(err, ErrSnapshotIteratorDone) {
 			break
 		}
 		is.NoErr(err)

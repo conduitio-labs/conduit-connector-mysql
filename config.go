@@ -14,22 +14,10 @@
 
 package mysql
 
-import "fmt"
-
 type Config struct {
 	Host     string `json:"host" validate:"required"`
 	Port     int    `json:"port" default:"3306"`
 	User     string `json:"user" validate:"required"`
 	Password string `json:"password" validate:"required"`
 	Database string `json:"database" validate:"required"`
-}
-
-func (c Config) toMap() map[string]string {
-	return map[string]string{
-		"host":     c.Host,
-		"port":     fmt.Sprintf("%d", c.Port),
-		"user":     c.User,
-		"password": c.Password,
-		"database": c.Database,
-	}
 }

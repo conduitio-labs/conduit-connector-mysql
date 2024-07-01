@@ -21,8 +21,6 @@ import (
 	"fmt"
 
 	sdk "github.com/conduitio/conduit-connector-sdk"
-	// apply mysql driver.
-	_ "github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -63,7 +61,7 @@ func (s *Source) Configure(ctx context.Context, cfg map[string]string) error {
 }
 
 func (s *Source) Open(ctx context.Context, _ sdk.Position) (err error) {
-	s.db, err = connect(s.config.Config)
+	s.db, err = newSqlxDB(s.config.Config)
 	if err != nil {
 		return fmt.Errorf("failed to connect to mysql: %w", err)
 	}

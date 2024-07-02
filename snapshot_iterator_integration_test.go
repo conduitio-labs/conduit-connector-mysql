@@ -26,14 +26,18 @@ import (
 	"github.com/rs/zerolog"
 )
 
-func createTestConnection(is *is.I) *sqlx.DB {
-	db, err := newSqlxDB(Config{
+func testConfig() Config {
+	return Config{
 		Host:     "127.0.0.1",
 		Port:     3306,
 		User:     "root",
 		Password: "meroxaadmin",
 		Database: "meroxadb",
-	})
+	}
+}
+
+func createTestConnection(is *is.I) *sqlx.DB {
+	db, err := newSqlxDB(testConfig())
 	is.NoErr(err)
 
 	return db

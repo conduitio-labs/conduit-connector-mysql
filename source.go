@@ -21,15 +21,15 @@ import (
 	"fmt"
 
 	sdk "github.com/conduitio/conduit-connector-sdk"
-	// apply mysql driver.
-	_ "github.com/go-sql-driver/mysql"
+	"github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 )
 
 type Source struct {
 	sdk.UnimplementedSource
 
-	config SourceConfig
+	config        SourceConfig
+	configFromDSN *mysql.Config
 
 	db *sqlx.DB
 
@@ -58,19 +58,27 @@ func (s *Source) Configure(ctx context.Context, cfg map[string]string) error {
 		return fmt.Errorf("invalid config: %w", err)
 	}
 
+	config, err := mysql.ParseDSN(s.config.URL)
+	if err != nil {
+		return fmt.Errorf("failed to parse given URL: %w", err)
+	}
+	// valid URL
+
+	s.configFromDSN = config
+
 	sdk.Logger(ctx).Info().Msg("configured source connector")
 	return nil
 }
 
 func (s *Source) Open(ctx context.Context, _ sdk.Position) (err error) {
-	s.db, err = connect(s.config.Config)
+	s.db, err = connect(s.config.URL)
 	if err != nil {
 		return fmt.Errorf("failed to connect to mysql: %w", err)
 	}
 
 	s.iterator, err = newSnapshotIterator(ctx, snapshotIteratorConfig{
 		db:       s.db,
-		database: s.config.Database,
+		database: s.configFromDSN.DBName,
 		tables:   s.config.Tables,
 	})
 	if err != nil {

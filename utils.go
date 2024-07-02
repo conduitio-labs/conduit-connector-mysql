@@ -17,17 +17,13 @@ package mysql
 import (
 	"fmt"
 
-	//
+	// apply mysql driver.
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 )
 
-func connect(config Config) (*sqlx.DB, error) {
-	dataSourceName := fmt.Sprintf(
-		"%s:%s@tcp(%s:%d)/%s",
-		config.User, config.Password, config.Host, config.Port, config.Database,
-	)
-	db, err := sqlx.Open("mysql", dataSourceName)
+func connect(url string) (*sqlx.DB, error) {
+	db, err := sqlx.Open("mysql", url)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open connection: %w", err)
 	}

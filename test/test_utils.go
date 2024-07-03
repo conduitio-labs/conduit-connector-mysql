@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/matryer/is"
@@ -25,7 +26,7 @@ import (
 )
 
 func TestConnection(is *is.I) *sqlx.DB {
-	db, err := sqlx.Open("mysql", "root:meroxaadmin@tcp(127.0.0.1:3306)/meroxadb")
+	db, err := sqlx.Open("mysql", "root:meroxaadmin@tcp(127.0.0.1:3306)/meroxadb?parseTime=true")
 	is.NoErr(err)
 
 	return db
@@ -54,6 +55,13 @@ func (TestTables) Drop(is *is.I, db *sqlx.DB) {
 	is.NoErr(err)
 }
 
+type User struct {
+	ID        int32      `db:"id"`
+	Username  string     `db:"username"`
+	Email     string     `db:"email"`
+	CreatedAt *time.Time `db:"created_at"`
+}
+
 func (TestTables) Create(is *is.I, db *sqlx.DB) {
 	createUsersTableQuery := `
 	CREATE TABLE users (
@@ -79,11 +87,29 @@ func (TestTables) Create(is *is.I, db *sqlx.DB) {
 	is.NoErr(err)
 }
 
-func (TestTables) InsertUser(is *is.I, db *sqlx.DB, username string) {
-	insertUsersRowQuery := fmt.Sprintf(`
+func (TestTables) InsertUser(is *is.I, db *sqlx.DB, username string) User {
+	_, err := db.Exec(`
 		INSERT INTO users (username, email) 
-		VALUES ('%s', '%s@example.com')`, username, username)
-	_, err := db.Exec(insertUsersRowQuery)
+		VALUES (?, ?);
+	`, username, fmt.Sprint(username, "@example.com"))
+	is.NoErr(err)
+
+	var user User
+	err = db.QueryRowx(`
+		SELECT *
+		FROM users
+		WHERE id = LAST_INSERT_ID();
+	`).StructScan(&user)
+	is.NoErr(err)
+
+	return user
+}
+
+func (TestTables) DeleteUser(is *is.I, db *sqlx.DB, id int32) {
+	_, err := db.Exec(`
+		DELETE FROM users
+		WHERE id = ?;
+	`, id)
 	is.NoErr(err)
 }
 

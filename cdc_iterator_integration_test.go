@@ -52,9 +52,9 @@ func TestCDCIterator_InsertAction(t *testing.T) {
 
 	iterator := testCdcIterator(ctx, is)
 
-	testTables.InsertUser(is, db, "user1")
-	testTables.InsertUser(is, db, "user2")
-	testTables.InsertUser(is, db, "user3")
+	user1 := testTables.InsertUser(is, db, "user1")
+	user2 := testTables.InsertUser(is, db, "user2")
+	user3 := testTables.InsertUser(is, db, "user3")
 
 	makeKey := func(id int) sdk.Data {
 		return sdk.StructuredData{
@@ -78,10 +78,11 @@ func TestCDCIterator_InsertAction(t *testing.T) {
 	testCases := []struct {
 		key     sdk.Data
 		payload sdk.Change
+		user    testutils.User
 	}{
-		{makeKey(1), makePayload(1)},
-		{makeKey(2), makePayload(2)},
-		{makeKey(3), makePayload(3)},
+		{makeKey(1), makePayload(1), user1},
+		{makeKey(2), makePayload(2), user2},
+		{makeKey(3), makePayload(3), user3},
 	}
 
 	for _, expected := range testCases {
@@ -95,17 +96,18 @@ func TestCDCIterator_InsertAction(t *testing.T) {
 		col, err := rec.Metadata.GetCollection()
 		is.NoErr(err)
 		is.Equal(col, "users")
-		dataEqual(is, rec.Key, expected.key)
+		isDataEqual(is, rec.Key, expected.key)
 
-		// It is complex to mock created_at and not really worth it, considering
-		// that there's no special logic to test to handle dates from the
-		// connector side. We can just delete this part
-		delete(rec.Payload.After.(sdk.StructuredData), "created_at")
-		changeEqual(is, rec.Payload, expected.payload)
+		payload := rec.Payload.After.(sdk.StructuredData)
+
+		is.Equal(payload["id"], expected.user.ID)
+		is.Equal(payload["username"], expected.user.Username)
+		is.Equal(payload["email"], expected.user.Email)
+		// is.Equal(payload["created_at"], expected.user.CreatedAt.String())
 	}
 }
 
-func dataEqual(is *is.I, a, b sdk.Data) {
+func isDataEqual(is *is.I, a, b sdk.Data) {
 	if a == nil && b == nil {
 		return
 	}
@@ -117,7 +119,57 @@ func dataEqual(is *is.I, a, b sdk.Data) {
 	is.Equal(string(a.Bytes()), string(b.Bytes()))
 }
 
-func changeEqual(is *is.I, a, b sdk.Change) {
-	dataEqual(is, a.Before, b.Before)
-	dataEqual(is, a.After, b.After)
+func isChangeEqual(is *is.I, a, b sdk.Change) {
+	isDataEqual(is, a.Before, b.Before)
+	isDataEqual(is, a.After, b.After)
+}
+
+func TestCDCIterator_DeleteAction(t *testing.T) {
+	ctx := testutils.TestContext(t)
+	is := is.New(t)
+
+	db := testutils.TestConnection(is)
+
+	testTables.Drop(is, db)
+	testTables.Create(is, db)
+
+	user1 := testTables.InsertUser(is, db, "user1")
+	user2 := testTables.InsertUser(is, db, "user2")
+	user3 := testTables.InsertUser(is, db, "user3")
+
+	iterator := testCdcIterator(ctx, is)
+
+	testTables.DeleteUser(is, db, user1.ID)
+	testTables.DeleteUser(is, db, user2.ID)
+	testTables.DeleteUser(is, db, user3.ID)
+
+	makeKey := func(id int) sdk.Data {
+		return sdk.StructuredData{
+			"id":     id,
+			"table":  "users",
+			"action": "delete",
+		}
+	}
+
+	testCases := []struct {
+		key sdk.Data
+	}{
+		{makeKey(1)},
+		{makeKey(2)},
+		{makeKey(3)},
+	}
+
+	for _, expected := range testCases {
+		rec, err := iterator.Next(ctx)
+		is.NoErr(err)
+		is.NoErr(iterator.Ack(ctx, rec.Position))
+
+		is.Equal(rec.Operation, sdk.OperationDelete)
+		is.Equal(rec.Metadata[keyAction], "delete")
+
+		col, err := rec.Metadata.GetCollection()
+		is.NoErr(err)
+		is.Equal(col, "users")
+		isDataEqual(is, rec.Key, expected.key)
+	}
 }

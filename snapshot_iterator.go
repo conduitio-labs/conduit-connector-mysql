@@ -114,10 +114,10 @@ type (
 type (
 	primaryKeyName string
 	tableName      string
-	TableKeys      map[tableName]primaryKeyName
+	tableKeys      map[tableName]primaryKeyName
 )
 
-func (config *snapshotIteratorConfig) init() (TableKeys, error) {
+func (config *snapshotIteratorConfig) init() (tableKeys, error) {
 	if config.startPosition.Snapshots == nil {
 		config.startPosition.Snapshots = make(map[tableName]snapshotPosition)
 	}
@@ -133,7 +133,7 @@ func (config *snapshotIteratorConfig) init() (TableKeys, error) {
 		return nil, fmt.Errorf("tables is required")
 	}
 
-	tableKeys := make(TableKeys)
+	tableKeys := make(tableKeys)
 
 	for _, table := range config.tables {
 		primaryKey, err := getPrimaryKey(config.db, config.database, table)
@@ -230,7 +230,7 @@ func (s *snapshotIterator) buildRecord(d fetchData) sdk.Record {
 
 	pos := s.lastPosition.ToSDKPosition()
 	metadata := make(sdk.Metadata)
-	metadata["postgres.table"] = string(d.key.Table)
+	metadata["mysql.table"] = string(d.key.Table)
 	key := d.key.ToSDKData()
 
 	return sdk.Util.Source.NewRecordSnapshot(pos, metadata, key, d.payload)

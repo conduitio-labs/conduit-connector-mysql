@@ -17,13 +17,12 @@ package mysql
 import (
 	"fmt"
 
+	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	"github.com/go-mysql-org/go-mysql/canal"
-	// apply mysql driver.
-	_ "github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 )
 
-func newSqlxDB(config Config) (*sqlx.DB, error) {
+func newSqlxDB(config common.Config) (*sqlx.DB, error) {
 	dataSourceName := fmt.Sprintf(
 		"%s:%s@tcp(%s:%d)/%s",
 		config.User, config.Password, config.Host, config.Port, config.Database,

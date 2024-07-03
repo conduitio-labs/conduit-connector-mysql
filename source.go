@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/jmoiron/sqlx"
 )
@@ -35,7 +36,7 @@ type Source struct {
 }
 
 type SourceConfig struct {
-	Config
+	common.Config
 
 	Tables []string `json:"tables" validate:"required"`
 }

@@ -138,7 +138,7 @@ func (w *fetchWorker) selectRowsChunk(
 	}()
 
 	for rows.Next() {
-		row := map[string]any{}
+		row := sdk.StructuredData{}
 		if err := rows.MapScan(row); err != nil {
 			logDataEvt.Msg("failed to scan row")
 			return nil, fmt.Errorf("failed to scan row: %w", err)

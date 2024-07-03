@@ -119,6 +119,24 @@ func (c *cdcIterator) buildRecord(e *canal.RowsEvent) (sdk.Record, error) {
 	}
 
 	position := cdcPosition{pos}.toSDKPosition()
+	metadata := sdk.Metadata{
+		"table":  e.Table.Name,
+		"action": string(e.Action),
+	}
+	key := buildRecordKey(e)
+
+	switch e.Action {
+	case canal.InsertAction:
+		rec := sdk.Util.Source.NewRecordCreate(
+			position, metadata, key,
+			buildRecordPayload(e, false),
+		)
+
+	case canal.UpdateAction:
+	case canal.DeleteAction:
+	default:
+		return sdk.Record{}, fmt.Errorf("unknown row event action: %s", e.Action)
+	}
 
 	return sdk.Record{
 		Operation: 0,
@@ -136,6 +154,13 @@ func (c *cdcIterator) buildRecord(e *canal.RowsEvent) (sdk.Record, error) {
 	}, nil
 }
 
+func (c *cdcIterator) buildRecordCreate(e *canal.RowsEvent) (sdk.Record, error) {
+}
+func (c *cdcIterator) buildRecordUpdate(e *canal.RowsEvent) (sdk.Record, error) {
+}
+func (c *cdcIterator) buildRecordDelete(e *canal.RowsEvent) (sdk.Record, error) {
+}
+
 func buildRecordKey(e *canal.RowsEvent) sdk.Data {
 	if len(e.Rows) > 0 && len(e.Rows[0]) > 0 {
 		return sdk.StructuredData{"id": e.Rows[0][0]}
@@ -144,7 +169,7 @@ func buildRecordKey(e *canal.RowsEvent) sdk.Data {
 }
 
 func buildRecordPayload(e *canal.RowsEvent, isBefore bool) sdk.Data {
-	var row []interface{}
+	var row []any
 	if isBefore {
 		if e.Action == canal.UpdateAction && len(e.Rows) > 1 {
 			row = e.Rows[0] // For updates, first row is before state

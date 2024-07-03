@@ -71,7 +71,7 @@ func (s *Source) Configure(ctx context.Context, cfg map[string]string) error {
 }
 
 func (s *Source) Open(ctx context.Context, _ sdk.Position) (err error) {
-	s.db, err = connect(s.config.URL)
+	s.db, err = sqlx.Open("mysql", s.config.URL)
 	if err != nil {
 		return fmt.Errorf("failed to connect to mysql: %w", err)
 	}

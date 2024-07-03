@@ -27,7 +27,7 @@ import (
 )
 
 func createTestConnection(is *is.I) *sqlx.DB {
-	db, err := connect("root:meroxaadmin@tcp(127.0.0.1:3306)/meroxadb")
+	db, err := sqlx.Open("mysql", "root:meroxaadmin@tcp(127.0.0.1:3306)/meroxadb")
 	is.NoErr(err)
 
 	return db

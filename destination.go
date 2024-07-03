@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	sdk "github.com/conduitio/conduit-connector-sdk"
 )
 
@@ -31,7 +32,7 @@ type Destination struct {
 
 type DestinationConfig struct {
 	// Config includes parameters that are the same in the source and destination.
-	Config
+	common.Config
 	// DestinationConfigParam must be either yes or no (defaults to yes).
 	DestinationConfigParam string `validate:"inclusion=yes|no" default:"yes"`
 }

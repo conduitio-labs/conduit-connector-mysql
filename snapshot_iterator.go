@@ -26,21 +26,9 @@ import (
 	"gopkg.in/tomb.v2"
 )
 
-var ErrIteratorDone = errors.New("snapshot complete")
+var ErrSnapshotIteratorDone = errors.New("snapshot complete")
 
 const defaultFetchSize = 50000
-
-// Iterator is an object that can iterate over a queue of records.
-type Iterator interface {
-	// Next takes and returns the next record from the queue. Next is allowed to
-	// block until either a record is available or the context gets canceled.
-	Next(context.Context) (sdk.Record, error)
-	// Ack signals that a record at a specific position was successfully
-	// processed.
-	Ack(context.Context, sdk.Position) error
-	// Teardown attempts to gracefully teardown the iterator.
-	Teardown(context.Context) error
-}
 
 type position struct {
 	Snapshots snapshotPositions `json:"snapshots,omitempty"`
@@ -216,7 +204,7 @@ func (s *snapshotIterator) Next(ctx context.Context) (sdk.Record, error) {
 			if err := s.acks.Wait(ctx); err != nil {
 				return sdk.Record{}, fmt.Errorf("failed to wait for acks: %w", err)
 			}
-			return sdk.Record{}, ErrIteratorDone
+			return sdk.Record{}, ErrSnapshotIteratorDone
 		}
 
 		s.acks.Add(1)

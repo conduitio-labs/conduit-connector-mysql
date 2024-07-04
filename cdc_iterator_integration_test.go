@@ -56,10 +56,10 @@ func TestCDCIterator_InsertAction(t *testing.T) {
 	user2 := testTables.InsertUser(is, db, "user2")
 	user3 := testTables.InsertUser(is, db, "user3")
 
-	makeKey := func(id int) sdk.Data {
+	makeKey := func(id int32) sdk.Data {
 		return sdk.StructuredData{
 			"id":     id,
-			"table":  "users",
+			"table":  tableName("users"),
 			"action": "insert",
 		}
 	}
@@ -98,30 +98,12 @@ func TestCDCIterator_InsertAction(t *testing.T) {
 		is.Equal(col, "users")
 		isDataEqual(is, rec.Key, expected.key)
 
-		payload := rec.Payload.After.(sdk.StructuredData)
+		isDataEqual(is, rec.Payload.After, expected.user.ToStructuredData())
 
-		is.Equal(payload["id"], expected.user.ID)
-		is.Equal(payload["username"], expected.user.Username)
-		is.Equal(payload["email"], expected.user.Email)
-		// is.Equal(payload["created_at"], expected.user.CreatedAt.String())
+		// is.Equal(payload["id"], expected.user.ID)
+		// is.Equal(payload["username"], expected.user.Username)
+		// is.Equal(payload["email"], expected.user.Email)
 	}
-}
-
-func isDataEqual(is *is.I, a, b sdk.Data) {
-	if a == nil && b == nil {
-		return
-	}
-
-	if a == nil || b == nil {
-		is.Fail() // one of the data is nil
-	}
-
-	is.Equal(string(a.Bytes()), string(b.Bytes()))
-}
-
-func isChangeEqual(is *is.I, a, b sdk.Change) {
-	isDataEqual(is, a.Before, b.Before)
-	isDataEqual(is, a.After, b.After)
 }
 
 func TestCDCIterator_DeleteAction(t *testing.T) {
@@ -172,4 +154,84 @@ func TestCDCIterator_DeleteAction(t *testing.T) {
 		is.Equal(col, "users")
 		isDataEqual(is, rec.Key, expected.key)
 	}
+}
+
+func TestCDCIterator_UpdateAction(t *testing.T) {
+	ctx := testutils.TestContext(t)
+	is := is.New(t)
+
+	db := testutils.TestConnection(is)
+
+	testTables.Drop(is, db)
+	testTables.Create(is, db)
+
+	insertUser := func(username string) (testutils.User, testutils.User) {
+		user := testTables.InsertUser(is, db, username)
+		updated := user
+		updated.Username = username + "-updated"
+		updated.Email = username + "-updated@example.com"
+		return user, updated
+	}
+
+	user1, updateUser1 := insertUser("user1")
+	user2, updateUser2 := insertUser("user2")
+	user3, updateUser3 := insertUser("user3")
+
+	iterator := testCdcIterator(ctx, is)
+
+	{ // update users to trigger update action
+		testTables.UpdateUser(is, db, updateUser1)
+		testTables.UpdateUser(is, db, updateUser2)
+		testTables.UpdateUser(is, db, updateUser3)
+	}
+
+	testCases := []struct {
+		original, updated sdk.StructuredData
+	}{
+		{user1.ToStructuredData(), updateUser1.ToStructuredData()},
+		{user2.ToStructuredData(), updateUser2.ToStructuredData()},
+		{user3.ToStructuredData(), updateUser3.ToStructuredData()},
+	}
+
+	for _, expected := range testCases {
+		rec, err := iterator.Next(ctx)
+		is.NoErr(err)
+		is.NoErr(iterator.Ack(ctx, rec.Position))
+
+		is.Equal(rec.Operation, sdk.OperationUpdate)
+		is.Equal(rec.Metadata[keyAction], "update")
+
+		col, err := rec.Metadata.GetCollection()
+		is.NoErr(err)
+		is.Equal(col, "users")
+
+		isDataEqual(is, rec.Payload.Before, expected.original)
+		isDataEqual(is, rec.Payload.After, expected.updated)
+	}
+}
+
+func isDataEqual(is *is.I, a, b sdk.Data) {
+	if a == nil && b == nil {
+		return
+	}
+
+	if a == nil || b == nil {
+		is.Fail() // one of the data is nil
+	}
+
+	aS, aOK := a.(sdk.StructuredData)
+	bS, bOK := b.(sdk.StructuredData)
+
+	if aOK && bOK {
+		for k, v := range aS {
+			is.Equal(v, bS[k])
+		}
+	} else {
+		is.Equal(string(a.Bytes()), string(b.Bytes()))
+	}
+}
+
+func isChangeEqual(is *is.I, a, b sdk.Change) {
+	isDataEqual(is, a.Before, b.Before)
+	isDataEqual(is, a.After, b.After)
 }

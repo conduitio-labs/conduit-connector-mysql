@@ -216,7 +216,24 @@ func (c *cdcIterator) buildRecord(e *canal.RowsEvent) (sdk.Record, error) {
 		return sdk.Util.Source.NewRecordDelete(position, metadata, key), nil
 
 	case canal.UpdateAction:
-		// TODO
+		position := cdcPosition{pos}.toSDKPosition()
+		before := buildPayload(e.Table.Columns, e.Rows[0])
+		after := buildPayload(e.Table.Columns, e.Rows[1])
+
+		metadata := sdk.Metadata{
+			keyAction: e.Action,
+		}
+
+		metadata.SetCollection(e.Table.Name)
+		table := tableName(e.Table.Name)
+		primaryKey := c.tableKeys[table]
+
+		key, err := buildRecordKey(primaryKey, table, e.Action, before)
+		if err != nil {
+			return sdk.Record{}, fmt.Errorf("failed to build record key: %w", err)
+		}
+
+		return sdk.Util.Source.NewRecordUpdate(position, metadata, key, before, after), nil
 	}
 
 	return sdk.Record{}, fmt.Errorf("unknown row event action: %s", e.Action)

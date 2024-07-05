@@ -30,43 +30,6 @@ var ErrSnapshotIteratorDone = errors.New("snapshot complete")
 
 const defaultFetchSize = 50000
 
-type position struct {
-	Snapshots snapshotPositions `json:"snapshots,omitempty"`
-}
-
-func (p position) ToSDKPosition() sdk.Position {
-	v, err := json.Marshal(p)
-	if err != nil {
-		// This should never happen, all Position structs should be valid.
-		panic(err)
-	}
-	return v
-}
-
-func (p position) Clone() position {
-	var newPosition position
-	newPosition.Snapshots = make(map[tableName]snapshotPosition)
-	for k, v := range p.Snapshots {
-		newPosition.Snapshots[k] = v
-	}
-	return newPosition
-}
-
-func parseSDKPosition(p sdk.Position) (position, error) {
-	var pos position
-	if err := json.Unmarshal(p, &pos); err != nil {
-		return position{}, fmt.Errorf("failed to parse position: %w", err)
-	}
-	return pos, nil
-}
-
-type snapshotPositions map[tableName]snapshotPosition
-
-type snapshotPosition struct {
-	LastRead    int `json:"last_read"`
-	SnapshotEnd int `json:"snapshot_end"`
-}
-
 type snapshotKey struct {
 	Table tableName      `json:"table"`
 	Key   primaryKeyName `json:"key"`
@@ -92,7 +55,7 @@ type (
 	fetchData struct {
 		key      snapshotKey
 		payload  sdk.StructuredData
-		position snapshotPosition
+		position tablePosition
 	}
 	snapshotIterator struct {
 		db           *sqlx.DB
@@ -100,12 +63,12 @@ type (
 		data         chan fetchData
 		acks         csync.WaitGroup
 		fetchSize    int
-		lastPosition position
+		lastPosition snapshotPosition
 	}
 	snapshotIteratorConfig struct {
 		db            *sqlx.DB
 		fetchSize     int
-		startPosition position
+		startPosition snapshotPosition
 		database      string
 		tables        []string
 	}
@@ -119,7 +82,7 @@ type (
 
 func (config *snapshotIteratorConfig) init() (tableKeys, error) {
 	if config.startPosition.Snapshots == nil {
-		config.startPosition.Snapshots = make(map[tableName]snapshotPosition)
+		config.startPosition.Snapshots = make(map[tableName]tablePosition)
 	}
 
 	if config.fetchSize == 0 {
@@ -228,7 +191,7 @@ func (s *snapshotIterator) Teardown(_ context.Context) error {
 func (s *snapshotIterator) buildRecord(d fetchData) sdk.Record {
 	s.lastPosition.Snapshots[d.key.Table] = d.position
 
-	pos := s.lastPosition.ToSDKPosition()
+	pos := s.lastPosition.toSDKPosition()
 	metadata := make(sdk.Metadata)
 	metadata["mysql.table"] = string(d.key.Table)
 	key := d.key.ToSDKData()

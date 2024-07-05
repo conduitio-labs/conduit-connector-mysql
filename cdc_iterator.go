@@ -16,7 +16,6 @@ package mysql
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -28,27 +27,6 @@ import (
 	"github.com/go-mysql-org/go-mysql/schema"
 	"gopkg.in/tomb.v2"
 )
-
-type cdcPosition struct {
-	mysql.Position
-}
-
-func (p cdcPosition) toSDKPosition() sdk.Position {
-	v, err := json.Marshal(p)
-	if err != nil {
-		// This should never happen, all Position structs should be valid.
-		panic(err)
-	}
-	return v
-}
-
-func parseCDCPosition(p sdk.Position) (cdcPosition, error) {
-	var pos cdcPosition
-	if err := json.Unmarshal(p, &pos); err != nil {
-		return cdcPosition{}, fmt.Errorf("failed to parse position: %w", err)
-	}
-	return pos, nil
-}
 
 type cdcIterator struct {
 	canal     *canal.Canal
@@ -97,11 +75,15 @@ func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (Iterator, er
 
 	var startPosition mysql.Position
 	if config.position != nil {
-		position, err := parseCDCPosition(config.position)
+		pos, err := parseSDKPosition(config.position)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse position: %w", err)
 		}
-		startPosition = position.Position
+		if pos.kind == positionTypeSnapshot {
+			return nil, fmt.Errorf("invalid position type: %s", pos.kind)
+		}
+
+		startPosition = pos.cdcPosition.Position
 	} else {
 		position, err := iterator.canal.GetMasterPos()
 		if err != nil {

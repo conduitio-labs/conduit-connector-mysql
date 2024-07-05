@@ -49,10 +49,14 @@ func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (Iterator, er
 		return nil, fmt.Errorf("failed to create canal: %w", err)
 	}
 
+	sdk.Logger(ctx).Info().Msg("created canal")
+
 	db, err := newSqlxDB(config.Config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to mysql: %w", err)
 	}
+
+	sdk.Logger(ctx).Info().Msg("connected to mysql")
 
 	iterator := &cdcIterator{
 		canal:     c,
@@ -73,6 +77,8 @@ func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (Iterator, er
 		iterator.tableKeys[tableName(table)] = primaryKey
 	}
 
+	sdk.Logger(ctx).Info().Msg("got table keys")
+
 	var startPosition mysql.Position
 	if config.position != nil {
 		pos, err := parseSDKPosition(config.position)
@@ -84,12 +90,19 @@ func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (Iterator, er
 		}
 
 		startPosition = pos.CdcPosition.Position
+
+		sdk.Logger(ctx).Info().
+			Msgf("starting from arbitrary cdc position %s", startPosition.String())
+
 	} else {
 		position, err := iterator.canal.GetMasterPos()
 		if err != nil {
 			return nil, fmt.Errorf("failed to get master position: %w", err)
 		}
 		startPosition = position
+
+		sdk.Logger(ctx).Info().
+			Msgf("starting from master position %s", startPosition.String())
 	}
 
 	iterator.canalTomb.Go(func() error {
@@ -106,6 +119,7 @@ func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (Iterator, er
 }
 
 func (c *cdcIterator) runCanal(ctx context.Context, startPos mysql.Position) error {
+	// buffered to allow the goroutine to exit when the iterator is torn down
 	errChan := make(chan error, 1)
 	go func() {
 		handler := &cdcEventHandler{
@@ -180,6 +194,8 @@ func (c *cdcIterator) buildRecord(e *canal.RowsEvent) (sdk.Record, error) {
 	if err != nil {
 		return sdk.Record{}, fmt.Errorf("failed to get master position from buildRecord: %w", err)
 	}
+
+	pos.Pos = e.Header.LogPos
 
 	switch e.Action {
 	case canal.InsertAction:

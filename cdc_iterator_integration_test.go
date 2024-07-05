@@ -242,6 +242,12 @@ func TestCDCIterator_RestartOnPosition(t *testing.T) {
 	testTables.Drop(is, db)
 	testTables.Create(is, db)
 
+	// start the iterator at the beginning
+
+	iterator, teardown := testCdcIterator(ctx, is)
+
+	// and trigger some insert actions
+
 	user1 := testTables.InsertUser(is, db, "user1")
 	user2 := testTables.InsertUser(is, db, "user2")
 	user3 := testTables.InsertUser(is, db, "user3")
@@ -250,8 +256,6 @@ func TestCDCIterator_RestartOnPosition(t *testing.T) {
 	var latestPosition sdk.Position
 
 	{ // read and ack 2 records
-		iterator, teardown := testCdcIterator(ctx, is)
-
 		rec1, err := iterator.Next(ctx)
 		is.NoErr(err)
 		is.NoErr(iterator.Ack(ctx, rec1.Position))
@@ -269,7 +273,9 @@ func TestCDCIterator_RestartOnPosition(t *testing.T) {
 		latestPosition = rec2.Position
 	}
 
-	iterator, teardown := testCdcIteratorAtPosition(ctx, is, latestPosition)
+	// then, try to read from the second record
+
+	iterator, teardown = testCdcIteratorAtPosition(ctx, is, latestPosition)
 	defer teardown()
 
 	user5 := testTables.InsertUser(is, db, "user5")
@@ -302,7 +308,7 @@ func assertInsertedUser(is *is.I, user testutils.User, rec sdk.Record) {
 	is.Equal(col, "users")
 	isDataEqual(is, rec.Key, sdk.StructuredData{
 		"id":     user.ID,
-		"table":  "users",
+		"table":  tableName("users"),
 		"action": "insert",
 	})
 

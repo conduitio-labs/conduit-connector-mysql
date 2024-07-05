@@ -42,6 +42,14 @@ func (p cdcPosition) toSDKPosition() sdk.Position {
 	return v
 }
 
+func parseCDCPosition(p sdk.Position) (cdcPosition, error) {
+	var pos cdcPosition
+	if err := json.Unmarshal(p, &pos); err != nil {
+		return cdcPosition{}, fmt.Errorf("failed to parse position: %w", err)
+	}
+	return pos, nil
+}
+
 type cdcIterator struct {
 	canal     *canal.Canal
 	acks      *csync.WaitGroup
@@ -52,8 +60,13 @@ type cdcIterator struct {
 	canalTomb *tomb.Tomb
 }
 
-func newCdcIterator(ctx context.Context, config SourceConfig) (Iterator, error) {
-	c, err := newCanal(config)
+type cdcIteratorConfig struct {
+	SourceConfig
+	position sdk.Position
+}
+
+func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (Iterator, error) {
+	c, err := newCanal(config.SourceConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create canal: %w", err)
 	}
@@ -82,14 +95,24 @@ func newCdcIterator(ctx context.Context, config SourceConfig) (Iterator, error) 
 		iterator.tableKeys[tableName(table)] = primaryKey
 	}
 
-	now, err := iterator.canal.GetMasterPos()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get master position: %w", err)
+	var startPosition mysql.Position
+	if config.position != nil {
+		position, err := parseCDCPosition(config.position)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse position: %w", err)
+		}
+		startPosition = position.Position
+	} else {
+		position, err := iterator.canal.GetMasterPos()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get master position: %w", err)
+		}
+		startPosition = position
 	}
 
 	iterator.canalTomb.Go(func() error {
 		ctx := iterator.canalTomb.Context(ctx)
-		return iterator.runCanal(ctx, now)
+		return iterator.runCanal(ctx, startPosition)
 	})
 
 	go func() {

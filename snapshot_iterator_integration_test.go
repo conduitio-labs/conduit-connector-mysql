@@ -166,9 +166,9 @@ func TestSnapshotIterator_RestartOnPosition(t *testing.T) {
 
 		pos, err := parseSDKPosition(recs[len(recs)-1].Position)
 		is.NoErr(err)
-		is.Equal(pos.kind, positionTypeSnapshot)
+		is.Equal(pos.Kind, positionTypeSnapshot)
 
-		breakPosition = *pos.snapshotPosition
+		breakPosition = *pos.SnapshotPosition
 		is.NoErr(err)
 	}
 

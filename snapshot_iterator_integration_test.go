@@ -140,7 +140,7 @@ func TestSnapshotIterator_RestartOnPosition(t *testing.T) {
 
 	// Read the first 10 records
 
-	var breakPosition position
+	var breakPosition snapshotPosition
 	{
 		it, err := newSnapshotIterator(ctx, snapshotIteratorConfig{
 			db:       db,
@@ -164,7 +164,11 @@ func TestSnapshotIterator_RestartOnPosition(t *testing.T) {
 			is.NoErr(err)
 		}
 
-		breakPosition, err = parseSDKPosition(recs[len(recs)-1].Position)
+		pos, err := parseSDKPosition(recs[len(recs)-1].Position)
+		is.NoErr(err)
+		is.Equal(pos.kind, positionTypeSnapshot)
+
+		breakPosition = *pos.snapshotPosition
 		is.NoErr(err)
 	}
 

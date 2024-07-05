@@ -29,7 +29,7 @@ type fetchWorker struct {
 }
 
 type fetchWorkerConfig struct {
-	lastPosition position
+	lastPosition snapshotPosition
 	table        tableName
 	fetchSize    int
 	primaryKey   primaryKeyName
@@ -63,7 +63,7 @@ func (w *fetchWorker) run(ctx context.Context) error {
 
 		for _, row := range rows {
 			lastRead++
-			position := snapshotPosition{
+			position := tablePosition{
 				LastRead:    lastRead,
 				SnapshotEnd: snapshotEnd,
 			}
@@ -156,7 +156,7 @@ func (w *fetchWorker) selectRowsChunk(
 
 func (w *fetchWorker) buildFetchData(
 	payload sdk.StructuredData,
-	position snapshotPosition,
+	position tablePosition,
 ) (fetchData, error) {
 	keyValue, err := primaryKeyValueFromData(w.config.primaryKey, payload)
 	if err != nil {

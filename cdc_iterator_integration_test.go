@@ -25,20 +25,44 @@ import (
 	"github.com/matryer/is"
 )
 
-func testCdcIterator(ctx context.Context, is *is.I) Iterator {
-	iterator, err := newCdcIterator(ctx, SourceConfig{
-		Config: common.Config{
-			Host:     "127.0.0.1",
-			Port:     3306,
-			User:     "root",
-			Password: "meroxaadmin",
-			Database: "meroxadb",
+func testCdcIterator(ctx context.Context, is *is.I) (Iterator, func()) {
+	iterator, err := newCdcIterator(ctx, cdcIteratorConfig{
+		SourceConfig: SourceConfig{
+			Config: common.Config{
+				Host:     "127.0.0.1",
+				Port:     3306,
+				User:     "root",
+				Password: "meroxaadmin",
+				Database: "meroxadb",
+			},
+			Tables: []string{"users"},
 		},
-		Tables: []string{"users"},
 	})
 	is.NoErr(err)
 
-	return iterator
+	return iterator, func() { is.NoErr(iterator.Teardown(ctx)) }
+}
+
+func testCdcIteratorAtPosition(
+	ctx context.Context, is *is.I,
+	position sdk.Position,
+) (Iterator, func()) {
+	iterator, err := newCdcIterator(ctx, cdcIteratorConfig{
+		SourceConfig: SourceConfig{
+			Config: common.Config{
+				Host:     "127.0.0.1",
+				Port:     3306,
+				User:     "root",
+				Password: "meroxaadmin",
+				Database: "meroxadb",
+			},
+			Tables: []string{"users"},
+		},
+		position: position,
+	})
+	is.NoErr(err)
+
+	return iterator, func() { is.NoErr(iterator.Teardown(ctx)) }
 }
 
 func TestCDCIterator_InsertAction(t *testing.T) {
@@ -50,7 +74,8 @@ func TestCDCIterator_InsertAction(t *testing.T) {
 	testTables.Drop(is, db)
 	testTables.Create(is, db)
 
-	iterator := testCdcIterator(ctx, is)
+	iterator, teardown := testCdcIterator(ctx, is)
+	defer teardown()
 
 	user1 := testTables.InsertUser(is, db, "user1")
 	user2 := testTables.InsertUser(is, db, "user2")
@@ -115,7 +140,8 @@ func TestCDCIterator_DeleteAction(t *testing.T) {
 	user2 := testTables.InsertUser(is, db, "user2")
 	user3 := testTables.InsertUser(is, db, "user3")
 
-	iterator := testCdcIterator(ctx, is)
+	iterator, teardown := testCdcIterator(ctx, is)
+	defer teardown()
 
 	testTables.DeleteUser(is, db, user1.ID)
 	testTables.DeleteUser(is, db, user2.ID)
@@ -173,7 +199,8 @@ func TestCDCIterator_UpdateAction(t *testing.T) {
 	user2, updateUser2 := insertUser("user2")
 	user3, updateUser3 := insertUser("user3")
 
-	iterator := testCdcIterator(ctx, is)
+	iterator, teardown := testCdcIterator(ctx, is)
+	defer teardown()
 
 	{ // update users to trigger update action
 		testTables.UpdateUser(is, db, updateUser1)
@@ -204,6 +231,82 @@ func TestCDCIterator_UpdateAction(t *testing.T) {
 		isDataEqual(is, rec.Payload.Before, expected.original)
 		isDataEqual(is, rec.Payload.After, expected.updated)
 	}
+}
+
+func TestCDCIterator_RestartOnPosition(t *testing.T) {
+	ctx := testutils.TestContext(t)
+	is := is.New(t)
+
+	db := testutils.TestConnection(is)
+
+	testTables.Drop(is, db)
+	testTables.Create(is, db)
+
+	user1 := testTables.InsertUser(is, db, "user1")
+	user2 := testTables.InsertUser(is, db, "user2")
+	user3 := testTables.InsertUser(is, db, "user3")
+	user4 := testTables.InsertUser(is, db, "user4")
+
+	var latestPosition sdk.Position
+
+	{ // read and ack 2 records
+		iterator, teardown := testCdcIterator(ctx, is)
+
+		rec1, err := iterator.Next(ctx)
+		is.NoErr(err)
+		is.NoErr(iterator.Ack(ctx, rec1.Position))
+
+		assertInsertedUser(is, user1, rec1)
+
+		rec2, err := iterator.Next(ctx)
+		is.NoErr(err)
+		is.NoErr(iterator.Ack(ctx, rec2.Position))
+
+		assertInsertedUser(is, user2, rec2)
+
+		teardown()
+
+		latestPosition = rec2.Position
+	}
+
+	iterator, teardown := testCdcIteratorAtPosition(ctx, is, latestPosition)
+	defer teardown()
+
+	user5 := testTables.InsertUser(is, db, "user5")
+
+	rec3, err := iterator.Next(ctx)
+	is.NoErr(err)
+	is.NoErr(iterator.Ack(ctx, rec3.Position))
+
+	assertInsertedUser(is, user3, rec3)
+
+	rec4, err := iterator.Next(ctx)
+	is.NoErr(err)
+	is.NoErr(iterator.Ack(ctx, rec3.Position))
+
+	assertInsertedUser(is, user4, rec4)
+
+	rec5, err := iterator.Next(ctx)
+	is.NoErr(err)
+	is.NoErr(iterator.Ack(ctx, rec3.Position))
+
+	assertInsertedUser(is, user5, rec5)
+}
+
+func assertInsertedUser(is *is.I, user testutils.User, rec sdk.Record) {
+	is.Equal(rec.Operation, sdk.OperationCreate)
+	is.Equal(rec.Metadata[keyAction], "insert")
+
+	col, err := rec.Metadata.GetCollection()
+	is.NoErr(err)
+	is.Equal(col, "users")
+	isDataEqual(is, rec.Key, sdk.StructuredData{
+		"id":     user.ID,
+		"table":  "users",
+		"action": "insert",
+	})
+
+	isDataEqual(is, rec.Payload.After, user.ToStructuredData())
 }
 
 func isDataEqual(is *is.I, a, b sdk.Data) {

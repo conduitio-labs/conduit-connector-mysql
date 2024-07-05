@@ -16,9 +16,9 @@ const (
 )
 
 type position struct {
-	kind             positionType
-	snapshotPosition *snapshotPosition
-	cdcPosition      *cdcPosition
+	Kind             positionType      `json:"kind"`
+	SnapshotPosition *snapshotPosition `json:"snapshot_position"`
+	CdcPosition      *cdcPosition      `json:"cdc_position"`
 }
 
 type snapshotPosition struct {
@@ -27,8 +27,8 @@ type snapshotPosition struct {
 
 func (p snapshotPosition) toSDKPosition() sdk.Position {
 	v, err := json.Marshal(position{
-		kind:             positionTypeSnapshot,
-		snapshotPosition: &p,
+		Kind:             positionTypeSnapshot,
+		SnapshotPosition: &p,
 	})
 	if err != nil {
 		// This should never happen, all Position structs should be valid.
@@ -67,8 +67,8 @@ type cdcPosition struct {
 
 func (p cdcPosition) toSDKPosition() sdk.Position {
 	v, err := json.Marshal(position{
-		kind:        positionTypeCDC,
-		cdcPosition: &p,
+		Kind:        positionTypeCDC,
+		CdcPosition: &p,
 	})
 	if err != nil {
 		// This should never happen, all Position structs should be valid.

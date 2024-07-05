@@ -79,11 +79,11 @@ func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (Iterator, er
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse position: %w", err)
 		}
-		if pos.kind == positionTypeSnapshot {
-			return nil, fmt.Errorf("invalid position type: %s", pos.kind)
+		if pos.Kind == positionTypeSnapshot {
+			return nil, fmt.Errorf("invalid position type: %s", pos.Kind)
 		}
 
-		startPosition = pos.cdcPosition.Position
+		startPosition = pos.CdcPosition.Position
 	} else {
 		position, err := iterator.canal.GetMasterPos()
 		if err != nil {
@@ -218,7 +218,6 @@ func (c *cdcIterator) buildRecord(e *canal.RowsEvent) (sdk.Record, error) {
 		}
 
 		return sdk.Util.Source.NewRecordDelete(position, metadata, key), nil
-
 	case canal.UpdateAction:
 		position := cdcPosition{pos}.toSDKPosition()
 		before := buildPayload(e.Table.Columns, e.Rows[0])

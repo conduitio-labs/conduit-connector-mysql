@@ -64,7 +64,7 @@ func TestCDCIterator_InsertAction(t *testing.T) {
 		}
 	}
 
-	makePayload := func(id int) sdk.Change {
+	makePayload := func(id int32) sdk.Change {
 		return sdk.Change{
 			Before: nil,
 			After: sdk.StructuredData{
@@ -99,10 +99,6 @@ func TestCDCIterator_InsertAction(t *testing.T) {
 		isDataEqual(is, rec.Key, expected.key)
 
 		isDataEqual(is, rec.Payload.After, expected.user.ToStructuredData())
-
-		// is.Equal(payload["id"], expected.user.ID)
-		// is.Equal(payload["username"], expected.user.Username)
-		// is.Equal(payload["email"], expected.user.Email)
 	}
 }
 
@@ -125,10 +121,10 @@ func TestCDCIterator_DeleteAction(t *testing.T) {
 	testTables.DeleteUser(is, db, user2.ID)
 	testTables.DeleteUser(is, db, user3.ID)
 
-	makeKey := func(id int) sdk.Data {
+	makeKey := func(id int32) sdk.Data {
 		return sdk.StructuredData{
-			"id":     id,
-			"table":  "users",
+			"id":     int32(id),
+			"table":  tableName("users"),
 			"action": "delete",
 		}
 	}

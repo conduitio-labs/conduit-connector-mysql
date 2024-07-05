@@ -103,14 +103,13 @@ func newCdcIterator(ctx context.Context, config SourceConfig) (Iterator, error) 
 func (c *cdcIterator) runCanal(ctx context.Context, startPos mysql.Position) error {
 	errChan := make(chan error, 1)
 	go func() {
+		handler := &cdcEventHandler{
+			ctx:  ctx,
+			data: c.data,
+		}
+		c.canal.SetEventHandler(handler)
 		errChan <- c.canal.RunFrom(startPos)
 	}()
-
-	handler := &cdcEventHandler{
-		ctx:  ctx,
-		data: c.data,
-	}
-	c.canal.SetEventHandler(handler)
 
 	select {
 	case <-ctx.Done():

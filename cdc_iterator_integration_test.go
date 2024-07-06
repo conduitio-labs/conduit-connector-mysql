@@ -149,7 +149,7 @@ func TestCDCIterator_DeleteAction(t *testing.T) {
 
 	makeKey := func(id int32) sdk.Data {
 		return sdk.StructuredData{
-			"id":     int32(id),
+			"id":     id,
 			"table":  tableName("users"),
 			"action": "delete",
 		}
@@ -334,9 +334,4 @@ func isDataEqual(is *is.I, a, b sdk.Data) {
 	} else {
 		is.Equal(string(a.Bytes()), string(b.Bytes()))
 	}
-}
-
-func isChangeEqual(is *is.I, a, b sdk.Change) {
-	isDataEqual(is, a.Before, b.Before)
-	isDataEqual(is, a.After, b.After)
 }

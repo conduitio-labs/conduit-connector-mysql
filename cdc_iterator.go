@@ -79,30 +79,9 @@ func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (Iterator, er
 
 	sdk.Logger(ctx).Info().Msg("got table keys")
 
-	var startPosition mysql.Position
-	if config.position != nil {
-		pos, err := parseSDKPosition(config.position)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse position: %w", err)
-		}
-		if pos.Kind == positionTypeSnapshot {
-			return nil, fmt.Errorf("invalid position type: %s", pos.Kind)
-		}
-
-		startPosition = pos.CdcPosition.Position
-
-		sdk.Logger(ctx).Info().
-			Msgf("starting from arbitrary cdc position %s", startPosition.String())
-
-	} else {
-		position, err := iterator.canal.GetMasterPos()
-		if err != nil {
-			return nil, fmt.Errorf("failed to get master position: %w", err)
-		}
-		startPosition = position
-
-		sdk.Logger(ctx).Info().
-			Msgf("starting from master position %s", startPosition.String())
+	startPosition, err := iterator.getStartPosition(config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get start position: %w", err)
 	}
 
 	iterator.canalTomb.Go(func() error {
@@ -116,6 +95,27 @@ func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (Iterator, er
 	}()
 
 	return iterator, nil
+}
+
+func (c *cdcIterator) getStartPosition(config cdcIteratorConfig) (mysql.Position, error) {
+	if config.position != nil {
+		pos, err := parseSDKPosition(config.position)
+		if err != nil {
+			return mysql.Position{}, fmt.Errorf("failed to parse position: %w", err)
+		}
+		if pos.Kind == positionTypeSnapshot {
+			return mysql.Position{}, fmt.Errorf("invalid position type: %s", pos.Kind)
+		}
+
+		return pos.CdcPosition.Position, nil
+	}
+
+	masterPos, err := c.canal.GetMasterPos()
+	if err != nil {
+		return mysql.Position{}, fmt.Errorf("failed to get master position: %w", err)
+	}
+
+	return masterPos, nil
 }
 
 func (c *cdcIterator) runCanal(ctx context.Context, startPos mysql.Position) error {
@@ -195,18 +195,16 @@ func (c *cdcIterator) buildRecord(e *canal.RowsEvent) (sdk.Record, error) {
 		return sdk.Record{}, fmt.Errorf("failed to get master position from buildRecord: %w", err)
 	}
 
+	metadata := sdk.Metadata{keyAction: e.Action}
+	metadata.SetCollection(e.Table.Name)
+
 	pos.Pos = e.Header.LogPos
 
 	switch e.Action {
 	case canal.InsertAction:
 		position := cdcPosition{pos}.toSDKPosition()
-		metadata := sdk.Metadata{
-			keyAction: e.Action,
-		}
-
 		payload := buildPayload(e.Table.Columns, e.Rows[0])
 
-		metadata.SetCollection(e.Table.Name)
 		table := tableName(e.Table.Name)
 		primaryKey := c.tableKeys[table]
 
@@ -218,13 +216,9 @@ func (c *cdcIterator) buildRecord(e *canal.RowsEvent) (sdk.Record, error) {
 		return sdk.Util.Source.NewRecordCreate(position, metadata, key, payload), nil
 	case canal.DeleteAction:
 		position := cdcPosition{pos}.toSDKPosition()
-		metadata := sdk.Metadata{
-			keyAction: e.Action,
-		}
 
 		payload := buildPayload(e.Table.Columns, e.Rows[0])
 
-		metadata.SetCollection(e.Table.Name)
 		table := tableName(e.Table.Name)
 		primaryKey := c.tableKeys[table]
 
@@ -239,11 +233,6 @@ func (c *cdcIterator) buildRecord(e *canal.RowsEvent) (sdk.Record, error) {
 		before := buildPayload(e.Table.Columns, e.Rows[0])
 		after := buildPayload(e.Table.Columns, e.Rows[1])
 
-		metadata := sdk.Metadata{
-			keyAction: e.Action,
-		}
-
-		metadata.SetCollection(e.Table.Name)
 		table := tableName(e.Table.Name)
 		primaryKey := c.tableKeys[table]
 

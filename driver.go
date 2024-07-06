@@ -14,4 +14,7 @@
 
 package mysql
 
-import _ "github.com/go-sql-driver/mysql"
+import (
+	// sets up the mysql driver.
+	_ "github.com/go-sql-driver/mysql"
+)

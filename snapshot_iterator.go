@@ -67,6 +67,7 @@ type (
 	}
 	snapshotIteratorConfig struct {
 		db            *sqlx.DB
+		tableKeys     tableKeys
 		fetchSize     int
 		startPosition snapshotPosition
 		database      string
@@ -74,13 +75,7 @@ type (
 	}
 )
 
-type (
-	primaryKeyName string
-	tableName      string
-	tableKeys      map[tableName]primaryKeyName
-)
-
-func (config *snapshotIteratorConfig) init() (tableKeys, error) {
+func (config *snapshotIteratorConfig) init() error {
 	if config.startPosition.Snapshots == nil {
 		config.startPosition.Snapshots = make(map[tableName]tablePosition)
 	}
@@ -90,32 +85,20 @@ func (config *snapshotIteratorConfig) init() (tableKeys, error) {
 	}
 
 	if config.database == "" {
-		return nil, fmt.Errorf("database is required")
+		return fmt.Errorf("database is required")
 	}
 	if len(config.tables) == 0 {
-		return nil, fmt.Errorf("tables is required")
+		return fmt.Errorf("tables is required")
 	}
 
-	tableKeys := make(tableKeys)
-
-	for _, table := range config.tables {
-		primaryKey, err := getPrimaryKey(config.db, config.database, table)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get primary key for table %q: %w", table, err)
-		}
-
-		tableKeys[tableName(table)] = primaryKey
-	}
-
-	return tableKeys, nil
+	return nil
 }
 
 func newSnapshotIterator(
 	ctx context.Context,
 	config snapshotIteratorConfig,
 ) (Iterator, error) {
-	tableKeys, err := config.init()
-	if err != nil {
+	if err := config.init(); err != nil {
 		return nil, fmt.Errorf("invalid snapshot iterator config: %w", err)
 	}
 
@@ -132,7 +115,7 @@ func newSnapshotIterator(
 		lastPosition: lastPosition,
 	}
 
-	for table, primaryKey := range tableKeys {
+	for table, primaryKey := range config.tableKeys {
 		worker := newFetchWorker(iterator.db, iterator.data, fetchWorkerConfig{
 			lastPosition: iterator.lastPosition,
 			table:        table,
@@ -221,4 +204,19 @@ func getPrimaryKey(db *sqlx.DB, database, table string) (primaryKeyName, error) 
 	}
 
 	return primaryKey.ColumnName, nil
+}
+
+func getTableKeys(db *sqlx.DB, database string, tables []string) (tableKeys, error) {
+	tableKeys := make(tableKeys)
+
+	for _, table := range tables {
+		primaryKey, err := getPrimaryKey(db, database, table)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get primary key for table %q: %w", table, err)
+		}
+
+		tableKeys[tableName(table)] = primaryKey
+	}
+
+	return tableKeys, nil
 }

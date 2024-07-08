@@ -31,3 +31,9 @@ type Iterator interface {
 	// Teardown attempts to gracefully teardown the iterator.
 	Teardown(context.Context) error
 }
+
+type (
+	primaryKeyName string
+	tableName      string
+	tableKeys      map[tableName]primaryKeyName
+)

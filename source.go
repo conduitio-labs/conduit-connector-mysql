@@ -67,10 +67,16 @@ func (s *Source) Open(ctx context.Context, _ sdk.Position) (err error) {
 		return fmt.Errorf("failed to connect to mysql: %w", err)
 	}
 
+	tableKeys, err := getTableKeys(s.db, s.config.Database, s.config.Tables)
+	if err != nil {
+		return fmt.Errorf("failed to get table keys: %w", err)
+	}
+
 	s.iterator, err = newSnapshotIterator(ctx, snapshotIteratorConfig{
-		db:       s.db,
-		database: s.config.Database,
-		tables:   s.config.Tables,
+		db:        s.db,
+		tableKeys: tableKeys,
+		database:  s.config.Database,
+		tables:    s.config.Tables,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create snapshot iterator: %w", err)

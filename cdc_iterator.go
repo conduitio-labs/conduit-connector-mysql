@@ -29,18 +29,20 @@ import (
 )
 
 type cdcIterator struct {
-	canal     *canal.Canal
-	acks      *csync.WaitGroup
-	data      chan *canal.RowsEvent
-	tableKeys tableKeys
+	canal *canal.Canal
+	acks  *csync.WaitGroup
+	data  chan *canal.RowsEvent
 
 	// canalTomb is a tomb that simplifies handling canal run errors
 	canalTomb *tomb.Tomb
+
+	config cdcIteratorConfig
 }
 
 type cdcIteratorConfig struct {
 	SourceConfig
-	position sdk.Position
+	position  sdk.Position
+	tableKeys tableKeys
 }
 
 func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (Iterator, error) {
@@ -51,30 +53,12 @@ func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (Iterator, er
 
 	sdk.Logger(ctx).Info().Msg("created canal")
 
-	db, err := newSqlxDB(config.Config)
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to mysql: %w", err)
-	}
-
-	sdk.Logger(ctx).Info().Msg("connected to mysql")
-
 	iterator := &cdcIterator{
 		canal:     c,
 		acks:      &csync.WaitGroup{},
 		data:      make(chan *canal.RowsEvent),
-		tableKeys: map[tableName]primaryKeyName{},
 		canalTomb: &tomb.Tomb{},
-	}
-
-	iterator.tableKeys = make(tableKeys)
-
-	for _, table := range config.Tables {
-		primaryKey, err := getPrimaryKey(db, config.Database, table)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get primary key for table %q: %w", table, err)
-		}
-
-		iterator.tableKeys[tableName(table)] = primaryKey
+		config:    config,
 	}
 
 	sdk.Logger(ctx).Info().Msg("got table keys")
@@ -206,7 +190,7 @@ func (c *cdcIterator) buildRecord(e *canal.RowsEvent) (sdk.Record, error) {
 		payload := buildPayload(e.Table.Columns, e.Rows[0])
 
 		table := tableName(e.Table.Name)
-		primaryKey := c.tableKeys[table]
+		primaryKey := c.config.tableKeys[table]
 
 		key, err := buildRecordKey(primaryKey, table, e.Action, payload)
 		if err != nil {
@@ -220,7 +204,7 @@ func (c *cdcIterator) buildRecord(e *canal.RowsEvent) (sdk.Record, error) {
 		payload := buildPayload(e.Table.Columns, e.Rows[0])
 
 		table := tableName(e.Table.Name)
-		primaryKey := c.tableKeys[table]
+		primaryKey := c.config.tableKeys[table]
 
 		key, err := buildRecordKey(primaryKey, table, e.Action, payload)
 		if err != nil {
@@ -234,7 +218,7 @@ func (c *cdcIterator) buildRecord(e *canal.RowsEvent) (sdk.Record, error) {
 		after := buildPayload(e.Table.Columns, e.Rows[1])
 
 		table := tableName(e.Table.Name)
-		primaryKey := c.tableKeys[table]
+		primaryKey := c.config.tableKeys[table]
 
 		key, err := buildRecordKey(primaryKey, table, e.Action, before)
 		if err != nil {

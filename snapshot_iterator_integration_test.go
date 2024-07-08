@@ -15,6 +15,7 @@
 package mysql
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -25,6 +26,42 @@ import (
 
 var testTables testutils.TestTables
 
+func testTableKeys() tableKeys {
+	tableKeys := make(tableKeys)
+	for key, val := range testTables.TableKeys() {
+		tableKeys[tableName(key)] = primaryKeyName(val)
+	}
+	return tableKeys
+}
+
+func testSnapshotIterator(ctx context.Context, is *is.I) (Iterator, func()) {
+	iterator, err := newSnapshotIterator(ctx, snapshotIteratorConfig{
+		tableKeys: testTableKeys(),
+		db:        testutils.TestConnection(is),
+		database:  "meroxadb",
+		tables:    testTables.Tables(),
+	})
+	is.NoErr(err)
+
+	return iterator, func() { is.NoErr(iterator.Teardown(ctx)) }
+}
+
+func testSnapshotIteratorAtPosition(
+	ctx context.Context, is *is.I,
+	position snapshotPosition,
+) (Iterator, func()) {
+	iterator, err := newSnapshotIterator(ctx, snapshotIteratorConfig{
+		tableKeys:     testTableKeys(),
+		db:            testutils.TestConnection(is),
+		startPosition: position,
+		database:      "meroxadb",
+		tables:        testTables.Tables(),
+	})
+	is.NoErr(err)
+
+	return iterator, func() { is.NoErr(iterator.Teardown(ctx)) }
+}
+
 func TestSnapshotIterator_EmptyTable(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
@@ -34,15 +71,10 @@ func TestSnapshotIterator_EmptyTable(t *testing.T) {
 	testTables.Drop(is, db)
 	testTables.Create(is, db)
 
-	it, err := newSnapshotIterator(ctx, snapshotIteratorConfig{
-		db:       db,
-		database: "meroxadb",
-		tables:   testTables.Tables(),
-	})
-	is.NoErr(err)
-	defer func() { is.NoErr(it.Teardown(ctx)) }()
+	it, cleanup := testSnapshotIterator(ctx, is)
+	defer cleanup()
 
-	_, err = it.Next(ctx)
+	_, err := it.Next(ctx)
 	if errors.Is(err, ErrSnapshotIteratorDone) {
 		return
 	}
@@ -60,13 +92,8 @@ func TestSnapshotIterator_MultipleTables(t *testing.T) {
 	testTables.Create(is, db)
 	testTables.InsertData(is, db)
 
-	it, err := newSnapshotIterator(ctx, snapshotIteratorConfig{
-		db:       db,
-		database: "meroxadb",
-		tables:   testTables.Tables(),
-	})
-	is.NoErr(err)
-	defer func() { is.NoErr(it.Teardown(ctx)) }()
+	it, cleanup := testSnapshotIterator(ctx, is)
+	defer cleanup()
 
 	var recs []sdk.Record
 
@@ -99,13 +126,8 @@ func TestSnapshotIterator_SmallFetchSize(t *testing.T) {
 	testTables.Create(is, db)
 	testTables.InsertData(is, db)
 
-	it, err := newSnapshotIterator(ctx, snapshotIteratorConfig{
-		db:       db,
-		database: "meroxadb",
-		tables:   testTables.Tables(),
-	})
-	is.NoErr(err)
-	defer func() { is.NoErr(it.Teardown(ctx)) }()
+	it, cleanup := testSnapshotIterator(ctx, is)
+	defer cleanup()
 
 	var recs []sdk.Record
 
@@ -142,13 +164,8 @@ func TestSnapshotIterator_RestartOnPosition(t *testing.T) {
 
 	var breakPosition snapshotPosition
 	{
-		it, err := newSnapshotIterator(ctx, snapshotIteratorConfig{
-			db:       db,
-			database: "meroxadb",
-			tables:   testTables.Tables(),
-		})
-		is.NoErr(err)
-		defer func() { is.NoErr(it.Teardown(ctx)) }()
+		it, cleanup := testSnapshotIterator(ctx, is)
+		defer cleanup()
 
 		var recs []sdk.Record
 		for i := 0; i < 10; i++ {
@@ -174,13 +191,8 @@ func TestSnapshotIterator_RestartOnPosition(t *testing.T) {
 
 	// read the remaining 90 records
 
-	it, err := newSnapshotIterator(ctx, snapshotIteratorConfig{
-		db:            db,
-		startPosition: breakPosition,
-		database:      "meroxadb",
-		tables:        testTables.Tables(),
-	})
-	is.NoErr(err)
+	it, cleanup := testSnapshotIteratorAtPosition(ctx, is, breakPosition)
+	defer cleanup()
 
 	var recs []sdk.Record
 	for {

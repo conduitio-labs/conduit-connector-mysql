@@ -37,6 +37,7 @@ func testCdcIterator(ctx context.Context, is *is.I) (Iterator, func()) {
 			},
 			Tables: []string{"users"},
 		},
+		tableKeys: testTableKeys(),
 	})
 	is.NoErr(err)
 
@@ -58,7 +59,8 @@ func testCdcIteratorAtPosition(
 			},
 			Tables: []string{"users"},
 		},
-		position: position,
+		tableKeys: testTableKeys(),
+		position:  position,
 	})
 	is.NoErr(err)
 

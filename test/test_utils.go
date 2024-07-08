@@ -46,6 +46,13 @@ func (TestTables) Tables() []string {
 	return []string{"users", "orders"}
 }
 
+func (TestTables) TableKeys() map[string]string {
+	return map[string]string{
+		"users":  "id",
+		"orders": "id",
+	}
+}
+
 func (TestTables) Drop(is *is.I, db *sqlx.DB) {
 	dropOrdersTableQuery := `DROP TABLE IF EXISTS orders`
 	_, err := db.Exec(dropOrdersTableQuery)

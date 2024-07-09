@@ -70,6 +70,12 @@ type User struct {
 	CreatedAt *time.Time `db:"created_at"`
 }
 
+// WithName makes updating the username easier
+func (u User) WithName(name string) User {
+	u.Username = name
+	return u
+}
+
 func (u User) ToStructuredData() sdk.StructuredData {
 	return sdk.StructuredData{
 		"id":         u.ID,

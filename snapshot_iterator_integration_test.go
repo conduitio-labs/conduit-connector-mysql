@@ -17,6 +17,7 @@ package mysql
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	testutils "github.com/conduitio-labs/conduit-connector-mysql/test"
@@ -24,11 +25,11 @@ import (
 	"github.com/matryer/is"
 )
 
-var testTables testutils.TestTables
+var userTable testutils.UsersTable
 
 func testTableKeys() tableKeys {
 	tableKeys := make(tableKeys)
-	for key, val := range testTables.TableKeys() {
+	for key, val := range testutils.TableKeys {
 		tableKeys[tableName(key)] = primaryKeyName(val)
 	}
 	return tableKeys
@@ -37,9 +38,9 @@ func testTableKeys() tableKeys {
 func testSnapshotIterator(ctx context.Context, is *is.I) (Iterator, func()) {
 	iterator, err := newSnapshotIterator(ctx, snapshotIteratorConfig{
 		tableKeys: testTableKeys(),
-		db:        testutils.TestConnection(is),
+		db:        testutils.Connection(is),
 		database:  "meroxadb",
-		tables:    testTables.Tables(),
+		tables:    []string{"users"},
 	})
 	is.NoErr(err)
 
@@ -52,10 +53,10 @@ func testSnapshotIteratorAtPosition(
 ) (Iterator, func()) {
 	iterator, err := newSnapshotIterator(ctx, snapshotIteratorConfig{
 		tableKeys:     testTableKeys(),
-		db:            testutils.TestConnection(is),
+		db:            testutils.Connection(is),
 		startPosition: position,
 		database:      "meroxadb",
-		tables:        testTables.Tables(),
+		tables:        []string{"users"},
 	})
 	is.NoErr(err)
 
@@ -66,10 +67,9 @@ func TestSnapshotIterator_EmptyTable(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 
-	db := testutils.TestConnection(is)
+	db := testutils.Connection(is)
 
-	testTables.Drop(is, db)
-	testTables.Create(is, db)
+	userTable.Recreate(is, db)
 
 	it, cleanup := testSnapshotIterator(ctx, is)
 	defer cleanup()
@@ -81,16 +81,20 @@ func TestSnapshotIterator_EmptyTable(t *testing.T) {
 	is.NoErr(err)
 }
 
-func TestSnapshotIterator_MultipleTables(t *testing.T) {
+func TestSnapshotIterator_WithData(t *testing.T) {
 	ctx := testutils.TestContext(t)
 
 	is := is.New(t)
 
-	db := testutils.TestConnection(is)
+	db := testutils.Connection(is)
 
-	testTables.Drop(is, db)
-	testTables.Create(is, db)
-	testTables.InsertData(is, db)
+	userTable.Recreate(is, db)
+
+	var users []testutils.User
+	for i := 0; i < 100; i++ {
+		user := userTable.Insert(is, db, fmt.Sprintf("user-%v", i))
+		users = append(users, user)
+	}
 
 	it, cleanup := testSnapshotIterator(ctx, is)
 	defer cleanup()
@@ -120,11 +124,15 @@ func TestSnapshotIterator_SmallFetchSize(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 
-	db := testutils.TestConnection(is)
+	db := testutils.Connection(is)
 
-	testTables.Drop(is, db)
-	testTables.Create(is, db)
-	testTables.InsertData(is, db)
+	userTable.Recreate(is, db)
+
+	var users []testutils.User
+	for i := 0; i < 100; i++ {
+		user := userTable.Insert(is, db, fmt.Sprintf("user-%v", i))
+		users = append(users, user)
+	}
 
 	it, cleanup := testSnapshotIterator(ctx, is)
 	defer cleanup()
@@ -154,11 +162,14 @@ func TestSnapshotIterator_RestartOnPosition(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 
-	db := testutils.TestConnection(is)
+	db := testutils.Connection(is)
 
-	testTables.Drop(is, db)
-	testTables.Create(is, db)
-	testTables.InsertData(is, db)
+	userTable.Recreate(is, db)
+	var users []testutils.User
+	for i := 0; i < 100; i++ {
+		user := userTable.Insert(is, db, fmt.Sprintf("user-%v", i))
+		users = append(users, user)
+	}
 
 	// Read the first 10 records
 
@@ -212,4 +223,19 @@ func TestSnapshotIterator_RestartOnPosition(t *testing.T) {
 	for _, rec := range recs {
 		is.Equal(rec.Operation, sdk.OperationSnapshot)
 	}
+}
+
+func assertUserSnapshot(is *is.I, user testutils.User, rec sdk.Record) {
+	is.Equal(rec.Operation, sdk.OperationSnapshot)
+
+	col, err := rec.Metadata.GetCollection()
+	is.NoErr(err)
+	is.Equal(col, "users")
+
+	isDataEqual(is, rec.Key, sdk.StructuredData{
+		"id":    user.ID,
+		"table": tableName("users"),
+	})
+
+	isDataEqual(is, rec.Payload.After, user.ToStructuredData())
 }

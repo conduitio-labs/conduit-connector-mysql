@@ -26,7 +26,7 @@ import (
 	"github.com/rs/zerolog"
 )
 
-func TestConnection(is *is.I) *sqlx.DB {
+func Connection(is *is.I) *sqlx.DB {
 	db, err := sqlx.Open("mysql", "root:meroxaadmin@tcp(127.0.0.1:3306)/meroxadb?parseTime=true")
 	is.NoErr(err)
 
@@ -40,27 +40,8 @@ func TestContext(t *testing.T) context.Context {
 
 var totalRowsPerTabl = 50
 
-type TestTables struct{}
-
-func (TestTables) Tables() []string {
-	return []string{"users", "orders"}
-}
-
-func (TestTables) TableKeys() map[string]string {
-	return map[string]string{
-		"users":  "id",
-		"orders": "id",
-	}
-}
-
-func (TestTables) Drop(is *is.I, db *sqlx.DB) {
-	dropOrdersTableQuery := `DROP TABLE IF EXISTS orders`
-	_, err := db.Exec(dropOrdersTableQuery)
-	is.NoErr(err)
-
-	dropUsersTableQuery := `DROP TABLE IF EXISTS users`
-	_, err = db.Exec(dropUsersTableQuery)
-	is.NoErr(err)
+var TableKeys = map[string]string{
+	"users": "id",
 }
 
 type User struct {
@@ -70,9 +51,9 @@ type User struct {
 	CreatedAt *time.Time `db:"created_at"`
 }
 
-// WithName makes updating the username easier
-func (u User) WithName(name string) User {
-	u.Username = name
+func (u User) Update() User {
+	u.Username = fmt.Sprintf("%v-updated", u.Username)
+	u.Email = fmt.Sprintf("%v-updated@example.com", u.Email)
 	return u
 }
 
@@ -85,32 +66,23 @@ func (u User) ToStructuredData() sdk.StructuredData {
 	}
 }
 
-func (TestTables) Create(is *is.I, db *sqlx.DB) {
-	createUsersTableQuery := `
+type UsersTable struct{}
+
+func (UsersTable) Recreate(is *is.I, db *sqlx.DB) {
+	_, err := db.Exec(`DROP TABLE IF EXISTS users`)
+	is.NoErr(err)
+
+	_, err = db.Exec(`
 	CREATE TABLE users (
 		id INT AUTO_INCREMENT PRIMARY KEY,
 		username VARCHAR(255) NOT NULL,
 		email VARCHAR(255) NOT NULL,
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-	)`
-	_, err := db.Exec(createUsersTableQuery)
-	is.NoErr(err)
-
-	// Create orders table
-	createOrdersTableQuery := `
-	CREATE TABLE orders (
-		id INT AUTO_INCREMENT PRIMARY KEY,
-		user_id INT,
-		product VARCHAR(255) NOT NULL,
-		amount DECIMAL(10, 2) NOT NULL,
-		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-		FOREIGN KEY (user_id) REFERENCES users(id)
-	)`
-	_, err = db.Exec(createOrdersTableQuery)
+	)`)
 	is.NoErr(err)
 }
 
-func (TestTables) InsertUser(is *is.I, db *sqlx.DB, username string) User {
+func (UsersTable) Insert(is *is.I, db *sqlx.DB, username string) User {
 	_, err := db.Exec(`
 		INSERT INTO users (username, email) 
 		VALUES (?, ?);
@@ -128,37 +100,21 @@ func (TestTables) InsertUser(is *is.I, db *sqlx.DB, username string) User {
 	return user
 }
 
-func (TestTables) DeleteUser(is *is.I, db *sqlx.DB, id int32) {
-	_, err := db.Exec(`
-		DELETE FROM users
-		WHERE id = ?;
-	`, id)
-	is.NoErr(err)
-}
-
-func (TestTables) InsertData(is *is.I, db *sqlx.DB) {
-	for i := 1; i <= totalRowsPerTabl; i++ {
-		insertUsersRowQuery := fmt.Sprintf(`
-		INSERT INTO users (username, email) 
-		VALUES ('user%d', 'user%d@example.com')`, i, i)
-		_, err := db.Exec(insertUsersRowQuery)
-		is.NoErr(err)
-	}
-
-	for i := 1; i <= totalRowsPerTabl; i++ {
-		insertOrdersRowQuery := fmt.Sprintf(`
-		INSERT INTO orders (user_id, product, amount) 
-		VALUES (%d, 'product%d', %.2f)`, i, i, float64(i)*10.0)
-		_, err := db.Exec(insertOrdersRowQuery)
-		is.NoErr(err)
-	}
-}
-
-func (TestTables) UpdateUser(is *is.I, db *sqlx.DB, user User) {
+func (UsersTable) Update(is *is.I, db *sqlx.DB, user User) User {
 	_, err := db.Exec(`
 		UPDATE users
 		SET username = ?, email = ?
 		WHERE id = ?;
 	`, user.Username, user.Email, user.ID)
+	is.NoErr(err)
+
+	return user
+}
+
+func (UsersTable) Delete(is *is.I, db *sqlx.DB, user User) {
+	_, err := db.Exec(`
+		DELETE FROM users
+		WHERE id = ?;
+	`, user.ID)
 	is.NoErr(err)
 }

@@ -71,17 +71,16 @@ func TestCDCIterator_InsertAction(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 
-	db := testutils.TestConnection(is)
+	db := testutils.Connection(is)
 
-	testTables.Drop(is, db)
-	testTables.Create(is, db)
+	userTable.Recreate(is, db)
 
 	iterator, teardown := testCdcIterator(ctx, is)
 	defer teardown()
 
-	user1 := testTables.InsertUser(is, db, "user1")
-	user2 := testTables.InsertUser(is, db, "user2")
-	user3 := testTables.InsertUser(is, db, "user3")
+	user1 := userTable.Insert(is, db, "user1")
+	user2 := userTable.Insert(is, db, "user2")
+	user3 := userTable.Insert(is, db, "user3")
 
 	makeKey := func(id int32) sdk.Data {
 		return sdk.StructuredData{
@@ -133,21 +132,20 @@ func TestCDCIterator_DeleteAction(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 
-	db := testutils.TestConnection(is)
+	db := testutils.Connection(is)
 
-	testTables.Drop(is, db)
-	testTables.Create(is, db)
+	userTable.Recreate(is, db)
 
-	user1 := testTables.InsertUser(is, db, "user1")
-	user2 := testTables.InsertUser(is, db, "user2")
-	user3 := testTables.InsertUser(is, db, "user3")
+	user1 := userTable.Insert(is, db, "user1")
+	user2 := userTable.Insert(is, db, "user2")
+	user3 := userTable.Insert(is, db, "user3")
 
 	iterator, teardown := testCdcIterator(ctx, is)
 	defer teardown()
 
-	testTables.DeleteUser(is, db, user1.ID)
-	testTables.DeleteUser(is, db, user2.ID)
-	testTables.DeleteUser(is, db, user3.ID)
+	userTable.Delete(is, db, user1)
+	userTable.Delete(is, db, user2)
+	userTable.Delete(is, db, user3)
 
 	makeKey := func(id int32) sdk.Data {
 		return sdk.StructuredData{
@@ -184,41 +182,31 @@ func TestCDCIterator_UpdateAction(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 
-	db := testutils.TestConnection(is)
+	db := testutils.Connection(is)
 
-	testTables.Drop(is, db)
-	testTables.Create(is, db)
+	userTable.Recreate(is, db)
 
-	insertUser := func(username string) (testutils.User, testutils.User) {
-		user := testTables.InsertUser(is, db, username)
-		updated := user
-		updated.Username = username + "-updated"
-		updated.Email = username + "-updated@example.com"
-		return user, updated
-	}
-
-	user1, updateUser1 := insertUser("user1")
-	user2, updateUser2 := insertUser("user2")
-	user3, updateUser3 := insertUser("user3")
+	user1 := userTable.Insert(is, db, "user1")
+	user2 := userTable.Insert(is, db, "user2")
+	user3 := userTable.Insert(is, db, "user3")
 
 	iterator, teardown := testCdcIterator(ctx, is)
 	defer teardown()
 
-	{ // update users to trigger update action
-		testTables.UpdateUser(is, db, updateUser1)
-		testTables.UpdateUser(is, db, updateUser2)
-		testTables.UpdateUser(is, db, updateUser3)
-	}
+	user1Updated := userTable.Update(is, db, user1.Update())
+	user2Updated := userTable.Update(is, db, user2.Update())
+	user3Updated := userTable.Update(is, db, user3.Update())
 
 	testCases := []struct {
 		original, updated sdk.StructuredData
 	}{
-		{user1.ToStructuredData(), updateUser1.ToStructuredData()},
-		{user2.ToStructuredData(), updateUser2.ToStructuredData()},
-		{user3.ToStructuredData(), updateUser3.ToStructuredData()},
+		{user1.ToStructuredData(), user1Updated.ToStructuredData()},
+		{user2.ToStructuredData(), user2Updated.ToStructuredData()},
+		{user3.ToStructuredData(), user3Updated.ToStructuredData()},
 	}
 
 	for _, expected := range testCases {
+
 		rec, err := iterator.Next(ctx)
 		is.NoErr(err)
 		is.NoErr(iterator.Ack(ctx, rec.Position))
@@ -239,10 +227,9 @@ func TestCDCIterator_RestartOnPosition(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 
-	db := testutils.TestConnection(is)
+	db := testutils.Connection(is)
 
-	testTables.Drop(is, db)
-	testTables.Create(is, db)
+	userTable.Recreate(is, db)
 
 	// start the iterator at the beginning
 
@@ -250,10 +237,10 @@ func TestCDCIterator_RestartOnPosition(t *testing.T) {
 
 	// and trigger some insert actions
 
-	user1 := testTables.InsertUser(is, db, "user1")
-	user2 := testTables.InsertUser(is, db, "user2")
-	user3 := testTables.InsertUser(is, db, "user3")
-	user4 := testTables.InsertUser(is, db, "user4")
+	user1 := userTable.Insert(is, db, "user1")
+	user2 := userTable.Insert(is, db, "user2")
+	user3 := userTable.Insert(is, db, "user3")
+	user4 := userTable.Insert(is, db, "user4")
 
 	var latestPosition sdk.Position
 
@@ -280,7 +267,7 @@ func TestCDCIterator_RestartOnPosition(t *testing.T) {
 	iterator, teardown = testCdcIteratorAtPosition(ctx, is, latestPosition)
 	defer teardown()
 
-	user5 := testTables.InsertUser(is, db, "user5")
+	user5 := userTable.Insert(is, db, "user5")
 
 	rec3, err := iterator.Next(ctx)
 	is.NoErr(err)
@@ -312,21 +299,6 @@ func assertUserInsert(is *is.I, user testutils.User, rec sdk.Record) {
 		"id":     user.ID,
 		"table":  tableName("users"),
 		"action": "insert",
-	})
-
-	isDataEqual(is, rec.Payload.After, user.ToStructuredData())
-}
-
-func assertUserSnapshot(is *is.I, user testutils.User, rec sdk.Record) {
-	is.Equal(rec.Operation, sdk.OperationSnapshot)
-
-	col, err := rec.Metadata.GetCollection()
-	is.NoErr(err)
-	is.Equal(col, "users")
-
-	isDataEqual(is, rec.Key, sdk.StructuredData{
-		"id":    user.ID,
-		"table": tableName("users"),
 	})
 
 	isDataEqual(is, rec.Payload.After, user.ToStructuredData())

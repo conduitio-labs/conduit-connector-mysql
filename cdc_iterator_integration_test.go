@@ -262,13 +262,13 @@ func TestCDCIterator_RestartOnPosition(t *testing.T) {
 		is.NoErr(err)
 		is.NoErr(iterator.Ack(ctx, rec1.Position))
 
-		assertInsertedUser(is, user1, rec1)
+		assertUserInsert(is, user1, rec1)
 
 		rec2, err := iterator.Next(ctx)
 		is.NoErr(err)
 		is.NoErr(iterator.Ack(ctx, rec2.Position))
 
-		assertInsertedUser(is, user2, rec2)
+		assertUserInsert(is, user2, rec2)
 
 		teardown()
 
@@ -286,22 +286,22 @@ func TestCDCIterator_RestartOnPosition(t *testing.T) {
 	is.NoErr(err)
 	is.NoErr(iterator.Ack(ctx, rec3.Position))
 
-	assertInsertedUser(is, user3, rec3)
+	assertUserInsert(is, user3, rec3)
 
 	rec4, err := iterator.Next(ctx)
 	is.NoErr(err)
 	is.NoErr(iterator.Ack(ctx, rec3.Position))
 
-	assertInsertedUser(is, user4, rec4)
+	assertUserInsert(is, user4, rec4)
 
 	rec5, err := iterator.Next(ctx)
 	is.NoErr(err)
 	is.NoErr(iterator.Ack(ctx, rec3.Position))
 
-	assertInsertedUser(is, user5, rec5)
+	assertUserInsert(is, user5, rec5)
 }
 
-func assertInsertedUser(is *is.I, user testutils.User, rec sdk.Record) {
+func assertUserInsert(is *is.I, user testutils.User, rec sdk.Record) {
 	is.Equal(rec.Operation, sdk.OperationCreate)
 	is.Equal(rec.Metadata[keyAction], "insert")
 
@@ -312,6 +312,21 @@ func assertInsertedUser(is *is.I, user testutils.User, rec sdk.Record) {
 		"id":     user.ID,
 		"table":  tableName("users"),
 		"action": "insert",
+	})
+
+	isDataEqual(is, rec.Payload.After, user.ToStructuredData())
+}
+
+func assertUserSnapshot(is *is.I, user testutils.User, rec sdk.Record) {
+	is.Equal(rec.Operation, sdk.OperationSnapshot)
+
+	col, err := rec.Metadata.GetCollection()
+	is.NoErr(err)
+	is.Equal(col, "users")
+
+	isDataEqual(is, rec.Key, sdk.StructuredData{
+		"id":    user.ID,
+		"table": tableName("users"),
 	})
 
 	isDataEqual(is, rec.Payload.After, user.ToStructuredData())

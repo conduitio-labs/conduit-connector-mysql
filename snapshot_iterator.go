@@ -34,7 +34,7 @@ const defaultFetchSize = 50000
 type snapshotKey struct {
 	Table common.TableName      `json:"table"`
 	Key   common.PrimaryKeyName `json:"key"`
-	Value int                   `json:"value"`
+	Value any                   `json:"value"`
 }
 
 func (key snapshotKey) ToSDKData() sdk.Data {

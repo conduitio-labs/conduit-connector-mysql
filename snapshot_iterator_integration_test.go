@@ -138,12 +138,12 @@ func TestSnapshotIterator_RestartOnPosition(t *testing.T) {
 		users = append(users, user)
 	}
 
+	var recs []sdk.Record
 	var breakPosition snapshotPosition
 	{
 		it, cleanup := testSnapshotIterator(ctx, is)
 		defer cleanup()
 
-		var recs []sdk.Record
 		for i := 0; i < 10; i++ {
 			rec, err := it.Next(ctx)
 			if errors.Is(err, ErrSnapshotIteratorDone) {
@@ -170,7 +170,6 @@ func TestSnapshotIterator_RestartOnPosition(t *testing.T) {
 	it, cleanup := testSnapshotIteratorAtPosition(ctx, is, breakPosition)
 	defer cleanup()
 
-	var recs []sdk.Record
 	for {
 		rec, err := it.Next(ctx)
 		if errors.Is(err, ErrSnapshotIteratorDone) {
@@ -184,7 +183,7 @@ func TestSnapshotIterator_RestartOnPosition(t *testing.T) {
 		is.NoErr(err)
 	}
 
-	is.Equal(len(recs), 90)
+	is.Equal(len(recs), 100)
 	for i, rec := range recs {
 		assertUserSnapshot(is, users[i], rec)
 	}
@@ -221,7 +220,8 @@ func assertUserSnapshot(is *is.I, user testutils.User, rec sdk.Record) {
 	is.Equal(col, "users")
 
 	isDataEqual(is, rec.Key, sdk.StructuredData{
-		"id":    user.ID,
+		"key":   "id",
+		"value": user.ID,
 		"table": common.TableName("users"),
 	})
 

@@ -92,10 +92,12 @@ func TestSnapshotIterator_WithData(t *testing.T) {
 	iterator, cleanup := testSnapshotIterator(ctx, is)
 	defer cleanup()
 
-	var doStop bool
-	for i := 0; !doStop; i++ {
-		doStop = readAndAssertSnapshot(is, ctx, iterator, users[i])
+	for i := 0; i < 100; i++ {
+		readAndAssertSnapshot(ctx, is, iterator, users[i])
 	}
+
+	_, err := iterator.Next(ctx)
+	is.True(errors.Is(err, ErrSnapshotIteratorDone))
 }
 
 func TestSnapshotIterator_SmallFetchSize(t *testing.T) {
@@ -115,10 +117,12 @@ func TestSnapshotIterator_SmallFetchSize(t *testing.T) {
 	iterator, cleanup := testSnapshotIterator(ctx, is)
 	defer cleanup()
 
-	var doStop bool
-	for i := 0; !doStop; i++ {
-		doStop = readAndAssertSnapshot(is, ctx, iterator, users[i])
+	for i := 0; i < 100; i++ {
+		readAndAssertSnapshot(ctx, is, iterator, users[i])
 	}
+
+	_, err := iterator.Next(ctx)
+	is.True(errors.Is(err, ErrSnapshotIteratorDone))
 }
 
 func TestSnapshotIterator_RestartOnPosition(t *testing.T) {
@@ -186,11 +190,12 @@ func TestSnapshotIterator_RestartOnPosition(t *testing.T) {
 	}
 }
 
-func readAndAssertSnapshot(is *is.I, ctx context.Context, iterator Iterator, user testutils.User) (stopIteration bool) {
+func readAndAssertSnapshot(
+	ctx context.Context, is *is.I,
+	iterator Iterator, user testutils.User,
+) {
 	rec, err := iterator.Next(ctx)
-	if errors.Is(err, ErrSnapshotIteratorDone) {
-		return true
-	}
+	is.NoErr(err)
 	is.NoErr(iterator.Ack(ctx, rec.Position))
 
 	is.Equal(rec.Operation, sdk.OperationSnapshot)
@@ -200,13 +205,12 @@ func readAndAssertSnapshot(is *is.I, ctx context.Context, iterator Iterator, use
 	is.Equal(col, "users")
 
 	isDataEqual(is, rec.Key, sdk.StructuredData{
-		"id":    user.ID,
 		"table": common.TableName("users"),
+		"key":   "id",
+		"value": user.ID,
 	})
 
 	isDataEqual(is, rec.Payload.After, user.ToStructuredData())
-
-	return false
 }
 
 func assertUserSnapshot(is *is.I, user testutils.User, rec sdk.Record) {

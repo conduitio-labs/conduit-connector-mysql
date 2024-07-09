@@ -177,7 +177,8 @@ func (s *snapshotIterator) buildRecord(d fetchData) sdk.Record {
 
 	pos := s.lastPosition.toSDKPosition()
 	metadata := make(sdk.Metadata)
-	metadata["mysql.table"] = string(d.key.Table)
+	metadata.SetCollection(string(d.key.Table))
+
 	key := d.key.ToSDKData()
 
 	return sdk.Util.Source.NewRecordSnapshot(pos, metadata, key, d.payload)

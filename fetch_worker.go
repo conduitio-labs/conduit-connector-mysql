@@ -165,42 +165,18 @@ func (w *fetchWorker) buildFetchData(
 	payload sdk.StructuredData,
 	position tablePosition,
 ) (fetchData, error) {
-	keyValue, err := primaryKeyValueFromData(w.config.primaryKey, payload)
-	if err != nil {
-		return fetchData{}, fmt.Errorf("failed to get primary key from payload: %w", err)
+	keyVal, ok := payload[string(w.config.primaryKey)]
+	if !ok {
+		return fetchData{}, fmt.Errorf("key %s not found in payload", w.config.primaryKey)
 	}
 
 	return fetchData{
 		key: snapshotKey{
 			Table: w.config.table,
 			Key:   w.config.primaryKey,
-			Value: keyValue,
+			Value: keyVal,
 		},
 		payload:  payload,
 		position: position,
 	}, nil
-}
-
-func primaryKeyValueFromData(key common.PrimaryKeyName, data sdk.StructuredData) (int, error) {
-	val, ok := data[string(key)]
-	if !ok {
-		return 0, fmt.Errorf("key %s not found in payload", key)
-	}
-
-	switch val := val.(type) {
-	case int:
-		return val, nil
-	case int32:
-		return int(val), nil
-	case int64:
-		return int(val), nil
-	case uint:
-		return int(val), nil
-	case uint32:
-		return int(val), nil
-	case uint64:
-		return int(val), nil
-	default:
-		return 0, fmt.Errorf("key %s has unexpected type %T", key, val)
-	}
 }

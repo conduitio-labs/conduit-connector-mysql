@@ -15,17 +15,14 @@
 package mysql
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"reflect"
 	"testing"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	testutils "github.com/conduitio-labs/conduit-connector-mysql/test"
 	sdk "github.com/conduitio/conduit-connector-sdk"
-	"github.com/gookit/goutil/dump"
 	"github.com/matryer/is"
 )
 
@@ -256,38 +253,29 @@ func isDataEqual(is *is.I, a, b sdk.Data) {
 		is.Fail() // one of the data is nil
 	}
 
-	equal, err := JSONEqual(a.Bytes(), b.Bytes())
-	is.NoErr(err)
+	aS, aOK := a.(sdk.StructuredData)
+	bS, bOK := b.(sdk.StructuredData)
 
-	if !equal {
-		fmt.Println("data a:")
-		if a, ok := a.(sdk.StructuredData); ok {
-			dump.P(a)
-		} else {
-			fmt.Println(string(a.Bytes()))
+	if aOK && bOK {
+		for k, v := range aS {
+			is.Equal(v, bS[k])
 		}
-
-		fmt.Println("data b:")
-		if b, ok := b.(sdk.StructuredData); ok {
-			dump.P(b)
-		} else {
-			fmt.Println(string(a.Bytes()))
-		}
-
-		is.Fail() // different data
+	} else {
+		equal, err := JSONBytesEqual(a.Bytes(), b.Bytes())
+		is.NoErr(err)
+		is.True(equal)
 	}
 }
 
-// JSONEqual compares the JSON from two Readers.
-func JSONEqual(a, b []byte) (bool, error) {
+// JSONBytesEqual compares the JSON in two byte slices.
+func JSONBytesEqual(a, b []byte) (bool, error) {
 	var j, j2 interface{}
-	d := json.NewDecoder(bytes.NewBuffer(a))
-	if err := d.Decode(&j); err != nil {
+	if err := json.Unmarshal(a, &j); err != nil {
 		return false, err
 	}
-	d = json.NewDecoder(bytes.NewBuffer(b))
-	if err := d.Decode(&j2); err != nil {
+	if err := json.Unmarshal(b, &j2); err != nil {
 		return false, err
 	}
+
 	return reflect.DeepEqual(j2, j), nil
 }

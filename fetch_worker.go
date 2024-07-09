@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/jmoiron/sqlx"
 )
@@ -30,9 +31,9 @@ type fetchWorker struct {
 
 type fetchWorkerConfig struct {
 	lastPosition snapshotPosition
-	table        tableName
+	table        common.TableName
 	fetchSize    int
-	primaryKey   primaryKeyName
+	primaryKey   common.PrimaryKeyName
 }
 
 func newFetchWorker(db *sqlx.DB, data chan fetchData, config fetchWorkerConfig) *fetchWorker {
@@ -174,7 +175,7 @@ func (w *fetchWorker) buildFetchData(
 	}, nil
 }
 
-func primaryKeyValueFromData(key primaryKeyName, data sdk.StructuredData) (int, error) {
+func primaryKeyValueFromData(key common.PrimaryKeyName, data sdk.StructuredData) (int, error) {
 	val, ok := data[string(key)]
 	if !ok {
 		return 0, fmt.Errorf("key %s not found in payload", key)

@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	"github.com/conduitio/conduit-commons/csync"
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/go-mysql-org/go-mysql/canal"
@@ -42,7 +43,7 @@ type cdcIterator struct {
 type cdcIteratorConfig struct {
 	SourceConfig
 	position  sdk.Position
-	tableKeys tableKeys
+	TableKeys common.TableKeys
 }
 
 func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (Iterator, error) {
@@ -189,8 +190,8 @@ func (c *cdcIterator) buildRecord(e *canal.RowsEvent) (sdk.Record, error) {
 		position := cdcPosition{pos}.toSDKPosition()
 		payload := buildPayload(e.Table.Columns, e.Rows[0])
 
-		table := tableName(e.Table.Name)
-		primaryKey := c.config.tableKeys[table]
+		table := common.TableName(e.Table.Name)
+		primaryKey := c.config.TableKeys[table]
 
 		key, err := buildRecordKey(primaryKey, table, e.Action, payload)
 		if err != nil {
@@ -203,8 +204,8 @@ func (c *cdcIterator) buildRecord(e *canal.RowsEvent) (sdk.Record, error) {
 
 		payload := buildPayload(e.Table.Columns, e.Rows[0])
 
-		table := tableName(e.Table.Name)
-		primaryKey := c.config.tableKeys[table]
+		table := common.TableName(e.Table.Name)
+		primaryKey := c.config.TableKeys[table]
 
 		key, err := buildRecordKey(primaryKey, table, e.Action, payload)
 		if err != nil {
@@ -217,8 +218,8 @@ func (c *cdcIterator) buildRecord(e *canal.RowsEvent) (sdk.Record, error) {
 		before := buildPayload(e.Table.Columns, e.Rows[0])
 		after := buildPayload(e.Table.Columns, e.Rows[1])
 
-		table := tableName(e.Table.Name)
-		primaryKey := c.config.tableKeys[table]
+		table := common.TableName(e.Table.Name)
+		primaryKey := c.config.TableKeys[table]
 
 		key, err := buildRecordKey(primaryKey, table, e.Action, before)
 		if err != nil {
@@ -232,7 +233,7 @@ func (c *cdcIterator) buildRecord(e *canal.RowsEvent) (sdk.Record, error) {
 }
 
 func buildRecordKey(
-	primaryKey primaryKeyName, table tableName,
+	primaryKey common.PrimaryKeyName, table common.TableName,
 	action string, payload sdk.StructuredData,
 ) (sdk.Data, error) {
 	val, ok := payload[string(primaryKey)]

@@ -37,7 +37,7 @@ func testCdcIterator(ctx context.Context, is *is.I) (Iterator, func()) {
 			},
 			Tables: []string{"users"},
 		},
-		tableKeys: testTableKeys(),
+		TableKeys: testutils.TableKeys,
 	})
 	is.NoErr(err)
 
@@ -59,7 +59,7 @@ func testCdcIteratorAtPosition(
 			},
 			Tables: []string{"users"},
 		},
-		tableKeys: testTableKeys(),
+		TableKeys: testutils.TableKeys,
 		position:  position,
 	})
 	is.NoErr(err)
@@ -85,7 +85,7 @@ func TestCDCIterator_InsertAction(t *testing.T) {
 	makeKey := func(id int32) sdk.Data {
 		return sdk.StructuredData{
 			"id":     id,
-			"table":  tableName("users"),
+			"table":  common.TableName("users"),
 			"action": "insert",
 		}
 	}
@@ -150,7 +150,7 @@ func TestCDCIterator_DeleteAction(t *testing.T) {
 	makeKey := func(id int32) sdk.Data {
 		return sdk.StructuredData{
 			"id":     id,
-			"table":  tableName("users"),
+			"table":  common.TableName("users"),
 			"action": "delete",
 		}
 	}
@@ -297,7 +297,7 @@ func assertUserInsert(is *is.I, user testutils.User, rec sdk.Record) {
 	is.Equal(col, "users")
 	isDataEqual(is, rec.Key, sdk.StructuredData{
 		"id":     user.ID,
-		"table":  tableName("users"),
+		"table":  common.TableName("users"),
 		"action": "insert",
 	})
 

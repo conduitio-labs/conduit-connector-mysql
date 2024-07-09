@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/go-mysql-org/go-mysql/mysql"
 )
@@ -53,7 +54,7 @@ func (p snapshotPosition) toSDKPosition() sdk.Position {
 
 func (p snapshotPosition) Clone() snapshotPosition {
 	var newPosition snapshotPosition
-	newPosition.Snapshots = make(map[tableName]tablePosition)
+	newPosition.Snapshots = make(map[common.TableName]tablePosition)
 	for k, v := range p.Snapshots {
 		newPosition.Snapshots[k] = v
 	}
@@ -68,7 +69,7 @@ func parseSDKPosition(p sdk.Position) (position, error) {
 	return pos, nil
 }
 
-type snapshotPositions map[tableName]tablePosition
+type snapshotPositions map[common.TableName]tablePosition
 
 type tablePosition struct {
 	LastRead    int `json:"last_read"`

@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	"github.com/conduitio/conduit-commons/csync"
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/jmoiron/sqlx"
@@ -31,9 +32,9 @@ var ErrSnapshotIteratorDone = errors.New("snapshot complete")
 const defaultFetchSize = 50000
 
 type snapshotKey struct {
-	Table tableName      `json:"table"`
-	Key   primaryKeyName `json:"key"`
-	Value int            `json:"value"`
+	Table common.TableName      `json:"table"`
+	Key   common.PrimaryKeyName `json:"key"`
+	Value int                   `json:"value"`
 }
 
 func (key snapshotKey) ToSDKData() sdk.Data {
@@ -67,7 +68,7 @@ type (
 	}
 	snapshotIteratorConfig struct {
 		db            *sqlx.DB
-		tableKeys     tableKeys
+		tableKeys     common.TableKeys
 		fetchSize     int
 		startPosition snapshotPosition
 		database      string
@@ -77,7 +78,7 @@ type (
 
 func (config *snapshotIteratorConfig) init() error {
 	if config.startPosition.Snapshots == nil {
-		config.startPosition.Snapshots = make(map[tableName]tablePosition)
+		config.startPosition.Snapshots = make(map[common.TableName]tablePosition)
 	}
 
 	if config.fetchSize == 0 {
@@ -182,9 +183,9 @@ func (s *snapshotIterator) buildRecord(d fetchData) sdk.Record {
 	return sdk.Util.Source.NewRecordSnapshot(pos, metadata, key, d.payload)
 }
 
-func getPrimaryKey(db *sqlx.DB, database, table string) (primaryKeyName, error) {
+func getPrimaryKey(db *sqlx.DB, database, table string) (common.PrimaryKeyName, error) {
 	var primaryKey struct {
-		ColumnName primaryKeyName `db:"COLUMN_NAME"`
+		ColumnName common.PrimaryKeyName `db:"COLUMN_NAME"`
 	}
 
 	row := db.QueryRowx(`
@@ -206,8 +207,8 @@ func getPrimaryKey(db *sqlx.DB, database, table string) (primaryKeyName, error) 
 	return primaryKey.ColumnName, nil
 }
 
-func getTableKeys(db *sqlx.DB, database string, tables []string) (tableKeys, error) {
-	tableKeys := make(tableKeys)
+func getTableKeys(db *sqlx.DB, database string, tables []string) (common.TableKeys, error) {
+	tableKeys := make(common.TableKeys)
 
 	for _, table := range tables {
 		primaryKey, err := getPrimaryKey(db, database, table)
@@ -215,7 +216,7 @@ func getTableKeys(db *sqlx.DB, database string, tables []string) (tableKeys, err
 			return nil, fmt.Errorf("failed to get primary key for table %q: %w", table, err)
 		}
 
-		tableKeys[tableName(table)] = primaryKey
+		tableKeys[common.TableName(table)] = primaryKey
 	}
 
 	return tableKeys, nil

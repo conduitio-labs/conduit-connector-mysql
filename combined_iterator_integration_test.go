@@ -13,7 +13,7 @@ import (
 func testCombinedIterator(ctx context.Context, is *is.I) (Iterator, func()) {
 	iterator, err := newCombinedIterator(ctx, combinedIteratorConfig{
 		snapshotConfig: snapshotIteratorConfig{
-			tableKeys: testTableKeys(),
+			tableKeys: testutils.TableKeys,
 			db:        testutils.Connection(is),
 			database:  "meroxadb",
 			tables:    []string{"users"},
@@ -29,7 +29,7 @@ func testCombinedIterator(ctx context.Context, is *is.I) (Iterator, func()) {
 				},
 				Tables: []string{"users"},
 			},
-			tableKeys: testTableKeys(),
+			TableKeys: testutils.TableKeys,
 		},
 	})
 	is.NoErr(err)
@@ -61,6 +61,7 @@ func TestCombinedIterator(t *testing.T) {
 		is.NoErr(iterator.Ack(ctx, rec.Position))
 
 		is.Equal(rec.Operation, sdk.OperationSnapshot)
+
 	}
 
 	for range [][]testutils.User{

@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	testutils "github.com/conduitio-labs/conduit-connector-mysql/test"
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/matryer/is"
@@ -27,17 +28,9 @@ import (
 
 var userTable testutils.UsersTable
 
-func testTableKeys() tableKeys {
-	tableKeys := make(tableKeys)
-	for key, val := range testutils.TableKeys {
-		tableKeys[tableName(key)] = primaryKeyName(val)
-	}
-	return tableKeys
-}
-
 func testSnapshotIterator(ctx context.Context, is *is.I) (Iterator, func()) {
 	iterator, err := newSnapshotIterator(ctx, snapshotIteratorConfig{
-		tableKeys: testTableKeys(),
+		tableKeys: testutils.TableKeys,
 		db:        testutils.Connection(is),
 		database:  "meroxadb",
 		tables:    []string{"users"},
@@ -52,7 +45,7 @@ func testSnapshotIteratorAtPosition(
 	position snapshotPosition,
 ) (Iterator, func()) {
 	iterator, err := newSnapshotIterator(ctx, snapshotIteratorConfig{
-		tableKeys:     testTableKeys(),
+		tableKeys:     testutils.TableKeys,
 		db:            testutils.Connection(is),
 		startPosition: position,
 		database:      "meroxadb",
@@ -96,27 +89,12 @@ func TestSnapshotIterator_WithData(t *testing.T) {
 		users = append(users, user)
 	}
 
-	it, cleanup := testSnapshotIterator(ctx, is)
+	iterator, cleanup := testSnapshotIterator(ctx, is)
 	defer cleanup()
 
-	var recs []sdk.Record
-
-	for {
-		rec, err := it.Next(ctx)
-		if errors.Is(err, ErrSnapshotIteratorDone) {
-			break
-		}
-		is.NoErr(err)
-
-		recs = append(recs, rec)
-
-		err = it.Ack(ctx, rec.Position)
-		is.NoErr(err)
-	}
-
-	is.Equal(len(recs), 100) // received a different amount of records
-	for _, rec := range recs {
-		is.Equal(rec.Operation, sdk.OperationSnapshot)
+	var doStop bool
+	for i := 0; !doStop; i++ {
+		doStop = readAndAssertSnapshot(is, ctx, iterator, users[i])
 	}
 }
 
@@ -134,27 +112,12 @@ func TestSnapshotIterator_SmallFetchSize(t *testing.T) {
 		users = append(users, user)
 	}
 
-	it, cleanup := testSnapshotIterator(ctx, is)
+	iterator, cleanup := testSnapshotIterator(ctx, is)
 	defer cleanup()
 
-	var recs []sdk.Record
-
-	for {
-		rec, err := it.Next(ctx)
-		if errors.Is(err, ErrSnapshotIteratorDone) {
-			break
-		}
-		is.NoErr(err)
-
-		recs = append(recs, rec)
-
-		err = it.Ack(ctx, rec.Position)
-		is.NoErr(err)
-	}
-
-	is.Equal(len(recs), 100) // received a different amount of records
-	for _, rec := range recs {
-		is.Equal(rec.Operation, sdk.OperationSnapshot)
+	var doStop bool
+	for i := 0; !doStop; i++ {
+		doStop = readAndAssertSnapshot(is, ctx, iterator, users[i])
 	}
 }
 
@@ -170,8 +133,6 @@ func TestSnapshotIterator_RestartOnPosition(t *testing.T) {
 		user := userTable.Insert(is, db, fmt.Sprintf("user-%v", i))
 		users = append(users, user)
 	}
-
-	// Read the first 10 records
 
 	var breakPosition snapshotPosition
 	{
@@ -220,9 +181,32 @@ func TestSnapshotIterator_RestartOnPosition(t *testing.T) {
 	}
 
 	is.Equal(len(recs), 90)
-	for _, rec := range recs {
-		is.Equal(rec.Operation, sdk.OperationSnapshot)
+	for i, rec := range recs {
+		assertUserSnapshot(is, users[i], rec)
 	}
+}
+
+func readAndAssertSnapshot(is *is.I, ctx context.Context, iterator Iterator, user testutils.User) (stopIteration bool) {
+	rec, err := iterator.Next(ctx)
+	if errors.Is(err, ErrSnapshotIteratorDone) {
+		return true
+	}
+	is.NoErr(iterator.Ack(ctx, rec.Position))
+
+	is.Equal(rec.Operation, sdk.OperationSnapshot)
+
+	col, err := rec.Metadata.GetCollection()
+	is.NoErr(err)
+	is.Equal(col, "users")
+
+	isDataEqual(is, rec.Key, sdk.StructuredData{
+		"id":    user.ID,
+		"table": common.TableName("users"),
+	})
+
+	isDataEqual(is, rec.Payload.After, user.ToStructuredData())
+
+	return false
 }
 
 func assertUserSnapshot(is *is.I, user testutils.User, rec sdk.Record) {
@@ -234,7 +218,7 @@ func assertUserSnapshot(is *is.I, user testutils.User, rec sdk.Record) {
 
 	isDataEqual(is, rec.Key, sdk.StructuredData{
 		"id":    user.ID,
-		"table": tableName("users"),
+		"table": common.TableName("users"),
 	})
 
 	isDataEqual(is, rec.Payload.After, user.ToStructuredData())

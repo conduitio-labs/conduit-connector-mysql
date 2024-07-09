@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/jmoiron/sqlx"
 	"github.com/matryer/is"
@@ -40,7 +41,7 @@ func TestContext(t *testing.T) context.Context {
 
 var totalRowsPerTabl = 50
 
-var TableKeys = map[string]string{
+var TableKeys = map[common.TableName]common.PrimaryKeyName{
 	"users": "id",
 }
 

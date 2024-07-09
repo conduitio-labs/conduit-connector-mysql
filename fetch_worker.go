@@ -145,6 +145,12 @@ func (w *fetchWorker) selectRowsChunk(
 			return nil, fmt.Errorf("failed to scan row: %w", err)
 		}
 
+		for key, val := range row {
+			if val, ok := val.([]uint8); ok {
+				row[key] = string(val)
+			}
+		}
+
 		scannedRows = append(scannedRows, row)
 	}
 	if err := rows.Err(); err != nil {

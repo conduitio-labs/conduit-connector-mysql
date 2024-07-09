@@ -15,13 +15,17 @@
 package mysql
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"reflect"
 	"testing"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	testutils "github.com/conduitio-labs/conduit-connector-mysql/test"
 	sdk "github.com/conduitio/conduit-connector-sdk"
+	"github.com/gookit/goutil/dump"
 	"github.com/matryer/is"
 )
 
@@ -82,50 +86,9 @@ func TestCDCIterator_InsertAction(t *testing.T) {
 	user2 := userTable.Insert(is, db, "user2")
 	user3 := userTable.Insert(is, db, "user3")
 
-	makeKey := func(id int32) sdk.Data {
-		return sdk.StructuredData{
-			"id":     id,
-			"table":  common.TableName("users"),
-			"action": "insert",
-		}
-	}
-
-	makePayload := func(id int32) sdk.Change {
-		return sdk.Change{
-			Before: nil,
-			After: sdk.StructuredData{
-				"id":       id,
-				"username": fmt.Sprintf("user%d", id),
-				"email":    fmt.Sprintf("user%d@example.com", id),
-			},
-		}
-	}
-
-	testCases := []struct {
-		key     sdk.Data
-		payload sdk.Change
-		user    testutils.User
-	}{
-		{makeKey(1), makePayload(1), user1},
-		{makeKey(2), makePayload(2), user2},
-		{makeKey(3), makePayload(3), user3},
-	}
-
-	for _, expected := range testCases {
-		rec, err := iterator.Next(ctx)
-		is.NoErr(err)
-		is.NoErr(iterator.Ack(ctx, rec.Position))
-
-		is.Equal(rec.Operation, sdk.OperationCreate)
-		is.Equal(rec.Metadata[keyAction], "insert")
-
-		col, err := rec.Metadata.GetCollection()
-		is.NoErr(err)
-		is.Equal(col, "users")
-		isDataEqual(is, rec.Key, expected.key)
-
-		isDataEqual(is, rec.Payload.After, expected.user.ToStructuredData())
-	}
+	readAndAssertInsert(ctx, is, iterator, user1)
+	readAndAssertInsert(ctx, is, iterator, user2)
+	readAndAssertInsert(ctx, is, iterator, user3)
 }
 
 func TestCDCIterator_DeleteAction(t *testing.T) {
@@ -147,35 +110,9 @@ func TestCDCIterator_DeleteAction(t *testing.T) {
 	userTable.Delete(is, db, user2)
 	userTable.Delete(is, db, user3)
 
-	makeKey := func(id int32) sdk.Data {
-		return sdk.StructuredData{
-			"id":     id,
-			"table":  common.TableName("users"),
-			"action": "delete",
-		}
-	}
-
-	testCases := []struct {
-		key sdk.Data
-	}{
-		{makeKey(1)},
-		{makeKey(2)},
-		{makeKey(3)},
-	}
-
-	for _, expected := range testCases {
-		rec, err := iterator.Next(ctx)
-		is.NoErr(err)
-		is.NoErr(iterator.Ack(ctx, rec.Position))
-
-		is.Equal(rec.Operation, sdk.OperationDelete)
-		is.Equal(rec.Metadata[keyAction], "delete")
-
-		col, err := rec.Metadata.GetCollection()
-		is.NoErr(err)
-		is.Equal(col, "users")
-		isDataEqual(is, rec.Key, expected.key)
-	}
+	readAndAssertDelete(ctx, is, iterator, user1)
+	readAndAssertDelete(ctx, is, iterator, user2)
+	readAndAssertDelete(ctx, is, iterator, user3)
 }
 
 func TestCDCIterator_UpdateAction(t *testing.T) {
@@ -197,30 +134,9 @@ func TestCDCIterator_UpdateAction(t *testing.T) {
 	user2Updated := userTable.Update(is, db, user2.Update())
 	user3Updated := userTable.Update(is, db, user3.Update())
 
-	testCases := []struct {
-		original, updated sdk.StructuredData
-	}{
-		{user1.ToStructuredData(), user1Updated.ToStructuredData()},
-		{user2.ToStructuredData(), user2Updated.ToStructuredData()},
-		{user3.ToStructuredData(), user3Updated.ToStructuredData()},
-	}
-
-	for _, expected := range testCases {
-
-		rec, err := iterator.Next(ctx)
-		is.NoErr(err)
-		is.NoErr(iterator.Ack(ctx, rec.Position))
-
-		is.Equal(rec.Operation, sdk.OperationUpdate)
-		is.Equal(rec.Metadata[keyAction], "update")
-
-		col, err := rec.Metadata.GetCollection()
-		is.NoErr(err)
-		is.Equal(col, "users")
-
-		isDataEqual(is, rec.Payload.Before, expected.original)
-		isDataEqual(is, rec.Payload.After, expected.updated)
-	}
+	readAndAssertUpdate(ctx, is, iterator, user1, user1Updated)
+	readAndAssertUpdate(ctx, is, iterator, user2, user2Updated)
+	readAndAssertUpdate(ctx, is, iterator, user3, user3Updated)
 }
 
 func TestCDCIterator_RestartOnPosition(t *testing.T) {
@@ -245,21 +161,11 @@ func TestCDCIterator_RestartOnPosition(t *testing.T) {
 	var latestPosition sdk.Position
 
 	{ // read and ack 2 records
-		rec1, err := iterator.Next(ctx)
-		is.NoErr(err)
-		is.NoErr(iterator.Ack(ctx, rec1.Position))
-
-		assertUserInsert(is, user1, rec1)
-
-		rec2, err := iterator.Next(ctx)
-		is.NoErr(err)
-		is.NoErr(iterator.Ack(ctx, rec2.Position))
-
-		assertUserInsert(is, user2, rec2)
-
+		readAndAssertInsert(ctx, is, iterator, user1)
+		rec := readAndAssertInsert(ctx, is, iterator, user2)
 		teardown()
 
-		latestPosition = rec2.Position
+		latestPosition = rec.Position
 	}
 
 	// then, try to read from the second record
@@ -269,32 +175,25 @@ func TestCDCIterator_RestartOnPosition(t *testing.T) {
 
 	user5 := userTable.Insert(is, db, "user5")
 
-	rec3, err := iterator.Next(ctx)
-	is.NoErr(err)
-	is.NoErr(iterator.Ack(ctx, rec3.Position))
-
-	assertUserInsert(is, user3, rec3)
-
-	rec4, err := iterator.Next(ctx)
-	is.NoErr(err)
-	is.NoErr(iterator.Ack(ctx, rec3.Position))
-
-	assertUserInsert(is, user4, rec4)
-
-	rec5, err := iterator.Next(ctx)
-	is.NoErr(err)
-	is.NoErr(iterator.Ack(ctx, rec3.Position))
-
-	assertUserInsert(is, user5, rec5)
+	readAndAssertInsert(ctx, is, iterator, user3)
+	readAndAssertInsert(ctx, is, iterator, user4)
+	readAndAssertInsert(ctx, is, iterator, user5)
 }
 
-func assertUserInsert(is *is.I, user testutils.User, rec sdk.Record) {
+func readAndAssertInsert(
+	ctx context.Context, is *is.I,
+	iterator Iterator, user testutils.User,
+) sdk.Record {
+	rec, err := iterator.Next(ctx)
+	is.NoErr(err)
+	is.NoErr(iterator.Ack(ctx, rec.Position))
+
 	is.Equal(rec.Operation, sdk.OperationCreate)
-	is.Equal(rec.Metadata[keyAction], "insert")
 
 	col, err := rec.Metadata.GetCollection()
 	is.NoErr(err)
 	is.Equal(col, "users")
+
 	isDataEqual(is, rec.Key, sdk.StructuredData{
 		"id":     user.ID,
 		"table":  common.TableName("users"),
@@ -302,6 +201,50 @@ func assertUserInsert(is *is.I, user testutils.User, rec sdk.Record) {
 	})
 
 	isDataEqual(is, rec.Payload.After, user.ToStructuredData())
+
+	return rec
+}
+
+func readAndAssertUpdate(
+	ctx context.Context, is *is.I,
+	iterator Iterator, prev, next testutils.User,
+) {
+
+	rec, err := iterator.Next(ctx)
+	is.NoErr(err)
+	is.NoErr(iterator.Ack(ctx, rec.Position))
+
+	is.Equal(rec.Operation, sdk.OperationUpdate)
+	is.Equal(rec.Metadata[keyAction], "update")
+
+	col, err := rec.Metadata.GetCollection()
+	is.NoErr(err)
+	is.Equal(col, "users")
+
+	isDataEqual(is, rec.Payload.Before, prev.ToStructuredData())
+	isDataEqual(is, rec.Payload.After, next.ToStructuredData())
+}
+
+func readAndAssertDelete(
+	ctx context.Context, is *is.I,
+	iterator Iterator, user testutils.User,
+) {
+	rec, err := iterator.Next(ctx)
+	is.NoErr(err)
+	is.NoErr(iterator.Ack(ctx, rec.Position))
+
+	is.Equal(rec.Operation, sdk.OperationDelete)
+	is.Equal(rec.Metadata[keyAction], "delete")
+
+	col, err := rec.Metadata.GetCollection()
+	is.NoErr(err)
+	is.Equal(col, "users")
+
+	isDataEqual(is, rec.Key, sdk.StructuredData{
+		"id":     user.ID,
+		"table":  common.TableName("users"),
+		"action": "delete",
+	})
 }
 
 func isDataEqual(is *is.I, a, b sdk.Data) {
@@ -313,14 +256,38 @@ func isDataEqual(is *is.I, a, b sdk.Data) {
 		is.Fail() // one of the data is nil
 	}
 
-	aS, aOK := a.(sdk.StructuredData)
-	bS, bOK := b.(sdk.StructuredData)
+	equal, err := JSONEqual(a.Bytes(), b.Bytes())
+	is.NoErr(err)
 
-	if aOK && bOK {
-		for k, v := range aS {
-			is.Equal(v, bS[k])
+	if !equal {
+		fmt.Println("data a:")
+		if a, ok := a.(sdk.StructuredData); ok {
+			dump.P(a)
+		} else {
+			fmt.Println(string(a.Bytes()))
 		}
-	} else {
-		is.Equal(string(a.Bytes()), string(b.Bytes()))
+
+		fmt.Println("data b:")
+		if b, ok := b.(sdk.StructuredData); ok {
+			dump.P(b)
+		} else {
+			fmt.Println(string(a.Bytes()))
+		}
+
+		is.Fail() // different data
 	}
+}
+
+// JSONEqual compares the JSON from two Readers.
+func JSONEqual(a, b []byte) (bool, error) {
+	var j, j2 interface{}
+	d := json.NewDecoder(bytes.NewBuffer(a))
+	if err := d.Decode(&j); err != nil {
+		return false, err
+	}
+	d = json.NewDecoder(bytes.NewBuffer(b))
+	if err := d.Decode(&j2); err != nil {
+		return false, err
+	}
+	return reflect.DeepEqual(j2, j), nil
 }

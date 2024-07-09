@@ -46,10 +46,10 @@ var TableKeys = map[common.TableName]common.PrimaryKeyName{
 }
 
 type User struct {
-	ID        int32      `db:"id"`
-	Username  string     `db:"username"`
-	Email     string     `db:"email"`
-	CreatedAt *time.Time `db:"created_at"`
+	ID        int64     `db:"id"`
+	Username  string    `db:"username"`
+	Email     string    `db:"email"`
+	CreatedAt time.Time `db:"created_at"`
 }
 
 func (u User) Update() User {
@@ -60,9 +60,10 @@ func (u User) Update() User {
 
 func (u User) ToStructuredData() sdk.StructuredData {
 	return sdk.StructuredData{
-		"id":         u.ID,
-		"username":   u.Username,
-		"email":      u.Email,
+		"id":       u.ID,
+		"username": u.Username,
+		"email":    u.Email,
+		// "created_at": u.CreatedAt,
 		"created_at": u.CreatedAt.In(time.Now().Location()).Format("2006-01-02 15:04:05"),
 	}
 }

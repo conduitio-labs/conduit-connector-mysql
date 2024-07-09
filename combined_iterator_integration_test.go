@@ -55,13 +55,8 @@ func TestCombinedIterator(t *testing.T) {
 	user2Updated := userTable.Update(is, db, user2.Update())
 	user3Updated := userTable.Update(is, db, user3.Update())
 
-	for range []testutils.User{user1, user2, user3} {
-		rec, err := iterator.Next(ctx)
-		is.NoErr(err)
-		is.NoErr(iterator.Ack(ctx, rec.Position))
-
-		is.Equal(rec.Operation, sdk.OperationSnapshot)
-
+	for _, user := range []testutils.User{user1, user2, user3} {
+		readAndAssertSnapshot(ctx, is, iterator, user)
 	}
 
 	for range [][]testutils.User{
@@ -69,10 +64,10 @@ func TestCombinedIterator(t *testing.T) {
 		{user2, user2Updated},
 		{user3, user3Updated},
 	} {
+
 		rec, err := iterator.Next(ctx)
 		is.NoErr(err)
 		is.NoErr(iterator.Ack(ctx, rec.Position))
-
 		is.Equal(rec.Operation, sdk.OperationUpdate)
 	}
 }

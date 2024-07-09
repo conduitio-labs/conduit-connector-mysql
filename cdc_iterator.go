@@ -235,7 +235,7 @@ func (c *cdcIterator) buildRecord(e *canal.RowsEvent) (sdk.Record, error) {
 func buildRecordKey(
 	primaryKey common.PrimaryKeyName, table common.TableName,
 	action string, payload sdk.StructuredData,
-) (sdk.Data, error) {
+) (sdk.StructuredData, error) {
 	val, ok := payload[string(primaryKey)]
 	if !ok {
 		return nil, fmt.Errorf("key %s not found in payload", primaryKey)

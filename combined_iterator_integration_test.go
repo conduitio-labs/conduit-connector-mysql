@@ -6,7 +6,6 @@ import (
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	testutils "github.com/conduitio-labs/conduit-connector-mysql/test"
-	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/matryer/is"
 )
 
@@ -55,19 +54,11 @@ func TestCombinedIterator(t *testing.T) {
 	user2Updated := userTable.Update(is, db, user2.Update())
 	user3Updated := userTable.Update(is, db, user3.Update())
 
-	for _, user := range []testutils.User{user1, user2, user3} {
-		readAndAssertSnapshot(ctx, is, iterator, user)
-	}
+	readAndAssertSnapshot(ctx, is, iterator, user1)
+	readAndAssertSnapshot(ctx, is, iterator, user2)
+	readAndAssertSnapshot(ctx, is, iterator, user3)
 
-	for range [][]testutils.User{
-		{user1, user1Updated},
-		{user2, user2Updated},
-		{user3, user3Updated},
-	} {
-
-		rec, err := iterator.Next(ctx)
-		is.NoErr(err)
-		is.NoErr(iterator.Ack(ctx, rec.Position))
-		is.Equal(rec.Operation, sdk.OperationUpdate)
-	}
+	readAndAssertUpdate(ctx, is, iterator, user1, user1Updated)
+	readAndAssertUpdate(ctx, is, iterator, user2, user2Updated)
+	readAndAssertUpdate(ctx, is, iterator, user3, user3Updated)
 }

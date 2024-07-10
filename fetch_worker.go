@@ -16,6 +16,7 @@ package mysql
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
@@ -134,6 +135,8 @@ func (w *fetchWorker) selectRowsChunk(
 		if closeErr := rows.Close(); err != nil {
 			if err == nil {
 				err = fmt.Errorf("failed to close rows: %w", closeErr)
+			} else {
+				err = errors.Join(err, fmt.Errorf("failed to close rows: %w", closeErr))
 			}
 		}
 	}()
@@ -141,14 +144,13 @@ func (w *fetchWorker) selectRowsChunk(
 	for rows.Next() {
 		row := sdk.StructuredData{}
 		if err := rows.MapScan(row); err != nil {
-			logDataEvt.Msg("failed to scan row")
-			return nil, fmt.Errorf("failed to scan row: %w", err)
+			logDataEvt.Msg("failed to map scan row")
+			return nil, fmt.Errorf("failed to map scan row: %w", err)
 		}
 
+		// convert the values so that they can be easily serialized
 		for key, val := range row {
-			if val, ok := val.([]uint8); ok {
-				row[key] = string(val)
-			}
+			row[key] = formatValue(val)
 		}
 
 		scannedRows = append(scannedRows, row)

@@ -206,7 +206,6 @@ func readAndAssertUpdate(
 	ctx context.Context, is *is.I,
 	iterator Iterator, prev, next testutils.User,
 ) {
-
 	rec, err := iterator.Next(ctx)
 	is.NoErr(err)
 	is.NoErr(iterator.Ack(ctx, rec.Position))

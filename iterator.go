@@ -16,6 +16,7 @@ package mysql
 
 import (
 	"context"
+	"time"
 
 	sdk "github.com/conduitio/conduit-connector-sdk"
 )
@@ -30,4 +31,37 @@ type Iterator interface {
 	Ack(context.Context, sdk.Position) error
 	// Teardown attempts to gracefully teardown the iterator.
 	Teardown(context.Context) error
+}
+
+func formatValue(val any) any {
+	switch val := val.(type) {
+	case time.Time:
+		return val.UTC().Format(time.RFC3339)
+	case *time.Time:
+		return val.UTC().Format(time.RFC3339)
+	case int8:
+		return int(val)
+	case int16:
+		return int(val)
+	case int32:
+		return int(val)
+	case int64:
+		return int(val)
+	case uint8:
+		return int(val)
+	case uint16:
+		return int(val)
+	case uint32:
+		return int(val)
+	case uint64:
+		return int(val)
+	case float32:
+		return float64(val)
+	case float64:
+		return val
+	case []uint8:
+		return string(val)
+	default:
+		return val
+	}
 }

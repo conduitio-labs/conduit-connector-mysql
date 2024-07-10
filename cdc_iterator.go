@@ -18,13 +18,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	"github.com/conduitio/conduit-commons/csync"
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/go-mysql-org/go-mysql/canal"
 	"github.com/go-mysql-org/go-mysql/mysql"
-	"github.com/go-mysql-org/go-mysql/replication"
 	"github.com/go-mysql-org/go-mysql/schema"
 	"gopkg.in/tomb.v2"
 )
@@ -165,11 +165,34 @@ func (c *cdcIterator) Teardown(context.Context) error {
 func buildPayload(columns []schema.TableColumn, rows []any) sdk.StructuredData {
 	payload := sdk.StructuredData{}
 	for i, col := range columns {
-		if i < len(rows) {
-			payload[col.Name] = rows[i]
+		val := rows[i]
+		if s, ok := val.(string); ok {
+			// I don't know why exactly, but "github.com/go-mysql-org/go-mysql/canal"
+			// return a string for timestamp columns without timezone. This is a hack
+			// to format the string into UTC time.
+			// TODO: investigate this further. Is this a bug in canal?
+			val = tryParseCanalStrDate(s)
 		}
+
+		payload[col.Name] = formatValue(val)
 	}
 	return payload
+}
+
+func tryParseCanalStrDate(s string) string {
+	parsed, err := time.Parse(time.DateTime, s)
+	if err != nil {
+		return s
+	}
+
+	valCopyInUTC := time.Date(
+		parsed.Year(), parsed.Month(), parsed.Day(),
+		parsed.Hour(), parsed.Minute(), parsed.Second(),
+		parsed.Nanosecond(),
+		time.Now().Location(),
+	).UTC()
+
+	return valCopyInUTC.Format(time.RFC3339)
 }
 
 var keyAction = "mysql.action"
@@ -249,37 +272,12 @@ func buildRecordKey(
 }
 
 type cdcEventHandler struct {
+	// We only want the OnRow event, this allows us to ignore all other event methods
+	canal.DummyEventHandler
+
 	//nolint:containedctx // ctx is used to allow to timeout the OnRow event
 	ctx  context.Context
 	data chan *canal.RowsEvent
-}
-
-func (h *cdcEventHandler) OnDDL(_ *replication.EventHeader, _ mysql.Position, _ *replication.QueryEvent) error {
-	return nil
-}
-
-func (h *cdcEventHandler) OnGTID(_ *replication.EventHeader, _ mysql.BinlogGTIDEvent) error {
-	return nil
-}
-
-func (h *cdcEventHandler) OnPosSynced(_ *replication.EventHeader, _ mysql.Position, _ mysql.GTIDSet, _ bool) error {
-	return nil
-}
-
-func (h *cdcEventHandler) OnRotate(_ *replication.EventHeader, _ *replication.RotateEvent) error {
-	return nil
-}
-
-func (h *cdcEventHandler) OnRowsQueryEvent(_ *replication.RowsQueryEvent) error {
-	return nil
-}
-
-func (h *cdcEventHandler) OnTableChanged(_ *replication.EventHeader, _ string, _ string) error {
-	return nil
-}
-
-func (h *cdcEventHandler) OnXID(_ *replication.EventHeader, _ mysql.Position) error {
-	return nil
 }
 
 func (h *cdcEventHandler) OnRow(e *canal.RowsEvent) error {

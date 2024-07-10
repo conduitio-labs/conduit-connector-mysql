@@ -168,8 +168,8 @@ func buildPayload(columns []schema.TableColumn, rows []any) sdk.StructuredData {
 		val := rows[i]
 		if s, ok := val.(string); ok {
 			// I don't know why exactly, but "github.com/go-mysql-org/go-mysql/canal"
-			// return a string for timestamp columns without timezone. This is a hack
-			// to format the string into UTC time.
+			// returns a string for timestamp columns without timezone. This is a hack
+			// to format the string back into an UTC string.
 			// TODO: investigate this further. Is this a bug in canal?
 			val = tryParseCanalStrDate(s)
 		}

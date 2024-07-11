@@ -193,7 +193,7 @@ func readAndAssertInsert(
 
 	isDataEqual(is, rec.Key, sdk.StructuredData{
 		"id":     user.ID,
-		"table":  common.TableName("users"),
+		"table":  "users",
 		"action": "insert",
 	})
 
@@ -238,7 +238,7 @@ func readAndAssertDelete(
 
 	isDataEqual(is, rec.Key, sdk.StructuredData{
 		"id":     user.ID,
-		"table":  common.TableName("users"),
+		"table":  "users",
 		"action": "delete",
 	})
 }

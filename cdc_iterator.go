@@ -62,8 +62,6 @@ func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (Iterator, er
 		config:    config,
 	}
 
-	sdk.Logger(ctx).Info().Msg("got table keys")
-
 	startPosition, err := iterator.getStartPosition(config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get start position: %w", err)

@@ -67,10 +67,13 @@ func (u User) ToStructuredData() sdk.StructuredData {
 type UsersTable struct{}
 
 func (UsersTable) Recreate(is *is.I, db *sqlx.DB) {
-	_, err := db.Exec(`DROP TABLE IF EXISTS users`)
+	tx := db.MustBegin()
+	defer func() { is.NoErr(tx.Commit()) }()
+
+	_, err := tx.Exec(`DROP TABLE IF EXISTS users`)
 	is.NoErr(err)
 
-	_, err = db.Exec(`
+	_, err = tx.Exec(`
 	CREATE TABLE users (
 		id INT AUTO_INCREMENT PRIMARY KEY,
 		username VARCHAR(255) NOT NULL,
@@ -81,14 +84,17 @@ func (UsersTable) Recreate(is *is.I, db *sqlx.DB) {
 }
 
 func (UsersTable) Insert(is *is.I, db *sqlx.DB, username string) User {
-	_, err := db.Exec(`
+	tx := db.MustBegin()
+	defer func() { is.NoErr(tx.Commit()) }()
+
+	_, err := tx.Exec(`
 		INSERT INTO users (username, email) 
 		VALUES (?, ?);
 	`, username, fmt.Sprint(username, "@example.com"))
 	is.NoErr(err)
 
 	var user User
-	err = db.QueryRowx(`
+	err = tx.QueryRowx(`
 		SELECT *
 		FROM users
 		WHERE id = LAST_INSERT_ID();
@@ -99,7 +105,10 @@ func (UsersTable) Insert(is *is.I, db *sqlx.DB, username string) User {
 }
 
 func (UsersTable) Update(is *is.I, db *sqlx.DB, user User) User {
-	_, err := db.Exec(`
+	tx := db.MustBegin()
+	defer func() { is.NoErr(tx.Commit()) }()
+
+	_, err := tx.Exec(`
 		UPDATE users
 		SET username = ?, email = ?
 		WHERE id = ?;
@@ -110,7 +119,10 @@ func (UsersTable) Update(is *is.I, db *sqlx.DB, user User) User {
 }
 
 func (UsersTable) Delete(is *is.I, db *sqlx.DB, user User) {
-	_, err := db.Exec(`
+	tx := db.MustBegin()
+	defer func() { is.NoErr(tx.Commit()) }()
+
+	_, err := tx.Exec(`
 		DELETE FROM users
 		WHERE id = ?;
 	`, user.ID)

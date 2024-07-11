@@ -266,7 +266,7 @@ func buildRecordKey(
 
 	return sdk.StructuredData{
 		string(primaryKey): val,
-		"table":            table,
+		"table":            string(table),
 		"action":           action,
 	}, nil
 }

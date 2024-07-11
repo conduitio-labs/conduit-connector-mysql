@@ -38,8 +38,6 @@ func TestContext(t *testing.T) context.Context {
 	return logger.WithContext(context.Background())
 }
 
-var totalRowsPerTabl = 50
-
 var TableKeys = map[common.TableName]common.PrimaryKeyName{
 	"users": "id",
 }

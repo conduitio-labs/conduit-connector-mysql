@@ -17,6 +17,7 @@ package mysql
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -270,10 +271,10 @@ func isDataEqual(is *is.I, a, b sdk.Data) {
 func JSONBytesEqual(a, b []byte) (bool, error) {
 	var j, j2 interface{}
 	if err := json.Unmarshal(a, &j); err != nil {
-		return false, err
+		return false, fmt.Errorf("failed to unmarshal first JSON: %w", err)
 	}
 	if err := json.Unmarshal(b, &j2); err != nil {
-		return false, err
+		return false, fmt.Errorf("failed to unmarshal second JSON: %w", err)
 	}
 
 	return reflect.DeepEqual(j2, j), nil

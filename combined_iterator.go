@@ -54,6 +54,7 @@ func newCombinedIterator(ctx context.Context, config combinedIteratorConfig) (It
 }
 
 func (c *combinedIterator) Ack(ctx context.Context, pos sdk.Position) error {
+	//nolint:wrapcheck // error already wrapped in iterator
 	return c.currentIterator.Ack(ctx, pos)
 }
 
@@ -61,6 +62,7 @@ func (c *combinedIterator) Next(ctx context.Context) (sdk.Record, error) {
 	rec, err := c.currentIterator.Next(ctx)
 	if errors.Is(err, ErrSnapshotIteratorDone) {
 		c.currentIterator = c.cdcIterator
+		//nolint:wrapcheck // error already wrapped in iterator
 		return c.currentIterator.Next(ctx)
 	} else if err != nil {
 		return sdk.Record{}, fmt.Errorf("failed to get next record: %w", err)

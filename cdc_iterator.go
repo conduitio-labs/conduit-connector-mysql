@@ -281,9 +281,6 @@ type cdcEventHandler struct {
 }
 
 func (h *cdcEventHandler) OnRow(e *canal.RowsEvent) error {
-	h.data <- e
-	return nil
-
 	select {
 	case <-h.ctx.Done():
 		return fmt.Errorf("context cancelled from OnRow: %w", h.ctx.Err())

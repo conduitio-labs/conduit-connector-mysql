@@ -16,8 +16,8 @@ package mysql
 
 import (
 	"context"
-	"fmt"
 	"testing"
+	"time"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	testutils "github.com/conduitio-labs/conduit-connector-mysql/test"
@@ -65,15 +65,15 @@ func TestCombinedIterator(t *testing.T) {
 	iterator, cleanup := testCombinedIterator(ctx, is)
 	defer cleanup()
 
-	fmt.Println("starting snapshot asserts")
-
-	readAndAssertSnapshot(ctx, is, iterator, user1)
-	readAndAssertSnapshot(ctx, is, iterator, user2)
-	readAndAssertSnapshot(ctx, is, iterator, user3)
+	time.Sleep(time.Second)
 
 	user1Updated := userTable.Update(is, db, user1.Update())
 	user2Updated := userTable.Update(is, db, user2.Update())
 	user3Updated := userTable.Update(is, db, user3.Update())
+
+	readAndAssertSnapshot(ctx, is, iterator, user1)
+	readAndAssertSnapshot(ctx, is, iterator, user2)
+	readAndAssertSnapshot(ctx, is, iterator, user3)
 
 	readAndAssertUpdate(ctx, is, iterator, user1, user1Updated)
 	readAndAssertUpdate(ctx, is, iterator, user2, user2Updated)

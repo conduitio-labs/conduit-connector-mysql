@@ -84,11 +84,11 @@ func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (common.Itera
 
 func (c *cdcIterator) getStartPosition(config cdcIteratorConfig) (mysql.Position, error) {
 	if config.position != nil {
-		pos, err := parseSDKPosition(config.position)
+		pos, err := common.ParseSDKPosition(config.position)
 		if err != nil {
 			return mysql.Position{}, fmt.Errorf("failed to parse position: %w", err)
 		}
-		if pos.Kind == positionTypeSnapshot {
+		if pos.Kind == common.PositionTypeSnapshot {
 			return mysql.Position{}, fmt.Errorf("invalid position type: %s", pos.Kind)
 		}
 
@@ -208,7 +208,7 @@ func (c *cdcIterator) buildRecord(e *canal.RowsEvent) (sdk.Record, error) {
 
 	switch e.Action {
 	case canal.InsertAction:
-		position := cdcPosition{pos}.toSDKPosition()
+		position := common.CdcPosition{pos}.ToSDKPosition()
 		payload := buildPayload(e.Table.Columns, e.Rows[0])
 
 		table := common.TableName(e.Table.Name)
@@ -221,7 +221,7 @@ func (c *cdcIterator) buildRecord(e *canal.RowsEvent) (sdk.Record, error) {
 
 		return sdk.Util.Source.NewRecordCreate(position, metadata, key, payload), nil
 	case canal.DeleteAction:
-		position := cdcPosition{pos}.toSDKPosition()
+		position := common.CdcPosition{pos}.ToSDKPosition()
 
 		payload := buildPayload(e.Table.Columns, e.Rows[0])
 
@@ -235,7 +235,7 @@ func (c *cdcIterator) buildRecord(e *canal.RowsEvent) (sdk.Record, error) {
 
 		return sdk.Util.Source.NewRecordDelete(position, metadata, key), nil
 	case canal.UpdateAction:
-		position := cdcPosition{pos}.toSDKPosition()
+		position := common.CdcPosition{pos}.ToSDKPosition()
 		before := buildPayload(e.Table.Columns, e.Rows[0])
 		after := buildPayload(e.Table.Columns, e.Rows[1])
 

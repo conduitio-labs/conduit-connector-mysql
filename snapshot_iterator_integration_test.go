@@ -42,7 +42,7 @@ func testSnapshotIterator(ctx context.Context, is *is.I) (common.Iterator, func(
 
 func testSnapshotIteratorAtPosition(
 	ctx context.Context, is *is.I,
-	position snapshotPosition,
+	position common.SnapshotPosition,
 ) (common.Iterator, func()) {
 	iterator, err := newSnapshotIterator(ctx, snapshotIteratorConfig{
 		tableKeys:     testutils.TableKeys,
@@ -139,7 +139,7 @@ func TestSnapshotIterator_RestartOnPosition(t *testing.T) {
 	}
 
 	var recs []sdk.Record
-	var breakPosition snapshotPosition
+	var breakPosition common.SnapshotPosition
 	{
 		it, cleanup := testSnapshotIterator(ctx, is)
 		defer cleanup()
@@ -157,9 +157,9 @@ func TestSnapshotIterator_RestartOnPosition(t *testing.T) {
 			is.NoErr(err)
 		}
 
-		pos, err := parseSDKPosition(recs[len(recs)-1].Position)
+		pos, err := common.ParseSDKPosition(recs[len(recs)-1].Position)
 		is.NoErr(err)
-		is.Equal(pos.Kind, positionTypeSnapshot)
+		is.Equal(pos.Kind, common.PositionTypeSnapshot)
 
 		breakPosition = *pos.SnapshotPosition
 		is.NoErr(err)

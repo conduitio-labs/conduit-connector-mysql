@@ -12,37 +12,36 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package mysql
+package common
 
 import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/go-mysql-org/go-mysql/mysql"
 )
 
-type positionType string
+type PositionType string
 
 const (
-	positionTypeSnapshot positionType = "snapshot"
-	positionTypeCDC      positionType = "cdc"
+	PositionTypeSnapshot PositionType = "snapshot"
+	PositionTypeCDC      PositionType = "cdc"
 )
 
-type position struct {
-	Kind             positionType      `json:"kind"`
-	SnapshotPosition *snapshotPosition `json:"snapshot_position"`
-	CdcPosition      *cdcPosition      `json:"cdc_position"`
+type Position struct {
+	Kind             PositionType      `json:"kind"`
+	SnapshotPosition *SnapshotPosition `json:"snapshot_position"`
+	CdcPosition      *CdcPosition      `json:"cdc_position"`
 }
 
-type snapshotPosition struct {
-	Snapshots snapshotPositions `json:"snapshots,omitempty"`
+type SnapshotPosition struct {
+	Snapshots SnapshotPositions `json:"snapshots,omitempty"`
 }
 
-func (p snapshotPosition) toSDKPosition() sdk.Position {
-	v, err := json.Marshal(position{
-		Kind:             positionTypeSnapshot,
+func (p SnapshotPosition) ToSDKPosition() sdk.Position {
+	v, err := json.Marshal(Position{
+		Kind:             PositionTypeSnapshot,
 		SnapshotPosition: &p,
 	})
 	if err != nil {
@@ -52,37 +51,37 @@ func (p snapshotPosition) toSDKPosition() sdk.Position {
 	return v
 }
 
-func (p snapshotPosition) Clone() snapshotPosition {
-	var newPosition snapshotPosition
-	newPosition.Snapshots = make(map[common.TableName]tablePosition)
+func (p SnapshotPosition) Clone() SnapshotPosition {
+	var newPosition SnapshotPosition
+	newPosition.Snapshots = make(map[TableName]TablePosition)
 	for k, v := range p.Snapshots {
 		newPosition.Snapshots[k] = v
 	}
 	return newPosition
 }
 
-func parseSDKPosition(p sdk.Position) (position, error) {
-	var pos position
+func ParseSDKPosition(p sdk.Position) (Position, error) {
+	var pos Position
 	if err := json.Unmarshal(p, &pos); err != nil {
 		return pos, fmt.Errorf("failed to parse position: %w", err)
 	}
 	return pos, nil
 }
 
-type snapshotPositions map[common.TableName]tablePosition
+type SnapshotPositions map[TableName]TablePosition
 
-type tablePosition struct {
+type TablePosition struct {
 	LastRead    int `json:"last_read"`
 	SnapshotEnd int `json:"snapshot_end"`
 }
 
-type cdcPosition struct {
+type CdcPosition struct {
 	mysql.Position
 }
 
-func (p cdcPosition) toSDKPosition() sdk.Position {
-	v, err := json.Marshal(position{
-		Kind:        positionTypeCDC,
+func (p CdcPosition) ToSDKPosition() sdk.Position {
+	v, err := json.Marshal(Position{
+		Kind:        PositionTypeCDC,
 		CdcPosition: &p,
 	})
 	if err != nil {

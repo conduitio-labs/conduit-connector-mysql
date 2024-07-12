@@ -56,7 +56,7 @@ type (
 	fetchData struct {
 		key      snapshotKey
 		payload  sdk.StructuredData
-		position tablePosition
+		position common.TablePosition
 	}
 	snapshotIterator struct {
 		db           *sqlx.DB
@@ -64,13 +64,13 @@ type (
 		data         chan fetchData
 		acks         csync.WaitGroup
 		fetchSize    int
-		lastPosition snapshotPosition
+		lastPosition common.SnapshotPosition
 	}
 	snapshotIteratorConfig struct {
 		db            *sqlx.DB
 		tableKeys     common.TableKeys
 		fetchSize     int
-		startPosition snapshotPosition
+		startPosition common.SnapshotPosition
 		database      string
 		tables        []string
 	}
@@ -78,7 +78,7 @@ type (
 
 func (config *snapshotIteratorConfig) init() error {
 	if config.startPosition.Snapshots == nil {
-		config.startPosition.Snapshots = make(map[common.TableName]tablePosition)
+		config.startPosition.Snapshots = make(map[common.TableName]common.TablePosition)
 	}
 
 	if config.fetchSize == 0 {
@@ -175,7 +175,7 @@ func (s *snapshotIterator) Teardown(_ context.Context) error {
 func (s *snapshotIterator) buildRecord(d fetchData) sdk.Record {
 	s.lastPosition.Snapshots[d.key.Table] = d.position
 
-	pos := s.lastPosition.toSDKPosition()
+	pos := s.lastPosition.ToSDKPosition()
 	metadata := make(sdk.Metadata)
 	metadata.SetCollection(string(d.key.Table))
 

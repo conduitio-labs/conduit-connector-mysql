@@ -65,17 +65,15 @@ func TestCombinedIterator(t *testing.T) {
 	iterator, cleanup := testCombinedIterator(ctx, is)
 	defer cleanup()
 
-	user1Updated := userTable.Update(is, db, user1.Update())
-	user2Updated := userTable.Update(is, db, user2.Update())
-	user3Updated := userTable.Update(is, db, user3.Update())
-
 	fmt.Println("starting snapshot asserts")
 
 	readAndAssertSnapshot(ctx, is, iterator, user1)
 	readAndAssertSnapshot(ctx, is, iterator, user2)
 	readAndAssertSnapshot(ctx, is, iterator, user3)
 
-	fmt.Println("snapshot asserts complete")
+	user1Updated := userTable.Update(is, db, user1.Update())
+	user2Updated := userTable.Update(is, db, user2.Update())
+	user3Updated := userTable.Update(is, db, user3.Update())
 
 	readAndAssertUpdate(ctx, is, iterator, user1, user1Updated)
 	readAndAssertUpdate(ctx, is, iterator, user2, user2Updated)

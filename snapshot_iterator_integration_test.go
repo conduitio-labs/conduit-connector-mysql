@@ -28,7 +28,7 @@ import (
 
 var userTable testutils.UsersTable
 
-func testSnapshotIterator(ctx context.Context, is *is.I) (Iterator, func()) {
+func testSnapshotIterator(ctx context.Context, is *is.I) (common.Iterator, func()) {
 	iterator, err := newSnapshotIterator(ctx, snapshotIteratorConfig{
 		tableKeys: testutils.TableKeys,
 		db:        testutils.Connection(is),
@@ -43,7 +43,7 @@ func testSnapshotIterator(ctx context.Context, is *is.I) (Iterator, func()) {
 func testSnapshotIteratorAtPosition(
 	ctx context.Context, is *is.I,
 	position snapshotPosition,
-) (Iterator, func()) {
+) (common.Iterator, func()) {
 	iterator, err := newSnapshotIterator(ctx, snapshotIteratorConfig{
 		tableKeys:     testutils.TableKeys,
 		db:            testutils.Connection(is),
@@ -93,7 +93,7 @@ func TestSnapshotIterator_WithData(t *testing.T) {
 	defer cleanup()
 
 	for i := 0; i < 100; i++ {
-		readAndAssertSnapshot(ctx, is, iterator, users[i])
+		testutils.ReadAndAssertSnapshot(ctx, is, iterator, users[i])
 	}
 
 	_, err := iterator.Next(ctx)
@@ -118,7 +118,7 @@ func TestSnapshotIterator_SmallFetchSize(t *testing.T) {
 	defer cleanup()
 
 	for i := 0; i < 100; i++ {
-		readAndAssertSnapshot(ctx, is, iterator, users[i])
+		testutils.ReadAndAssertSnapshot(ctx, is, iterator, users[i])
 	}
 
 	_, err := iterator.Next(ctx)
@@ -185,45 +185,6 @@ func TestSnapshotIterator_RestartOnPosition(t *testing.T) {
 
 	is.Equal(len(recs), 100)
 	for i, rec := range recs {
-		assertUserSnapshot(is, users[i], rec)
+		testutils.AssertUserSnapshot(is, users[i], rec)
 	}
-}
-
-func readAndAssertSnapshot(
-	ctx context.Context, is *is.I,
-	iterator Iterator, user testutils.User,
-) {
-	rec, err := iterator.Next(ctx)
-	is.NoErr(err)
-	is.NoErr(iterator.Ack(ctx, rec.Position))
-
-	is.Equal(rec.Operation, sdk.OperationSnapshot)
-
-	col, err := rec.Metadata.GetCollection()
-	is.NoErr(err)
-	is.Equal(col, "users")
-
-	isDataEqual(is, rec.Key, sdk.StructuredData{
-		"table": common.TableName("users"),
-		"key":   "id",
-		"value": user.ID,
-	})
-
-	isDataEqual(is, rec.Payload.After, user.ToStructuredData())
-}
-
-func assertUserSnapshot(is *is.I, user testutils.User, rec sdk.Record) {
-	is.Equal(rec.Operation, sdk.OperationSnapshot)
-
-	col, err := rec.Metadata.GetCollection()
-	is.NoErr(err)
-	is.Equal(col, "users")
-
-	isDataEqual(is, rec.Key, sdk.StructuredData{
-		"key":   "id",
-		"value": user.ID,
-		"table": common.TableName("users"),
-	})
-
-	isDataEqual(is, rec.Payload.After, user.ToStructuredData())
 }

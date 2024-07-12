@@ -19,14 +19,15 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	sdk "github.com/conduitio/conduit-connector-sdk"
 )
 
 type combinedIterator struct {
-	snapshotIterator Iterator
-	cdcIterator      Iterator
+	snapshotIterator common.Iterator
+	cdcIterator      common.Iterator
 
-	currentIterator Iterator
+	currentIterator common.Iterator
 }
 
 type combinedIteratorConfig struct {
@@ -34,7 +35,10 @@ type combinedIteratorConfig struct {
 	cdcConfig      cdcIteratorConfig
 }
 
-func newCombinedIterator(ctx context.Context, config combinedIteratorConfig) (Iterator, error) {
+func newCombinedIterator(
+	ctx context.Context,
+	config combinedIteratorConfig,
+) (common.Iterator, error) {
 	iterator := &combinedIterator{}
 	var err error
 

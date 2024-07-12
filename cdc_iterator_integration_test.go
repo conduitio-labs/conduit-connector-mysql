@@ -16,21 +16,17 @@ package mysql
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"reflect"
 	"testing"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	testutils "github.com/conduitio-labs/conduit-connector-mysql/test"
 	sdk "github.com/conduitio/conduit-connector-sdk"
-	"github.com/gookit/goutil/dump"
 	"github.com/matryer/is"
 )
 
-func testCdcIterator(ctx context.Context, is *is.I) (Iterator, func()) {
+func testCdcIterator(ctx context.Context, is *is.I) (common.Iterator, func()) {
 	iterator, err := newCdcIterator(ctx, cdcIteratorConfig{
-		SourceConfig: SourceConfig{
+		SourceConfig: common.SourceConfig{
 			Config: common.Config{
 				Host:     "127.0.0.1",
 				Port:     3306,
@@ -50,9 +46,9 @@ func testCdcIterator(ctx context.Context, is *is.I) (Iterator, func()) {
 func testCdcIteratorAtPosition(
 	ctx context.Context, is *is.I,
 	position sdk.Position,
-) (Iterator, func()) {
+) (common.Iterator, func()) {
 	iterator, err := newCdcIterator(ctx, cdcIteratorConfig{
-		SourceConfig: SourceConfig{
+		SourceConfig: common.SourceConfig{
 			Config: common.Config{
 				Host:     "127.0.0.1",
 				Port:     3306,
@@ -85,9 +81,9 @@ func TestCDCIterator_InsertAction(t *testing.T) {
 	user2 := userTable.Insert(is, db, "user2")
 	user3 := userTable.Insert(is, db, "user3")
 
-	readAndAssertInsert(ctx, is, iterator, user1)
-	readAndAssertInsert(ctx, is, iterator, user2)
-	readAndAssertInsert(ctx, is, iterator, user3)
+	testutils.ReadAndAssertInsert(ctx, is, iterator, user1)
+	testutils.ReadAndAssertInsert(ctx, is, iterator, user2)
+	testutils.ReadAndAssertInsert(ctx, is, iterator, user3)
 }
 
 func TestCDCIterator_DeleteAction(t *testing.T) {
@@ -109,9 +105,9 @@ func TestCDCIterator_DeleteAction(t *testing.T) {
 	userTable.Delete(is, db, user2)
 	userTable.Delete(is, db, user3)
 
-	readAndAssertDelete(ctx, is, iterator, user1)
-	readAndAssertDelete(ctx, is, iterator, user2)
-	readAndAssertDelete(ctx, is, iterator, user3)
+	testutils.ReadAndAssertDelete(ctx, is, iterator, user1)
+	testutils.ReadAndAssertDelete(ctx, is, iterator, user2)
+	testutils.ReadAndAssertDelete(ctx, is, iterator, user3)
 }
 
 func TestCDCIterator_UpdateAction(t *testing.T) {
@@ -133,9 +129,9 @@ func TestCDCIterator_UpdateAction(t *testing.T) {
 	user2Updated := userTable.Update(is, db, user2.Update())
 	user3Updated := userTable.Update(is, db, user3.Update())
 
-	readAndAssertUpdate(ctx, is, iterator, user1, user1Updated)
-	readAndAssertUpdate(ctx, is, iterator, user2, user2Updated)
-	readAndAssertUpdate(ctx, is, iterator, user3, user3Updated)
+	testutils.ReadAndAssertUpdate(ctx, is, iterator, user1, user1Updated)
+	testutils.ReadAndAssertUpdate(ctx, is, iterator, user2, user2Updated)
+	testutils.ReadAndAssertUpdate(ctx, is, iterator, user3, user3Updated)
 }
 
 func TestCDCIterator_RestartOnPosition(t *testing.T) {
@@ -160,8 +156,8 @@ func TestCDCIterator_RestartOnPosition(t *testing.T) {
 	var latestPosition sdk.Position
 
 	{ // read and ack 2 records
-		readAndAssertInsert(ctx, is, iterator, user1)
-		rec := readAndAssertInsert(ctx, is, iterator, user2)
+		testutils.ReadAndAssertInsert(ctx, is, iterator, user1)
+		rec := testutils.ReadAndAssertInsert(ctx, is, iterator, user2)
 		teardown()
 
 		latestPosition = rec.Position
@@ -174,115 +170,7 @@ func TestCDCIterator_RestartOnPosition(t *testing.T) {
 
 	user5 := userTable.Insert(is, db, "user5")
 
-	readAndAssertInsert(ctx, is, iterator, user3)
-	readAndAssertInsert(ctx, is, iterator, user4)
-	readAndAssertInsert(ctx, is, iterator, user5)
-}
-
-func readAndAssertInsert(
-	ctx context.Context, is *is.I,
-	iterator Iterator, user testutils.User,
-) sdk.Record {
-	rec, err := iterator.Next(ctx)
-	is.NoErr(err)
-	is.NoErr(iterator.Ack(ctx, rec.Position))
-
-	is.Equal(rec.Operation, sdk.OperationCreate)
-
-	col, err := rec.Metadata.GetCollection()
-	is.NoErr(err)
-	is.Equal(col, "users")
-
-	isDataEqual(is, rec.Key, sdk.StructuredData{
-		"id":     user.ID,
-		"table":  "users",
-		"action": "insert",
-	})
-
-	isDataEqual(is, rec.Payload.After, user.ToStructuredData())
-
-	return rec
-}
-
-func readAndAssertUpdate(
-	ctx context.Context, is *is.I,
-	iterator Iterator, prev, next testutils.User,
-) {
-	rec, err := iterator.Next(ctx)
-	is.NoErr(err)
-	is.NoErr(iterator.Ack(ctx, rec.Position))
-
-	is.Equal(rec.Operation, sdk.OperationUpdate)
-	is.Equal(rec.Metadata[keyAction], "update")
-
-	col, err := rec.Metadata.GetCollection()
-	is.NoErr(err)
-	is.Equal(col, "users")
-
-	isDataEqual(is, rec.Payload.Before, prev.ToStructuredData())
-	isDataEqual(is, rec.Payload.After, next.ToStructuredData())
-}
-
-func readAndAssertDelete(
-	ctx context.Context, is *is.I,
-	iterator Iterator, user testutils.User,
-) {
-	rec, err := iterator.Next(ctx)
-	is.NoErr(err)
-	is.NoErr(iterator.Ack(ctx, rec.Position))
-
-	is.Equal(rec.Operation, sdk.OperationDelete)
-	is.Equal(rec.Metadata[keyAction], "delete")
-
-	col, err := rec.Metadata.GetCollection()
-	is.NoErr(err)
-	is.Equal(col, "users")
-
-	isDataEqual(is, rec.Key, sdk.StructuredData{
-		"id":     user.ID,
-		"table":  "users",
-		"action": "delete",
-	})
-}
-
-func isDataEqual(is *is.I, a, b sdk.Data) {
-	if a == nil && b == nil {
-		return
-	}
-
-	if a == nil || b == nil {
-		is.Fail() // one of the data is nil
-	}
-
-	equal, err := JSONBytesEqual(a.Bytes(), b.Bytes())
-	is.NoErr(err)
-
-	// dump structured datas for easier debugging
-	if !equal {
-		if _, ok := a.(sdk.StructuredData); ok {
-			dump.P(a)
-		} else {
-			fmt.Println(string(a.Bytes()))
-		}
-		if _, ok := b.(sdk.StructuredData); ok {
-			dump.P(b)
-		} else {
-			fmt.Println(string(b.Bytes()))
-		}
-	}
-
-	is.True(equal) // compared datas are not equal
-}
-
-// JSONBytesEqual compares the JSON in two byte slices.
-func JSONBytesEqual(a, b []byte) (bool, error) {
-	var j, j2 interface{}
-	if err := json.Unmarshal(a, &j); err != nil {
-		return false, fmt.Errorf("failed to unmarshal first JSON: %w", err)
-	}
-	if err := json.Unmarshal(b, &j2); err != nil {
-		return false, fmt.Errorf("failed to unmarshal second JSON: %w", err)
-	}
-
-	return reflect.DeepEqual(j2, j), nil
+	testutils.ReadAndAssertInsert(ctx, is, iterator, user3)
+	testutils.ReadAndAssertInsert(ctx, is, iterator, user4)
+	testutils.ReadAndAssertInsert(ctx, is, iterator, user5)
 }

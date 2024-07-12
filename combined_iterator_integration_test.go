@@ -24,7 +24,7 @@ import (
 	"github.com/matryer/is"
 )
 
-func testCombinedIterator(ctx context.Context, is *is.I) (Iterator, func()) {
+func testCombinedIterator(ctx context.Context, is *is.I) (common.Iterator, func()) {
 	iterator, err := newCombinedIterator(ctx, combinedIteratorConfig{
 		snapshotConfig: snapshotIteratorConfig{
 			tableKeys: testutils.TableKeys,
@@ -33,7 +33,7 @@ func testCombinedIterator(ctx context.Context, is *is.I) (Iterator, func()) {
 			tables:    []string{"users"},
 		},
 		cdcConfig: cdcIteratorConfig{
-			SourceConfig: SourceConfig{
+			SourceConfig: common.SourceConfig{
 				Config: common.Config{
 					Host:     "127.0.0.1",
 					Port:     3306,
@@ -74,11 +74,11 @@ func TestCombinedIterator(t *testing.T) {
 	user2Updated := userTable.Update(is, db, user2.Update())
 	user3Updated := userTable.Update(is, db, user3.Update())
 
-	readAndAssertSnapshot(ctx, is, iterator, user1)
-	readAndAssertSnapshot(ctx, is, iterator, user2)
-	readAndAssertSnapshot(ctx, is, iterator, user3)
+	testutils.ReadAndAssertSnapshot(ctx, is, iterator, user1)
+	testutils.ReadAndAssertSnapshot(ctx, is, iterator, user2)
+	testutils.ReadAndAssertSnapshot(ctx, is, iterator, user3)
 
-	readAndAssertUpdate(ctx, is, iterator, user1, user1Updated)
-	readAndAssertUpdate(ctx, is, iterator, user2, user2Updated)
-	readAndAssertUpdate(ctx, is, iterator, user3, user3Updated)
+	testutils.ReadAndAssertUpdate(ctx, is, iterator, user1, user1Updated)
+	testutils.ReadAndAssertUpdate(ctx, is, iterator, user2, user2Updated)
+	testutils.ReadAndAssertUpdate(ctx, is, iterator, user3, user3Updated)
 }

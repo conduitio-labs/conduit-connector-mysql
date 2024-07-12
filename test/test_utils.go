@@ -16,11 +16,14 @@ package testutils
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"reflect"
 	"testing"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	sdk "github.com/conduitio/conduit-connector-sdk"
+	"github.com/gookit/goutil/dump"
 	"github.com/jmoiron/sqlx"
 	"github.com/matryer/is"
 	"github.com/rs/zerolog"
@@ -127,4 +130,151 @@ func (UsersTable) Delete(is *is.I, db *sqlx.DB, user User) {
 		WHERE id = ?;
 	`, user.ID)
 	is.NoErr(err)
+}
+
+func ReadAndAssertInsert(
+	ctx context.Context, is *is.I,
+	iterator common.Iterator, user User,
+) sdk.Record {
+	rec, err := iterator.Next(ctx)
+	is.NoErr(err)
+	is.NoErr(iterator.Ack(ctx, rec.Position))
+
+	is.Equal(rec.Operation, sdk.OperationCreate)
+
+	col, err := rec.Metadata.GetCollection()
+	is.NoErr(err)
+	is.Equal(col, "users")
+
+	IsDataEqual(is, rec.Key, sdk.StructuredData{
+		"id":     user.ID,
+		"table":  "users",
+		"action": "insert",
+	})
+
+	IsDataEqual(is, rec.Payload.After, user.ToStructuredData())
+
+	return rec
+}
+
+func ReadAndAssertUpdate(
+	ctx context.Context, is *is.I,
+	iterator common.Iterator, prev, next User,
+) {
+	rec, err := iterator.Next(ctx)
+	is.NoErr(err)
+	is.NoErr(iterator.Ack(ctx, rec.Position))
+
+	is.Equal(rec.Operation, sdk.OperationUpdate)
+	is.Equal(rec.Metadata["mysql.action"], "update")
+
+	col, err := rec.Metadata.GetCollection()
+	is.NoErr(err)
+	is.Equal(col, "users")
+
+	IsDataEqual(is, rec.Payload.Before, prev.ToStructuredData())
+	IsDataEqual(is, rec.Payload.After, next.ToStructuredData())
+}
+
+func ReadAndAssertDelete(
+	ctx context.Context, is *is.I,
+	iterator common.Iterator, user User,
+) {
+	rec, err := iterator.Next(ctx)
+	is.NoErr(err)
+	is.NoErr(iterator.Ack(ctx, rec.Position))
+
+	is.Equal(rec.Operation, sdk.OperationDelete)
+	is.Equal(rec.Metadata["mysql.action"], "delete")
+
+	col, err := rec.Metadata.GetCollection()
+	is.NoErr(err)
+	is.Equal(col, "users")
+
+	IsDataEqual(is, rec.Key, sdk.StructuredData{
+		"id":     user.ID,
+		"table":  "users",
+		"action": "delete",
+	})
+}
+
+func IsDataEqual(is *is.I, a, b sdk.Data) {
+	if a == nil && b == nil {
+		return
+	}
+
+	if a == nil || b == nil {
+		is.Fail() // one of the data is nil
+	}
+
+	equal, err := JSONBytesEqual(a.Bytes(), b.Bytes())
+	is.NoErr(err)
+
+	// dump structured datas for easier debugging
+	if !equal {
+		if _, ok := a.(sdk.StructuredData); ok {
+			dump.P(a)
+		} else {
+			fmt.Println(string(a.Bytes()))
+		}
+		if _, ok := b.(sdk.StructuredData); ok {
+			dump.P(b)
+		} else {
+			fmt.Println(string(b.Bytes()))
+		}
+	}
+
+	is.True(equal) // compared datas are not equal
+}
+
+// JSONBytesEqual compares the JSON in two byte slices.
+func JSONBytesEqual(a, b []byte) (bool, error) {
+	var j, j2 interface{}
+	if err := json.Unmarshal(a, &j); err != nil {
+		return false, fmt.Errorf("failed to unmarshal first JSON: %w", err)
+	}
+	if err := json.Unmarshal(b, &j2); err != nil {
+		return false, fmt.Errorf("failed to unmarshal second JSON: %w", err)
+	}
+
+	return reflect.DeepEqual(j2, j), nil
+}
+
+func ReadAndAssertSnapshot(
+	ctx context.Context, is *is.I,
+	iterator common.Iterator, user User,
+) {
+	rec, err := iterator.Next(ctx)
+	is.NoErr(err)
+	is.NoErr(iterator.Ack(ctx, rec.Position))
+
+	is.Equal(rec.Operation, sdk.OperationSnapshot)
+
+	col, err := rec.Metadata.GetCollection()
+	is.NoErr(err)
+	is.Equal(col, "users")
+
+	IsDataEqual(is, rec.Key, sdk.StructuredData{
+		"table": common.TableName("users"),
+		"key":   "id",
+		"value": user.ID,
+	})
+
+	IsDataEqual(is, rec.Payload.After, user.ToStructuredData())
+}
+
+func AssertUserSnapshot(is *is.I, user User, rec sdk.Record) {
+	is.Equal(rec.Operation, sdk.OperationSnapshot)
+
+	col, err := rec.Metadata.GetCollection()
+	is.NoErr(err)
+	is.Equal(col, "users")
+
+	IsDataEqual(is, rec.Key, sdk.StructuredData{
+		"key":   "id",
+		"value": user.ID,
+		"table": common.TableName("users"),
+	})
+
+	IsDataEqual(is, rec.Payload.After, user.ToStructuredData())
 }

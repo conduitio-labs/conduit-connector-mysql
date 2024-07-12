@@ -150,7 +150,7 @@ func (w *fetchWorker) selectRowsChunk(
 
 		// convert the values so that they can be easily serialized
 		for key, val := range row {
-			row[key] = formatValue(val)
+			row[key] = common.FormatValue(val)
 		}
 
 		scannedRows = append(scannedRows, row)

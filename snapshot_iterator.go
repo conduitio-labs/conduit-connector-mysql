@@ -98,7 +98,7 @@ func (config *snapshotIteratorConfig) init() error {
 func newSnapshotIterator(
 	ctx context.Context,
 	config snapshotIteratorConfig,
-) (Iterator, error) {
+) (common.Iterator, error) {
 	if err := config.init(); err != nil {
 		return nil, fmt.Errorf("invalid snapshot iterator config: %w", err)
 	}

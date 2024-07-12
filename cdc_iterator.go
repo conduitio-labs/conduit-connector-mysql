@@ -41,13 +41,13 @@ type cdcIterator struct {
 }
 
 type cdcIteratorConfig struct {
-	SourceConfig
+	common.SourceConfig
 	position  sdk.Position
 	TableKeys common.TableKeys
 }
 
-func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (Iterator, error) {
-	c, err := newCanal(config.SourceConfig)
+func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (common.Iterator, error) {
+	c, err := common.NewCanal(config.SourceConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create canal: %w", err)
 	}
@@ -174,7 +174,7 @@ func buildPayload(columns []schema.TableColumn, rows []any) sdk.StructuredData {
 			val = tryParseCanalStrDate(s)
 		}
 
-		payload[col.Name] = formatValue(val)
+		payload[col.Name] = common.FormatValue(val)
 	}
 	return payload
 }
@@ -195,15 +195,13 @@ func tryParseCanalStrDate(s string) string {
 	return valCopyInUTC.Format(time.RFC3339)
 }
 
-var keyAction = "mysql.action"
-
 func (c *cdcIterator) buildRecord(e *canal.RowsEvent) (sdk.Record, error) {
 	pos, err := c.canal.GetMasterPos()
 	if err != nil {
 		return sdk.Record{}, fmt.Errorf("failed to get master position from buildRecord: %w", err)
 	}
 
-	metadata := sdk.Metadata{keyAction: e.Action}
+	metadata := sdk.Metadata{"mysql.action": e.Action}
 	metadata.SetCollection(e.Table.Name)
 
 	pos.Pos = e.Header.LogPos

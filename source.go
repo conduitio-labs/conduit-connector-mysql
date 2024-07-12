@@ -14,8 +14,6 @@
 
 package mysql
 
-//go:generate paramgen -output=paramgen_src.go SourceConfig
-
 import (
 	"context"
 	"fmt"
@@ -28,17 +26,11 @@ import (
 type Source struct {
 	sdk.UnimplementedSource
 
-	config SourceConfig
+	config common.SourceConfig
 
 	db *sqlx.DB
 
-	iterator Iterator
-}
-
-type SourceConfig struct {
-	common.Config
-
-	Tables []string `json:"tables" validate:"required"`
+	iterator common.Iterator
 }
 
 func NewSource() sdk.Source {
@@ -62,7 +54,7 @@ func (s *Source) Configure(ctx context.Context, cfg map[string]string) error {
 }
 
 func (s *Source) Open(ctx context.Context, _ sdk.Position) (err error) {
-	s.db, err = newSqlxDB(s.config.Config)
+	s.db, err = common.NewSqlxDB(s.config.Config)
 	if err != nil {
 		return fmt.Errorf("failed to connect to mysql: %w", err)
 	}
@@ -72,20 +64,11 @@ func (s *Source) Open(ctx context.Context, _ sdk.Position) (err error) {
 		return fmt.Errorf("failed to get table keys: %w", err)
 	}
 
-	s.iterator, err = newCombinedIterator(ctx, combinedIteratorConfig{
-		snapshotConfig: snapshotIteratorConfig{
-			db:        s.db,
-			tableKeys: tableKeys,
-			database:  s.config.Database,
-			tables:    s.config.Tables,
-		},
-		cdcConfig: cdcIteratorConfig{
-			SourceConfig: SourceConfig{
-				Config: s.config.Config,
-				Tables: s.config.Tables,
-			},
-			TableKeys: tableKeys,
-		},
+	s.iterator, err = newSnapshotIterator(ctx, snapshotIteratorConfig{
+		db:        s.db,
+		tableKeys: tableKeys,
+		database:  s.config.Database,
+		tables:    s.config.Tables,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create snapshot iterator: %w", err)

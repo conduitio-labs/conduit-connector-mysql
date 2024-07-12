@@ -208,7 +208,7 @@ func (c *cdcIterator) buildRecord(e *canal.RowsEvent) (sdk.Record, error) {
 
 	switch e.Action {
 	case canal.InsertAction:
-		position := common.CdcPosition{pos}.ToSDKPosition()
+		position := common.CdcPosition{Position: pos}.ToSDKPosition()
 		payload := buildPayload(e.Table.Columns, e.Rows[0])
 
 		table := common.TableName(e.Table.Name)
@@ -221,7 +221,7 @@ func (c *cdcIterator) buildRecord(e *canal.RowsEvent) (sdk.Record, error) {
 
 		return sdk.Util.Source.NewRecordCreate(position, metadata, key, payload), nil
 	case canal.DeleteAction:
-		position := common.CdcPosition{pos}.ToSDKPosition()
+		position := common.CdcPosition{Position: pos}.ToSDKPosition()
 
 		payload := buildPayload(e.Table.Columns, e.Rows[0])
 
@@ -235,7 +235,7 @@ func (c *cdcIterator) buildRecord(e *canal.RowsEvent) (sdk.Record, error) {
 
 		return sdk.Util.Source.NewRecordDelete(position, metadata, key), nil
 	case canal.UpdateAction:
-		position := common.CdcPosition{pos}.ToSDKPosition()
+		position := common.CdcPosition{Position: pos}.ToSDKPosition()
 		before := buildPayload(e.Table.Columns, e.Rows[0])
 		after := buildPayload(e.Table.Columns, e.Rows[1])
 

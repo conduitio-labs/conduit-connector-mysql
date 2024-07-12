@@ -65,12 +65,14 @@ func TestCombinedIterator(t *testing.T) {
 	iterator, cleanup := testCombinedIterator(ctx, is)
 	defer cleanup()
 
+	// ci is slow, we need a bit of time for the setup to initialize canal.Canal.
+	// Theoretically it should not matter, as we get the position at the start.
+	// Documented at issue
+	time.Sleep(time.Second)
+
 	user1Updated := userTable.Update(is, db, user1.Update())
 	user2Updated := userTable.Update(is, db, user2.Update())
 	user3Updated := userTable.Update(is, db, user3.Update())
-
-	// ci is slow, we need a bit of time for the setup to pickup the updates
-	time.Sleep(time.Second)
 
 	readAndAssertSnapshot(ctx, is, iterator, user1)
 	readAndAssertSnapshot(ctx, is, iterator, user2)

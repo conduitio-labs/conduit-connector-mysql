@@ -72,6 +72,8 @@ func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (Iterator, er
 		return iterator.runCanal(ctx, startPosition)
 	})
 
+	// close the data channel when all tomb goroutines are done, which will happen only when
+	// the iterator teardown method is called
 	go func() {
 		<-iterator.canalTomb.Dead()
 		close(iterator.data)

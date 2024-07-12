@@ -14,6 +14,8 @@
 
 package mysql
 
+//go:generate paramgen -output=paramgen_src.go SourceConfig
+
 import (
 	"context"
 	"fmt"
@@ -64,11 +66,20 @@ func (s *Source) Open(ctx context.Context, _ sdk.Position) (err error) {
 		return fmt.Errorf("failed to get table keys: %w", err)
 	}
 
-	s.iterator, err = newSnapshotIterator(ctx, snapshotIteratorConfig{
-		db:        s.db,
-		tableKeys: tableKeys,
-		database:  s.config.Database,
-		tables:    s.config.Tables,
+	s.iterator, err = newCombinedIterator(ctx, combinedIteratorConfig{
+		snapshotConfig: snapshotIteratorConfig{
+			db:        s.db,
+			tableKeys: tableKeys,
+			database:  s.config.Database,
+			tables:    s.config.Tables,
+		},
+		cdcConfig: cdcIteratorConfig{
+			SourceConfig: common.SourceConfig{
+				Config: s.config.Config,
+				Tables: s.config.Tables,
+			},
+			TableKeys: tableKeys,
+		},
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create snapshot iterator: %w", err)

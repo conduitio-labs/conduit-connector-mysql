@@ -24,6 +24,7 @@ import (
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	testutils "github.com/conduitio-labs/conduit-connector-mysql/test"
 	sdk "github.com/conduitio/conduit-connector-sdk"
+	"github.com/gookit/goutil/dump"
 	"github.com/matryer/is"
 )
 
@@ -253,18 +254,24 @@ func isDataEqual(is *is.I, a, b sdk.Data) {
 		is.Fail() // one of the data is nil
 	}
 
-	aS, aOK := a.(sdk.StructuredData)
-	bS, bOK := b.(sdk.StructuredData)
+	equal, err := JSONBytesEqual(a.Bytes(), b.Bytes())
+	is.NoErr(err)
 
-	if aOK && bOK {
-		for k, v := range aS {
-			is.Equal(v, bS[k])
+	// dump structured datas for easier debugging
+	if !equal {
+		if _, ok := a.(sdk.StructuredData); ok {
+			dump.P(a)
+		} else {
+			fmt.Println(string(a.Bytes()))
 		}
-	} else {
-		equal, err := JSONBytesEqual(a.Bytes(), b.Bytes())
-		is.NoErr(err)
-		is.True(equal)
+		if _, ok := b.(sdk.StructuredData); ok {
+			dump.P(b)
+		} else {
+			fmt.Println(string(b.Bytes()))
+		}
 	}
+
+	is.True(equal) // compared datas are not equal
 }
 
 // JSONBytesEqual compares the JSON in two byte slices.

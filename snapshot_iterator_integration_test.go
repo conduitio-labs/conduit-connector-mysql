@@ -67,7 +67,7 @@ func TestSnapshotIterator_EmptyTable(t *testing.T) {
 	it, cleanup := testSnapshotIterator(ctx, is)
 	defer cleanup()
 
-	_, err := it.Next(ctx)
+	_, err := it.Read(ctx)
 	if errors.Is(err, ErrSnapshotIteratorDone) {
 		return
 	}
@@ -96,7 +96,7 @@ func TestSnapshotIterator_WithData(t *testing.T) {
 		testutils.ReadAndAssertSnapshot(ctx, is, iterator, users[i])
 	}
 
-	_, err := iterator.Next(ctx)
+	_, err := iterator.Read(ctx)
 	is.True(errors.Is(err, ErrSnapshotIteratorDone))
 }
 
@@ -121,7 +121,7 @@ func TestSnapshotIterator_SmallFetchSize(t *testing.T) {
 		testutils.ReadAndAssertSnapshot(ctx, is, iterator, users[i])
 	}
 
-	_, err := iterator.Next(ctx)
+	_, err := iterator.Read(ctx)
 	is.True(errors.Is(err, ErrSnapshotIteratorDone))
 }
 
@@ -145,7 +145,7 @@ func TestSnapshotIterator_RestartOnPosition(t *testing.T) {
 		defer cleanup()
 
 		for i := 0; i < 10; i++ {
-			rec, err := it.Next(ctx)
+			rec, err := it.Read(ctx)
 			if errors.Is(err, ErrSnapshotIteratorDone) {
 				break
 			}
@@ -171,7 +171,7 @@ func TestSnapshotIterator_RestartOnPosition(t *testing.T) {
 	defer cleanup()
 
 	for {
-		rec, err := it.Next(ctx)
+		rec, err := it.Read(ctx)
 		if errors.Is(err, ErrSnapshotIteratorDone) {
 			break
 		}

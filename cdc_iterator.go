@@ -129,7 +129,7 @@ func (c *cdcIterator) Ack(context.Context, sdk.Position) error {
 	return nil
 }
 
-func (c *cdcIterator) Next(ctx context.Context) (sdk.Record, error) {
+func (c *cdcIterator) Read(ctx context.Context) (sdk.Record, error) {
 	select {
 	case <-ctx.Done():
 		return sdk.Record{}, fmt.Errorf("context cancelled: %w", ctx.Err())

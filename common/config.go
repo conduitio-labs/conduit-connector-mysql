@@ -14,6 +14,11 @@
 
 package common
 
+import (
+	"fmt"
+	"strings"
+)
+
 type Config struct {
 	Host     string `json:"host" validate:"required"`
 	Port     int    `json:"port" default:"3306"`
@@ -28,4 +33,16 @@ type SourceConfig struct {
 	Config
 
 	Tables []string `json:"tables" validate:"required"`
+}
+
+func (config SourceConfig) ToMap() map[string]string {
+
+	return map[string]string{
+		"host":     config.Host,
+		"port":     fmt.Sprint(config.Port),
+		"user":     config.User,
+		"password": config.Password,
+		"database": config.Database,
+		"tables":   strings.Join((config.Tables), ","),
+	}
 }

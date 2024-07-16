@@ -89,7 +89,7 @@ func (s *Source) Open(ctx context.Context, _ sdk.Position) (err error) {
 
 func (s *Source) Read(ctx context.Context) (sdk.Record, error) {
 	//nolint:wrapcheck // error already wrapped in iterator
-	return s.iterator.Next(ctx)
+	return s.iterator.Read(ctx)
 }
 
 func (s *Source) Ack(ctx context.Context, _ sdk.Position) error {

@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	sdk "github.com/conduitio/conduit-connector-sdk"
@@ -28,6 +29,10 @@ import (
 	"github.com/matryer/is"
 	"github.com/rs/zerolog"
 )
+
+func init() {
+	dump.Config(dump.WithoutPosition())
+}
 
 func Connection(is *is.I) *sqlx.DB {
 	db, err := sqlx.Open("mysql", "root:meroxaadmin@tcp(127.0.0.1:3306)/meroxadb?parseTime=true")
@@ -46,10 +51,10 @@ var TableKeys = map[common.TableName]common.PrimaryKeyName{
 }
 
 type User struct {
-	ID        int    `db:"id"`
-	Username  string `db:"username"`
-	Email     string `db:"email"`
-	CreatedAt string `db:"created_at"`
+	ID        int       `db:"id"`
+	Username  string    `db:"username"`
+	Email     string    `db:"email"`
+	CreatedAt time.Time `db:"created_at"`
 }
 
 func (u User) Update() User {
@@ -63,7 +68,7 @@ func (u User) ToStructuredData() sdk.StructuredData {
 		"id":         u.ID,
 		"username":   u.Username,
 		"email":      u.Email,
-		"created_at": u.CreatedAt,
+		"created_at": u.CreatedAt.UTC().Format(time.RFC3339),
 	}
 }
 

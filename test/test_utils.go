@@ -198,21 +198,36 @@ func IsDataEqual(is *is.I, a, b sdk.Data) {
 	equal, err := JSONBytesEqual(a.Bytes(), b.Bytes())
 	is.NoErr(err)
 
+	aS, ok_aS := a.(sdk.StructuredData)
+	bS, ok_bS := b.(sdk.StructuredData)
+
 	// dump structured datas for easier debugging
 	if !equal {
-		if _, ok := a.(sdk.StructuredData); ok {
-			dump.P(a)
+		if ok_aS {
+			dump.P(aS)
 		} else {
 			fmt.Println(string(a.Bytes()))
 		}
-		if _, ok := b.(sdk.StructuredData); ok {
-			dump.P(b)
+		if ok_bS {
+			dump.P(bS)
 		} else {
 			fmt.Println(string(b.Bytes()))
 		}
 	}
 
+	// if both are structured, let's offer a better error
+
+	if ok_aS && ok_bS {
+		for key, val := range aS {
+			is.Equal(bS[key], val)
+		}
+		return
+	}
+
+	// otherwise, simply fail the test
+
 	is.True(equal) // compared datas are not equal
+
 }
 
 // JSONBytesEqual compares the JSON in two byte slices.

@@ -28,26 +28,6 @@ func FormatValue(val any) any {
 		return val.UTC().Format(time.RFC3339)
 	case *time.Time:
 		return val.UTC().Format(time.RFC3339)
-	case int8:
-		return int(val)
-	case int16:
-		return int(val)
-	case int32:
-		return int(val)
-	case int64:
-		return int(val)
-	case uint8:
-		return int(val)
-	case uint16:
-		return int(val)
-	case uint32:
-		return int(val)
-	case uint64:
-		return int(val)
-	case float32:
-		return float64(val)
-	case float64:
-		return val
 	case []uint8:
 		s := string(val)
 		if parsed, err := time.Parse(time.DateTime, s); err == nil {

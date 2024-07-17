@@ -129,6 +129,8 @@ func ReadAndAssertInsert(
 	ctx context.Context, is *is.I,
 	iterator common.Iterator, user User,
 ) sdk.Record {
+	is.Helper()
+
 	rec, err := iterator.Read(ctx)
 	is.NoErr(err)
 	is.NoErr(iterator.Ack(ctx, rec.Position))
@@ -154,6 +156,7 @@ func ReadAndAssertUpdate(
 	ctx context.Context, is *is.I,
 	iterator common.Iterator, prev, next User,
 ) {
+	is.Helper()
 	rec, err := iterator.Read(ctx)
 	is.NoErr(err)
 	is.NoErr(iterator.Ack(ctx, rec.Position))
@@ -173,6 +176,8 @@ func ReadAndAssertDelete(
 	ctx context.Context, is *is.I,
 	iterator common.Iterator, user User,
 ) {
+	is.Helper()
+
 	rec, err := iterator.Read(ctx)
 	is.NoErr(err)
 	is.NoErr(iterator.Ack(ctx, rec.Position))
@@ -192,6 +197,7 @@ func ReadAndAssertDelete(
 }
 
 func IsDataEqual(is *is.I, a, b sdk.Data) {
+	is.Helper()
 	if a == nil && b == nil {
 		return
 	}
@@ -252,6 +258,8 @@ func ReadAndAssertSnapshot(
 	ctx context.Context, is *is.I,
 	iterator common.Iterator, user User,
 ) {
+	is.Helper()
+
 	rec, err := iterator.Read(ctx)
 	is.NoErr(err)
 	is.NoErr(iterator.Ack(ctx, rec.Position))
@@ -272,6 +280,8 @@ func ReadAndAssertSnapshot(
 }
 
 func AssertUserSnapshot(is *is.I, user User, rec sdk.Record) {
+	is.Helper()
+
 	is.Equal(rec.Operation, sdk.OperationSnapshot)
 
 	col, err := rec.Metadata.GetCollection()

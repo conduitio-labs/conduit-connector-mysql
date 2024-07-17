@@ -24,6 +24,10 @@ import (
 
 func FormatValue(val any) any {
 	switch val := val.(type) {
+	case time.Time:
+		return val.UTC().Format(time.RFC3339)
+	case *time.Time:
+		return val.UTC().Format(time.RFC3339)
 	case int8:
 		return int(val)
 	case int16:

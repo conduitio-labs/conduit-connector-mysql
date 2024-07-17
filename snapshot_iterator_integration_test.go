@@ -24,9 +24,6 @@ import (
 	testutils "github.com/conduitio-labs/conduit-connector-mysql/test"
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/matryer/is"
-
-	// the snapshot iterator uses multiple workers to fetch data from multiple
-	// tables, so goleak prevents leaking goroutines
 	"go.uber.org/goleak"
 )
 
@@ -63,14 +60,13 @@ func testSnapshotIteratorAtPosition(
 }
 
 func TestSnapshotIterator_EmptyTable(t *testing.T) {
-
 	defer goleak.VerifyNone(t)
 
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 
-	db, closeDb := testutils.Connection(is)
-	defer closeDb()
+	db, closeDB := testutils.Connection(is)
+	defer closeDB()
 
 	userTable.Recreate(is, db)
 
@@ -90,8 +86,8 @@ func TestSnapshotIterator_WithData(t *testing.T) {
 
 	is := is.New(t)
 
-	db, closeDb := testutils.Connection(is)
-	defer closeDb()
+	db, closeDB := testutils.Connection(is)
+	defer closeDB()
 
 	userTable.Recreate(is, db)
 
@@ -118,8 +114,8 @@ func TestSnapshotIterator_SmallFetchSize(t *testing.T) {
 	ctx := testutils.TestContextNoTraceLog(t)
 	is := is.New(t)
 
-	db, closeDb := testutils.Connection(is)
-	defer closeDb()
+	db, closeDB := testutils.Connection(is)
+	defer closeDB()
 
 	userTable.Recreate(is, db)
 
@@ -146,8 +142,8 @@ func TestSnapshotIterator_RestartOnPosition(t *testing.T) {
 	ctx := testutils.TestContextNoTraceLog(t)
 	is := is.New(t)
 
-	db, closeDb := testutils.Connection(is)
-	defer closeDb()
+	db, closeDB := testutils.Connection(is)
+	defer closeDB()
 
 	userTable.Recreate(is, db)
 	var users []testutils.User

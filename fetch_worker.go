@@ -57,7 +57,7 @@ func (w *fetchWorker) run(ctx context.Context) (err error) {
 	if err != nil {
 		return fmt.Errorf("failed to create transaction: %w", err)
 	}
-	defer func() { tx.Commit() }()
+	defer func() { err = errors.Join(err, tx.Commit()) }()
 
 	snapshotEnd, err := w.getMaxValue(ctx, tx)
 	if err != nil {
@@ -88,7 +88,9 @@ func (w *fetchWorker) run(ctx context.Context) (err error) {
 			select {
 			case w.data <- data:
 			case <-ctx.Done():
-				return ctx.Err()
+				return fmt.Errorf(
+					"fetch worker context done while waiting for data: %w", ctx.Err(),
+				)
 			}
 		}
 	}

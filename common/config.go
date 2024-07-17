@@ -36,7 +36,6 @@ type SourceConfig struct {
 }
 
 func (config SourceConfig) ToMap() map[string]string {
-
 	return map[string]string{
 		"host":     config.Host,
 		"port":     fmt.Sprint(config.Port),

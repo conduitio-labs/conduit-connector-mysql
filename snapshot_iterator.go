@@ -133,7 +133,7 @@ func newSnapshotIterator(
 	// - when all records are fetched from all tables
 	// - when the iterator teardown method is called
 	go func() {
-		iterator.t.Wait()
+		_ = iterator.t.Wait()
 		close(iterator.data)
 	}()
 
@@ -177,7 +177,7 @@ func (s *snapshotIterator) Teardown(ctx context.Context) error {
 
 	// waiting for the workers to finish will allow us to have an easier time
 	// debugging goroutine leaks.
-	s.t.Wait()
+	_ = s.t.Wait()
 
 	sdk.Logger(ctx).Info().Msg("all workers done")
 

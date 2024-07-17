@@ -55,8 +55,8 @@ func testCombinedIterator(ctx context.Context, is *is.I) (common.Iterator, func(
 func TestCombinedIterator(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
-	db, closeDb := testutils.Connection(is)
-	defer closeDb()
+	db, closeDB := testutils.Connection(is)
+	defer closeDB()
 
 	userTable.Recreate(is, db)
 

@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -30,12 +31,8 @@ import (
 	"github.com/rs/zerolog"
 )
 
-func init() {
-	dump.Config(dump.WithoutPosition())
-}
-
 // Connection returns a cleanup function to enforce callers to close the connection.
-// That prevents goleak errors
+// That prevents goleak errors.
 func Connection(is *is.I) (*sqlx.DB, func()) {
 	is.Helper()
 	db, err := sqlx.Open("mysql", "root:meroxaadmin@tcp(127.0.0.1:3306)/meroxadb?parseTime=true")
@@ -205,7 +202,13 @@ func ReadAndAssertDelete(
 	})
 }
 
+var configureDump = sync.OnceFunc(func() {
+	dump.Config(dump.WithoutPosition())
+})
+
 func IsDataEqual(is *is.I, a, b sdk.Data) {
+	configureDump()
+
 	is.Helper()
 	if a == nil && b == nil {
 		return
@@ -218,17 +221,17 @@ func IsDataEqual(is *is.I, a, b sdk.Data) {
 	equal, err := JSONBytesEqual(a.Bytes(), b.Bytes())
 	is.NoErr(err)
 
-	aS, ok_aS := a.(sdk.StructuredData)
-	bS, ok_bS := b.(sdk.StructuredData)
+	aS, okAS := a.(sdk.StructuredData)
+	bS, okBS := b.(sdk.StructuredData)
 
 	// dump structured datas for easier debugging
 	if !equal {
-		if ok_aS {
+		if okAS {
 			dump.P(aS)
 		} else {
 			fmt.Println(string(a.Bytes()))
 		}
-		if ok_bS {
+		if okBS {
 			dump.P(bS)
 		} else {
 			fmt.Println(string(b.Bytes()))
@@ -237,7 +240,7 @@ func IsDataEqual(is *is.I, a, b sdk.Data) {
 
 	// if both are structured, let's offer a better error
 
-	if ok_aS && ok_bS {
+	if okAS && okBS {
 		for key, val := range aS {
 			is.Equal(bS[key], val)
 		}
@@ -247,7 +250,6 @@ func IsDataEqual(is *is.I, a, b sdk.Data) {
 	// otherwise, simply fail the test
 
 	is.True(equal) // compared datas are not equal
-
 }
 
 // JSONBytesEqual compares the JSON in two byte slices.

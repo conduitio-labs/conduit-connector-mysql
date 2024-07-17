@@ -74,6 +74,7 @@ func NewCanal(config SourceConfig) (*canal.Canal, error) {
 	cfg.Password = config.Password
 
 	cfg.IncludeTableRegex = config.Tables
+	cfg.Logger = nopLogger{}
 
 	// Disable dumping
 	cfg.Dump.ExecutionPath = ""
@@ -85,3 +86,27 @@ func NewCanal(config SourceConfig) (*canal.Canal, error) {
 
 	return c, nil
 }
+
+type nopLogger struct{}
+
+func (n nopLogger) Debug(...any)          {}
+func (n nopLogger) Debugf(string, ...any) {}
+func (n nopLogger) Debugln(...any)        {}
+func (n nopLogger) Error(...any)          {}
+func (n nopLogger) Errorf(string, ...any) {}
+func (n nopLogger) Errorln(...any)        {}
+func (n nopLogger) Fatal(...any)          {}
+func (n nopLogger) Fatalf(string, ...any) {}
+func (n nopLogger) Fatalln(...any)        {}
+func (n nopLogger) Info(...any)           {}
+func (n nopLogger) Infof(string, ...any)  {}
+func (n nopLogger) Infoln(...any)         {}
+func (n nopLogger) Panic(...any)          {}
+func (n nopLogger) Panicf(string, ...any) {}
+func (n nopLogger) Panicln(...any)        {}
+func (n nopLogger) Print(...any)          {}
+func (n nopLogger) Printf(string, ...any) {}
+func (n nopLogger) Println(...any)        {}
+func (n nopLogger) Warn(...any)           {}
+func (n nopLogger) Warnf(string, ...any)  {}
+func (n nopLogger) Warnln(...any)         {}

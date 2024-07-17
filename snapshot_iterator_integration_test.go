@@ -68,10 +68,9 @@ func TestSnapshotIterator_EmptyTable(t *testing.T) {
 	defer cleanup()
 
 	_, err := it.Read(ctx)
-	if errors.Is(err, ErrSnapshotIteratorDone) {
-		return
+	if !errors.Is(err, ErrSnapshotIteratorDone) {
+		is.NoErr(err)
 	}
-	is.NoErr(err)
 }
 
 func TestSnapshotIterator_WithData(t *testing.T) {

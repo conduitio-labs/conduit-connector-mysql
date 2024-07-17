@@ -87,6 +87,7 @@ func NewCanal(config SourceConfig) (*canal.Canal, error) {
 	return c, nil
 }
 
+// nopLogger disables logging for mysql canal
 type nopLogger struct{}
 
 func (n nopLogger) Debug(...any)          {}

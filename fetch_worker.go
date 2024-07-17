@@ -46,7 +46,7 @@ func newFetchWorker(db *sqlx.DB, data chan fetchData, config fetchWorkerConfig) 
 	}
 }
 
-func (w *fetchWorker) run(ctx context.Context) error {
+func (w *fetchWorker) run(ctx context.Context) (err error) {
 	sdk.Logger(ctx).Info().Msgf("starting fetcher for table %q", w.config.table)
 
 	tx, err := w.db.BeginTxx(ctx, &sql.TxOptions{

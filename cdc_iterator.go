@@ -117,7 +117,6 @@ func (c *cdcIterator) runCanal(ctx context.Context, startPos mysql.Position) err
 
 	select {
 	case <-ctx.Done():
-		c.canal.Close()
 		return fmt.Errorf("context cancelled from runCanal: %w", ctx.Err())
 	case err := <-errChan:
 		return fmt.Errorf("failed to run canal: %w", err)
@@ -158,6 +157,8 @@ func (c *cdcIterator) Teardown(context.Context) error {
 	if c.canalTomb != nil {
 		c.canalTomb.Kill(errors.New("tearing down snapshot iterator"))
 	}
+
+	c.canal.Close()
 
 	return nil
 }

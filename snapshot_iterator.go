@@ -169,6 +169,10 @@ func (s *snapshotIterator) Teardown(_ context.Context) error {
 		s.t.Kill(errors.New("tearing down snapshot iterator"))
 	}
 
+	if err := s.db.Close(); err != nil {
+		return fmt.Errorf("failed to close database: %w", err)
+	}
+
 	return nil
 }
 

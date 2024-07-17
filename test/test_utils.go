@@ -242,7 +242,7 @@ func IsDataEqual(is *is.I, a, b sdk.Data) {
 
 	if okAS && okBS {
 		for key, val := range aS {
-			is.Equal(bS[key], val)
+			is.Equal(val, bS[key])
 		}
 		return
 	}

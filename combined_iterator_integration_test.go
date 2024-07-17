@@ -25,10 +25,11 @@ import (
 )
 
 func testCombinedIterator(ctx context.Context, is *is.I) (common.Iterator, func()) {
+	db, _ := testutils.Connection(is)
 	iterator, err := newCombinedIterator(ctx, combinedIteratorConfig{
 		snapshotConfig: snapshotIteratorConfig{
 			tableKeys: testutils.TableKeys,
-			db:        testutils.Connection(is),
+			db:        db,
 			database:  "meroxadb",
 			tables:    []string{"users"},
 		},
@@ -54,7 +55,8 @@ func testCombinedIterator(ctx context.Context, is *is.I) (common.Iterator, func(
 func TestCombinedIterator(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
-	db := testutils.Connection(is)
+	db, closeDb := testutils.Connection(is)
+	defer closeDb()
 
 	userTable.Recreate(is, db)
 

@@ -47,7 +47,8 @@ func newFetchWorker(db *sqlx.DB, data chan fetchData, config fetchWorkerConfig) 
 }
 
 func (w *fetchWorker) run(ctx context.Context) (err error) {
-	sdk.Logger(ctx).Info().Msgf("starting fetcher for table %q", w.config.table)
+	sdk.Logger(ctx).Info().Msgf("started fetcher for table %q", w.config.table)
+	defer sdk.Logger(ctx).Info().Msgf("finished fetcher for table %q", w.config.table)
 
 	tx, err := w.db.BeginTxx(ctx, &sql.TxOptions{
 		Isolation: sql.LevelRepeatableRead,
@@ -56,6 +57,7 @@ func (w *fetchWorker) run(ctx context.Context) (err error) {
 	if err != nil {
 		return fmt.Errorf("failed to create transaction: %w", err)
 	}
+	defer func() { tx.Commit() }()
 
 	snapshotEnd, err := w.getMaxValue(ctx, tx)
 	if err != nil {
@@ -83,7 +85,11 @@ func (w *fetchWorker) run(ctx context.Context) (err error) {
 				return fmt.Errorf("failed to build fetch data: %w", err)
 			}
 
-			w.data <- data
+			select {
+			case w.data <- data:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		}
 	}
 

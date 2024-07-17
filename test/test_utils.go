@@ -34,16 +34,25 @@ func init() {
 	dump.Config(dump.WithoutPosition())
 }
 
-func Connection(is *is.I) *sqlx.DB {
+// Connection returns a cleanup function to enforce callers to close the connection.
+// That prevents goleak errors
+func Connection(is *is.I) (*sqlx.DB, func()) {
+	is.Helper()
 	db, err := sqlx.Open("mysql", "root:meroxaadmin@tcp(127.0.0.1:3306)/meroxadb?parseTime=true")
 	is.NoErr(err)
 
-	return db
+	return db, func() { is.NoErr(db.Close()) }
 }
 
 func TestContext(t *testing.T) context.Context {
 	logger := zerolog.New(zerolog.NewTestWriter(t))
 	return logger.WithContext(context.Background())
+}
+
+func TestContextNoTraceLog(t *testing.T) context.Context {
+	logger := zerolog.New(zerolog.NewTestWriter(t))
+
+	return logger.Level(zerolog.DebugLevel).WithContext(context.Background())
 }
 
 var TableKeys = map[common.TableName]common.PrimaryKeyName{

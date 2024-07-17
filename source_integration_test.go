@@ -31,7 +31,9 @@ func testSource(ctx context.Context, is *is.I) (sdk.Source, func()) {
 func TestSource_ConsistentSnapshot(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
-	db := testutils.Connection(is)
+
+	db, closeDb := testutils.Connection(is)
+	defer closeDb()
 
 	userTable.Recreate(is, db)
 

@@ -124,6 +124,7 @@ func newSnapshotIterator(
 			primaryKey:   primaryKey,
 		})
 		iterator.t.Go(func() error {
+			ctx := iterator.t.Context(ctx)
 			return worker.run(ctx)
 		})
 	}
@@ -132,7 +133,7 @@ func newSnapshotIterator(
 	// - when all records are fetched from all tables
 	// - when the iterator teardown method is called
 	go func() {
-		<-iterator.t.Dead()
+		iterator.t.Wait()
 		close(iterator.data)
 	}()
 
@@ -151,8 +152,13 @@ func (s *snapshotIterator) Read(ctx context.Context) (sdk.Record, error) {
 			if err := s.acks.Wait(ctx); err != nil {
 				return sdk.Record{}, fmt.Errorf("failed to wait for acks: %w", err)
 			}
+
+			sdk.Logger(ctx).Info().Msg("last snapshot read already done")
+
 			return sdk.Record{}, ErrSnapshotIteratorDone
 		}
+
+		sdk.Logger(ctx).Trace().Msg("received snapshot fetch data")
 
 		s.acks.Add(1)
 		return s.buildRecord(data), nil
@@ -164,14 +170,24 @@ func (s *snapshotIterator) Ack(_ context.Context, _ sdk.Position) error {
 	return nil
 }
 
-func (s *snapshotIterator) Teardown(_ context.Context) error {
+func (s *snapshotIterator) Teardown(ctx context.Context) error {
 	if s.t != nil {
 		s.t.Kill(errors.New("tearing down snapshot iterator"))
 	}
 
-	if err := s.db.Close(); err != nil {
-		return fmt.Errorf("failed to close database: %w", err)
+	// waiting for the workers to finish will allow us to have an easier time
+	// debugging goroutine leaks.
+	s.t.Wait()
+
+	sdk.Logger(ctx).Info().Msg("all workers done")
+
+	if s.db != nil {
+		if err := s.db.Close(); err != nil {
+			return fmt.Errorf("failed to close database: %w", err)
+		}
 	}
+
+	sdk.Logger(ctx).Info().Msg("teared down snapshot iterator")
 
 	return nil
 }

@@ -240,7 +240,7 @@ func IsDataEqual(is *is.I, a, b sdk.Data) {
 
 	// if both are structured, let's offer a better error
 
-	if okAS && okBS {
+	if okAS && okBS && !equal {
 		for key, val := range aS {
 			is.Equal(val, bS[key])
 		}

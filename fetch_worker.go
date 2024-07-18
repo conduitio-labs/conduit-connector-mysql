@@ -99,9 +99,9 @@ func (w *fetchWorker) run(ctx context.Context) (err error) {
 }
 
 // getMaxValue fetches the maximum value of the primary key from the table.
-func (w *fetchWorker) getMaxValue(ctx context.Context, tx *sqlx.Tx) (int, error) {
+func (w *fetchWorker) getMaxValue(ctx context.Context, tx *sqlx.Tx) (int64, error) {
 	var maxValueRow struct {
-		MaxValue *int `db:"max_value"`
+		MaxValue *int64 `db:"max_value"`
 	}
 
 	query := fmt.Sprintf(
@@ -128,7 +128,7 @@ func (w *fetchWorker) getMaxValue(ctx context.Context, tx *sqlx.Tx) (int, error)
 func (w *fetchWorker) selectRowsChunk(
 	ctx context.Context,
 	tx *sqlx.Tx,
-	start, end int,
+	start, end int64,
 ) (scannedRows []sdk.StructuredData, err error) {
 	query := fmt.Sprint(`
 		SELECT *

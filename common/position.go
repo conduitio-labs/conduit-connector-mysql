@@ -71,8 +71,8 @@ func ParseSDKPosition(p sdk.Position) (Position, error) {
 type SnapshotPositions map[TableName]TablePosition
 
 type TablePosition struct {
-	LastRead    int `json:"last_read"`
-	SnapshotEnd int `json:"snapshot_end"`
+	LastRead    int64 `json:"last_read"`
+	SnapshotEnd int64 `json:"snapshot_end"`
 }
 
 type CdcPosition struct {

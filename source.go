@@ -14,32 +14,23 @@
 
 package mysql
 
-//go:generate paramgen -output=paramgen_src.go SourceConfig
-
 import (
 	"context"
 	"fmt"
 
+	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	sdk "github.com/conduitio/conduit-connector-sdk"
-	// apply mysql driver.
-	_ "github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 )
 
 type Source struct {
 	sdk.UnimplementedSource
 
-	config SourceConfig
+	config common.SourceConfig
 
 	db *sqlx.DB
 
-	iterator Iterator
-}
-
-type SourceConfig struct {
-	Config
-
-	Tables []string `json:"tables" validate:"required"`
+	iterator common.Iterator
 }
 
 func NewSource() sdk.Source {
@@ -63,15 +54,21 @@ func (s *Source) Configure(ctx context.Context, cfg map[string]string) error {
 }
 
 func (s *Source) Open(ctx context.Context, _ sdk.Position) (err error) {
-	s.db, err = connect(s.config.Config)
+	s.db, err = common.NewSqlxDB(s.config.Config)
 	if err != nil {
 		return fmt.Errorf("failed to connect to mysql: %w", err)
 	}
 
+	tableKeys, err := getTableKeys(s.db, s.config.Database, s.config.Tables)
+	if err != nil {
+		return fmt.Errorf("failed to get table keys: %w", err)
+	}
+
 	s.iterator, err = newSnapshotIterator(ctx, snapshotIteratorConfig{
-		db:       s.db,
-		database: s.config.Database,
-		tables:   s.config.Tables,
+		db:        s.db,
+		tableKeys: tableKeys,
+		database:  s.config.Database,
+		tables:    s.config.Tables,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create snapshot iterator: %w", err)

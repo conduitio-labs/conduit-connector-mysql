@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package mysql
+package common
 
 type Config struct {
 	Host     string `json:"host" validate:"required"`
@@ -20,4 +20,12 @@ type Config struct {
 	User     string `json:"user" validate:"required"`
 	Password string `json:"password" validate:"required"`
 	Database string `json:"database" validate:"required"`
+}
+
+//go:generate paramgen -output=paramgen_src.go SourceConfig
+
+type SourceConfig struct {
+	Config
+
+	Tables []string `json:"tables" validate:"required"`
 }

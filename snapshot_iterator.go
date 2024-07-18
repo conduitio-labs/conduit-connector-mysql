@@ -20,69 +20,21 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	"github.com/conduitio/conduit-commons/csync"
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/jmoiron/sqlx"
 	"gopkg.in/tomb.v2"
 )
 
-var ErrIteratorDone = errors.New("snapshot complete")
+var ErrSnapshotIteratorDone = errors.New("snapshot complete")
 
 const defaultFetchSize = 50000
 
-// Iterator is an object that can iterate over a queue of records.
-type Iterator interface {
-	// Next takes and returns the next record from the queue. Next is allowed to
-	// block until either a record is available or the context gets canceled.
-	Next(context.Context) (sdk.Record, error)
-	// Ack signals that a record at a specific position was successfully
-	// processed.
-	Ack(context.Context, sdk.Position) error
-	// Teardown attempts to gracefully teardown the iterator.
-	Teardown(context.Context) error
-}
-
-type position struct {
-	Snapshots snapshotPositions `json:"snapshots,omitempty"`
-}
-
-func (p position) ToSDKPosition() sdk.Position {
-	v, err := json.Marshal(p)
-	if err != nil {
-		// This should never happen, all Position structs should be valid.
-		panic(err)
-	}
-	return v
-}
-
-func (p position) Clone() position {
-	var newPosition position
-	newPosition.Snapshots = make(map[tableName]snapshotPosition)
-	for k, v := range p.Snapshots {
-		newPosition.Snapshots[k] = v
-	}
-	return newPosition
-}
-
-func parseSDKPosition(p sdk.Position) (position, error) {
-	var pos position
-	if err := json.Unmarshal(p, &pos); err != nil {
-		return position{}, fmt.Errorf("failed to parse position: %w", err)
-	}
-	return pos, nil
-}
-
-type snapshotPositions map[tableName]snapshotPosition
-
-type snapshotPosition struct {
-	LastRead    int `json:"last_read"`
-	SnapshotEnd int `json:"snapshot_end"`
-}
-
 type snapshotKey struct {
-	Table tableName      `json:"table"`
-	Key   primaryKeyName `json:"key"`
-	Value int            `json:"value"`
+	Table common.TableName      `json:"table"`
+	Key   common.PrimaryKeyName `json:"key"`
+	Value any                   `json:"value"`
 }
 
 func (key snapshotKey) ToSDKData() sdk.Data {
@@ -104,7 +56,7 @@ type (
 	fetchData struct {
 		key      snapshotKey
 		payload  sdk.StructuredData
-		position snapshotPosition
+		position common.TablePosition
 	}
 	snapshotIterator struct {
 		db           *sqlx.DB
@@ -112,26 +64,21 @@ type (
 		data         chan fetchData
 		acks         csync.WaitGroup
 		fetchSize    int
-		lastPosition position
+		lastPosition common.SnapshotPosition
 	}
 	snapshotIteratorConfig struct {
 		db            *sqlx.DB
+		tableKeys     common.TableKeys
 		fetchSize     int
-		startPosition position
+		startPosition common.SnapshotPosition
 		database      string
 		tables        []string
 	}
 )
 
-type (
-	primaryKeyName string
-	tableName      string
-	TableKeys      map[tableName]primaryKeyName
-)
-
-func (config *snapshotIteratorConfig) init() (TableKeys, error) {
+func (config *snapshotIteratorConfig) init() error {
 	if config.startPosition.Snapshots == nil {
-		config.startPosition.Snapshots = make(map[tableName]snapshotPosition)
+		config.startPosition.Snapshots = make(map[common.TableName]common.TablePosition)
 	}
 
 	if config.fetchSize == 0 {
@@ -139,32 +86,20 @@ func (config *snapshotIteratorConfig) init() (TableKeys, error) {
 	}
 
 	if config.database == "" {
-		return nil, fmt.Errorf("database is required")
+		return fmt.Errorf("database is required")
 	}
 	if len(config.tables) == 0 {
-		return nil, fmt.Errorf("tables is required")
+		return fmt.Errorf("tables is required")
 	}
 
-	tableKeys := make(TableKeys)
-
-	for _, table := range config.tables {
-		primaryKey, err := getPrimaryKey(config.db, config.database, table)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get primary key for table %q: %w", table, err)
-		}
-
-		tableKeys[tableName(table)] = primaryKey
-	}
-
-	return tableKeys, nil
+	return nil
 }
 
 func newSnapshotIterator(
 	ctx context.Context,
 	config snapshotIteratorConfig,
-) (Iterator, error) {
-	tableKeys, err := config.init()
-	if err != nil {
+) (common.Iterator, error) {
+	if err := config.init(); err != nil {
 		return nil, fmt.Errorf("invalid snapshot iterator config: %w", err)
 	}
 
@@ -181,7 +116,7 @@ func newSnapshotIterator(
 		lastPosition: lastPosition,
 	}
 
-	for table, primaryKey := range tableKeys {
+	for table, primaryKey := range config.tableKeys {
 		worker := newFetchWorker(iterator.db, iterator.data, fetchWorkerConfig{
 			lastPosition: iterator.lastPosition,
 			table:        table,
@@ -216,7 +151,7 @@ func (s *snapshotIterator) Next(ctx context.Context) (sdk.Record, error) {
 			if err := s.acks.Wait(ctx); err != nil {
 				return sdk.Record{}, fmt.Errorf("failed to wait for acks: %w", err)
 			}
-			return sdk.Record{}, ErrIteratorDone
+			return sdk.Record{}, ErrSnapshotIteratorDone
 		}
 
 		s.acks.Add(1)
@@ -242,15 +177,16 @@ func (s *snapshotIterator) buildRecord(d fetchData) sdk.Record {
 
 	pos := s.lastPosition.ToSDKPosition()
 	metadata := make(sdk.Metadata)
-	metadata["postgres.table"] = string(d.key.Table)
+	metadata.SetCollection(string(d.key.Table))
+
 	key := d.key.ToSDKData()
 
 	return sdk.Util.Source.NewRecordSnapshot(pos, metadata, key, d.payload)
 }
 
-func getPrimaryKey(db *sqlx.DB, database, table string) (primaryKeyName, error) {
+func getPrimaryKey(db *sqlx.DB, database, table string) (common.PrimaryKeyName, error) {
 	var primaryKey struct {
-		ColumnName primaryKeyName `db:"COLUMN_NAME"`
+		ColumnName common.PrimaryKeyName `db:"COLUMN_NAME"`
 	}
 
 	row := db.QueryRowx(`
@@ -270,4 +206,19 @@ func getPrimaryKey(db *sqlx.DB, database, table string) (primaryKeyName, error) 
 	}
 
 	return primaryKey.ColumnName, nil
+}
+
+func getTableKeys(db *sqlx.DB, database string, tables []string) (common.TableKeys, error) {
+	tableKeys := make(common.TableKeys)
+
+	for _, table := range tables {
+		primaryKey, err := getPrimaryKey(db, database, table)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get primary key for table %q: %w", table, err)
+		}
+
+		tableKeys[common.TableName(table)] = primaryKey
+	}
+
+	return tableKeys, nil
 }

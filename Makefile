@@ -6,7 +6,7 @@ build:
 
 .PHONY: test-integration
 test-integration: up-database
-	go test $(GOTEST_FLAGS) -v -race ./...; ret=$$?; \
+	go test -v -race ./...; ret=$$?; \
 		docker compose -f test/docker-compose.yml down; \
 		exit $$ret
 

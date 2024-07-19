@@ -16,8 +16,10 @@ package mysql
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
+	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/jmoiron/sqlx"
 )
@@ -29,10 +31,10 @@ type fetchWorker struct {
 }
 
 type fetchWorkerConfig struct {
-	lastPosition position
-	table        tableName
+	lastPosition common.SnapshotPosition
+	table        common.TableName
 	fetchSize    int
-	primaryKey   primaryKeyName
+	primaryKey   common.PrimaryKeyName
 }
 
 func newFetchWorker(db *sqlx.DB, data chan fetchData, config fetchWorkerConfig) *fetchWorker {
@@ -63,7 +65,7 @@ func (w *fetchWorker) run(ctx context.Context) error {
 
 		for _, row := range rows {
 			lastRead++
-			position := snapshotPosition{
+			position := common.TablePosition{
 				LastRead:    lastRead,
 				SnapshotEnd: snapshotEnd,
 			}
@@ -80,9 +82,9 @@ func (w *fetchWorker) run(ctx context.Context) error {
 }
 
 // getMaxValue fetches the maximum value of the primary key from the table.
-func (w *fetchWorker) getMaxValue(ctx context.Context) (int, error) {
+func (w *fetchWorker) getMaxValue(ctx context.Context) (int64, error) {
 	var maxValueRow struct {
-		MaxValue *int `db:"max_value"`
+		MaxValue *int64 `db:"max_value"`
 	}
 
 	query := fmt.Sprintf(
@@ -108,7 +110,7 @@ func (w *fetchWorker) getMaxValue(ctx context.Context) (int, error) {
 
 func (w *fetchWorker) selectRowsChunk(
 	ctx context.Context,
-	start, end int,
+	start, end int64,
 ) (scannedRows []sdk.StructuredData, err error) {
 	query := fmt.Sprint(`
 		SELECT *
@@ -133,15 +135,22 @@ func (w *fetchWorker) selectRowsChunk(
 		if closeErr := rows.Close(); err != nil {
 			if err == nil {
 				err = fmt.Errorf("failed to close rows: %w", closeErr)
+			} else {
+				err = errors.Join(err, fmt.Errorf("failed to close rows: %w", closeErr))
 			}
 		}
 	}()
 
 	for rows.Next() {
-		row := map[string]any{}
+		row := sdk.StructuredData{}
 		if err := rows.MapScan(row); err != nil {
-			logDataEvt.Msg("failed to scan row")
-			return nil, fmt.Errorf("failed to scan row: %w", err)
+			logDataEvt.Msg("failed to map scan row")
+			return nil, fmt.Errorf("failed to map scan row: %w", err)
+		}
+
+		// convert the values so that they can be easily serialized
+		for key, val := range row {
+			row[key] = common.FormatValue(val)
 		}
 
 		scannedRows = append(scannedRows, row)
@@ -156,44 +165,20 @@ func (w *fetchWorker) selectRowsChunk(
 
 func (w *fetchWorker) buildFetchData(
 	payload sdk.StructuredData,
-	position snapshotPosition,
+	position common.TablePosition,
 ) (fetchData, error) {
-	keyValue, err := primaryKeyValueFromData(w.config.primaryKey, payload)
-	if err != nil {
-		return fetchData{}, fmt.Errorf("failed to get primary key from payload: %w", err)
+	keyVal, ok := payload[string(w.config.primaryKey)]
+	if !ok {
+		return fetchData{}, fmt.Errorf("key %s not found in payload", w.config.primaryKey)
 	}
 
 	return fetchData{
 		key: snapshotKey{
 			Table: w.config.table,
 			Key:   w.config.primaryKey,
-			Value: keyValue,
+			Value: keyVal,
 		},
 		payload:  payload,
 		position: position,
 	}, nil
-}
-
-func primaryKeyValueFromData(key primaryKeyName, data sdk.StructuredData) (int, error) {
-	val, ok := data[string(key)]
-	if !ok {
-		return 0, fmt.Errorf("key %s not found in payload", key)
-	}
-
-	switch val := val.(type) {
-	case int:
-		return val, nil
-	case int32:
-		return int(val), nil
-	case int64:
-		return int(val), nil
-	case uint:
-		return int(val), nil
-	case uint32:
-		return int(val), nil
-	case uint64:
-		return int(val), nil
-	default:
-		return 0, fmt.Errorf("key %s has unexpected type %T", key, val)
-	}
 }

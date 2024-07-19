@@ -28,11 +28,7 @@ func testSource(ctx context.Context, is *is.I) (sdk.Source, func()) {
 	source := NewSource()
 	source.Configure(ctx, common.SourceConfig{
 		Config: common.Config{
-			Host:     "127.0.0.1",
-			Port:     3306,
-			User:     "root",
-			Password: "meroxaadmin",
-			Database: "meroxadb",
+			URL: testutils.DSN,
 		},
 		Tables: []string{"users"},
 	}.ToMap())

@@ -14,17 +14,11 @@
 
 package common
 
-import (
-	"fmt"
-	"strings"
-)
+import "strings"
 
 type Config struct {
-	Host     string `json:"host" validate:"required"`
-	Port     int    `json:"port" default:"3306"`
-	User     string `json:"user" validate:"required"`
-	Password string `json:"password" validate:"required"`
-	Database string `json:"database" validate:"required"`
+	// URL is the connection string for the Mysql database.
+	URL string `json:"url" validate:"required"`
 }
 
 //go:generate paramgen -output=paramgen_src.go SourceConfig
@@ -37,11 +31,7 @@ type SourceConfig struct {
 
 func (config SourceConfig) ToMap() map[string]string {
 	return map[string]string{
-		"host":     config.Host,
-		"port":     fmt.Sprint(config.Port),
-		"user":     config.User,
-		"password": config.Password,
-		"database": config.Database,
-		"tables":   strings.Join((config.Tables), ","),
+		"url":    config.URL,
+		"tables": strings.Join(config.Tables, ","),
 	}
 }

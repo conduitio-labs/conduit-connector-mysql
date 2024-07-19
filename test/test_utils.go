@@ -31,11 +31,13 @@ import (
 	"github.com/rs/zerolog"
 )
 
+const DSN = "root:meroxaadmin@tcp(127.0.0.1:3306)/meroxadb?parseTime=true"
+
 // Connection returns a cleanup function to enforce callers to close the connection.
 // That prevents goleak errors.
 func Connection(is *is.I) (*sqlx.DB, func()) {
 	is.Helper()
-	db, err := sqlx.Open("mysql", "root:meroxaadmin@tcp(127.0.0.1:3306)/meroxadb?parseTime=true")
+	db, err := sqlx.Open("mysql", DSN)
 	is.NoErr(err)
 
 	return db, func() { is.NoErr(db.Close()) }

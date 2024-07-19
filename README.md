@@ -29,14 +29,12 @@ CDC mode is the second stage of the source sync process. It listens to the confi
 
 ### Configuration
 
-| name       | description                                            | required | default value |
-| ---------- | ------------------------------------------------------ | -------- | ------------- |
-| `host`     | The hostname or IP address of the MySQL server         | true     |               |
-| `port`     | The port number on which the MySQL server is listening | false    | 3306          |
-| `user`     | The MySQL user account name for authentication         | true     |               |
-| `password` | The password for the MySQL user account                | true     |               |
-| `database` | The name of the specific MySQL database to connect to  | true     |               |
-| `tables`   | The list of tables to pull data from                   | true     |               |
+| name     | description                                                                                                                                         | required | default value |
+| -------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------------- |
+| `url`    | The connection URL of the MySQL, in the following format (\*): [username[:password]@][protocol[(address)]]/dbname[?param1=value1&...&paramN=valueN] | true     |               |
+| `tables` | The list of tables to pull data from                                                                                                                | true     |               |
+
+(\*): You can find more information [here](https://github.com/go-sql-driver/mysql?tab=readme-ov-file#dsn-data-source-name). For example: `username:password@tcp(127.0.0.1:3306)/dbname`
 
 ## Planned work
 

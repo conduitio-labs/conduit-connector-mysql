@@ -21,11 +21,16 @@ import (
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	testutils "github.com/conduitio-labs/conduit-connector-mysql/test"
+	"github.com/go-sql-driver/mysql"
 	"github.com/matryer/is"
 )
 
 func testCombinedIterator(ctx context.Context, is *is.I) (common.Iterator, func()) {
 	db, _ := testutils.Connection(is)
+
+	config, err := mysql.ParseDSN(testutils.DSN)
+	is.NoErr(err)
+
 	iterator, err := newCombinedIterator(ctx, combinedIteratorConfig{
 		snapshotConfig: snapshotIteratorConfig{
 			tableKeys: testutils.TableKeys,
@@ -34,17 +39,9 @@ func testCombinedIterator(ctx context.Context, is *is.I) (common.Iterator, func(
 			tables:    []string{"users"},
 		},
 		cdcConfig: cdcIteratorConfig{
-			SourceConfig: common.SourceConfig{
-				Config: common.Config{
-					Host:     "127.0.0.1",
-					Port:     3306,
-					User:     "root",
-					Password: "meroxaadmin",
-					Database: "meroxadb",
-				},
-				Tables: []string{"users"},
-			},
-			TableKeys: testutils.TableKeys,
+			mysqlConfig: config,
+			tables:      []string{"users"},
+			TableKeys:   testutils.TableKeys,
 		},
 	})
 	is.NoErr(err)

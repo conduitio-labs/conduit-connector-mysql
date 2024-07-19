@@ -26,6 +26,7 @@ import (
 	"github.com/go-mysql-org/go-mysql/canal"
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/schema"
+	mysqldriver "github.com/go-sql-driver/mysql"
 	"gopkg.in/tomb.v2"
 )
 
@@ -41,13 +42,14 @@ type cdcIterator struct {
 }
 
 type cdcIteratorConfig struct {
-	common.SourceConfig
-	position  sdk.Position
-	TableKeys common.TableKeys
+	tables      []string
+	mysqlConfig *mysqldriver.Config
+	position    *common.CdcPosition
+	TableKeys   common.TableKeys
 }
 
 func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (common.Iterator, error) {
-	c, err := common.NewCanal(config.SourceConfig)
+	c, err := common.NewCanal(config.mysqlConfig, config.tables)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create canal: %w", err)
 	}
@@ -84,15 +86,7 @@ func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (common.Itera
 
 func (c *cdcIterator) getStartPosition(config cdcIteratorConfig) (mysql.Position, error) {
 	if config.position != nil {
-		pos, err := common.ParseSDKPosition(config.position)
-		if err != nil {
-			return mysql.Position{}, fmt.Errorf("failed to parse position: %w", err)
-		}
-		if pos.Kind == common.PositionTypeSnapshot {
-			return mysql.Position{}, fmt.Errorf("invalid position type: %s", pos.Kind)
-		}
-
-		return pos.CdcPosition.Position, nil
+		return config.position.Position, nil
 	}
 
 	masterPos, err := c.canal.GetMasterPos()

@@ -134,7 +134,9 @@ func (c *cdcIterator) Ack(context.Context, sdk.Position) error {
 func (c *cdcIterator) Next(ctx context.Context) (sdk.Record, error) {
 	select {
 	case <-ctx.Done():
-		return sdk.Record{}, fmt.Errorf("context cancelled: %w", ctx.Err())
+		return sdk.Record{}, fmt.Errorf(
+			"context cancelled from cdc iterator next call: %w", ctx.Err(),
+		)
 	case data, ok := <-c.data:
 		if !ok { // closed
 			if err := c.canalTomb.Err(); err != nil {

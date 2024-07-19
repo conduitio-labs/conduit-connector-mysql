@@ -142,7 +142,9 @@ func newSnapshotIterator(
 func (s *snapshotIterator) Next(ctx context.Context) (sdk.Record, error) {
 	select {
 	case <-ctx.Done():
-		return sdk.Record{}, fmt.Errorf("context cancelled: %w", ctx.Err())
+		return sdk.Record{}, fmt.Errorf(
+			"context cancelled from snapshot iterator next call: %w", ctx.Err(),
+		)
 	case data, ok := <-s.data:
 		if !ok { // closed
 			if err := s.t.Err(); err != nil {

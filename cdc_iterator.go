@@ -26,6 +26,7 @@ import (
 	"github.com/go-mysql-org/go-mysql/canal"
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/schema"
+	mysqldriver "github.com/go-sql-driver/mysql"
 	"gopkg.in/tomb.v2"
 )
 
@@ -41,13 +42,14 @@ type cdcIterator struct {
 }
 
 type cdcIteratorConfig struct {
-	common.SourceConfig
-	position  sdk.Position
-	TableKeys common.TableKeys
+	tables      []string
+	mysqlConfig *mysqldriver.Config
+	position    sdk.Position
+	TableKeys   common.TableKeys
 }
 
 func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (common.Iterator, error) {
-	c, err := common.NewCanal(config.SourceConfig)
+	c, err := common.NewCanal(config.mysqlConfig, config.tables)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create canal: %w", err)
 	}

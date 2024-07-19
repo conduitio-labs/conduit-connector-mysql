@@ -19,7 +19,7 @@ func (DestinationConfig) Parameters() map[string]sdk.Parameter {
 		},
 		"url": {
 			Default:     "",
-			Description: "",
+			Description: "url is the connection string for the Mysql database.",
 			Type:        sdk.ParameterTypeString,
 			Validations: []sdk.Validation{
 				sdk.ValidationRequired{},

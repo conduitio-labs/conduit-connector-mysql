@@ -15,5 +15,6 @@
 package mysql
 
 type Config struct {
+	// URL is the connection string for the Mysql database.
 	URL string `json:"url" validate:"required"`
 }

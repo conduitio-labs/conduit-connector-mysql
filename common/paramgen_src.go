@@ -9,36 +9,6 @@ import (
 
 func (SourceConfig) Parameters() map[string]sdk.Parameter {
 	return map[string]sdk.Parameter{
-		"database": {
-			Default:     "",
-			Description: "",
-			Type:        sdk.ParameterTypeString,
-			Validations: []sdk.Validation{
-				sdk.ValidationRequired{},
-			},
-		},
-		"host": {
-			Default:     "",
-			Description: "",
-			Type:        sdk.ParameterTypeString,
-			Validations: []sdk.Validation{
-				sdk.ValidationRequired{},
-			},
-		},
-		"password": {
-			Default:     "",
-			Description: "",
-			Type:        sdk.ParameterTypeString,
-			Validations: []sdk.Validation{
-				sdk.ValidationRequired{},
-			},
-		},
-		"port": {
-			Default:     "3306",
-			Description: "",
-			Type:        sdk.ParameterTypeInt,
-			Validations: []sdk.Validation{},
-		},
 		"tables": {
 			Default:     "",
 			Description: "",
@@ -47,9 +17,9 @@ func (SourceConfig) Parameters() map[string]sdk.Parameter {
 				sdk.ValidationRequired{},
 			},
 		},
-		"user": {
+		"url": {
 			Default:     "",
-			Description: "",
+			Description: "url is the connection string for the Mysql database.",
 			Type:        sdk.ParameterTypeString,
 			Validations: []sdk.Validation{
 				sdk.ValidationRequired{},

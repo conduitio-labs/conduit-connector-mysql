@@ -20,13 +20,15 @@ import (
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	sdk "github.com/conduitio/conduit-connector-sdk"
+	"github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 )
 
 type Source struct {
 	sdk.UnimplementedSource
 
-	config common.SourceConfig
+	config        common.SourceConfig
+	configFromDsn *mysql.Config
 
 	db *sqlx.DB
 
@@ -44,9 +46,14 @@ func (s *Source) Parameters() map[string]sdk.Parameter {
 	return s.config.Parameters()
 }
 
-func (s *Source) Configure(ctx context.Context, cfg map[string]string) error {
+func (s *Source) Configure(ctx context.Context, cfg map[string]string) (err error) {
 	if err := sdk.Util.ParseConfig(cfg, &s.config); err != nil {
 		return fmt.Errorf("invalid config: %w", err)
+	}
+
+	s.configFromDsn, err = mysql.ParseDSN(s.config.URL)
+	if err != nil {
+		return fmt.Errorf("failed to parse given URL: %w", err)
 	}
 
 	sdk.Logger(ctx).Info().Msg("configured source connector")
@@ -54,12 +61,12 @@ func (s *Source) Configure(ctx context.Context, cfg map[string]string) error {
 }
 
 func (s *Source) Open(ctx context.Context, _ sdk.Position) (err error) {
-	s.db, err = common.NewSqlxDB(s.config.Config)
+	s.db, err = sqlx.Open("mysql", s.config.URL)
 	if err != nil {
 		return fmt.Errorf("failed to connect to mysql: %w", err)
 	}
 
-	tableKeys, err := getTableKeys(s.db, s.config.Database, s.config.Tables)
+	tableKeys, err := getTableKeys(s.db, s.configFromDsn.DBName, s.config.Tables)
 	if err != nil {
 		return fmt.Errorf("failed to get table keys: %w", err)
 	}
@@ -67,7 +74,7 @@ func (s *Source) Open(ctx context.Context, _ sdk.Position) (err error) {
 	s.iterator, err = newSnapshotIterator(ctx, snapshotIteratorConfig{
 		db:        s.db,
 		tableKeys: tableKeys,
-		database:  s.config.Database,
+		database:  s.configFromDsn.DBName,
 		tables:    s.config.Tables,
 	})
 	if err != nil {

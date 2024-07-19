@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"github.com/go-mysql-org/go-mysql/canal"
-	"github.com/jmoiron/sqlx"
+	"github.com/go-sql-driver/mysql"
 )
 
 func FormatValue(val any) any {
@@ -35,25 +35,13 @@ func FormatValue(val any) any {
 	}
 }
 
-func NewSqlxDB(config Config) (*sqlx.DB, error) {
-	dataSourceName := fmt.Sprintf(
-		"%s:%s@tcp(%s:%d)/%s",
-		config.User, config.Password, config.Host, config.Port, config.Database,
-	)
-	db, err := sqlx.Open("mysql", dataSourceName)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open connection: %w", err)
-	}
-	return db, nil
-}
-
-func NewCanal(config SourceConfig) (*canal.Canal, error) {
+func NewCanal(config *mysql.Config, tables []string) (*canal.Canal, error) {
 	cfg := canal.NewDefaultConfig()
-	cfg.Addr = fmt.Sprintf("%s:%d", config.Host, config.Port)
+	cfg.Addr = config.Addr
 	cfg.User = config.User
-	cfg.Password = config.Password
+	cfg.Password = config.Passwd
 
-	cfg.IncludeTableRegex = config.Tables
+	cfg.IncludeTableRegex = tables
 
 	// Disable dumping
 	cfg.Dump.ExecutionPath = ""

@@ -15,11 +15,8 @@
 package common
 
 type Config struct {
-	Host     string `json:"host" validate:"required"`
-	Port     int    `json:"port" default:"3306"`
-	User     string `json:"user" validate:"required"`
-	Password string `json:"password" validate:"required"`
-	Database string `json:"database" validate:"required"`
+	// URL is the connection string for the Mysql database.
+	URL string `json:"url" validate:"required"`
 }
 
 //go:generate paramgen -output=paramgen_src.go SourceConfig

@@ -21,22 +21,18 @@ import (
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	testutils "github.com/conduitio-labs/conduit-connector-mysql/test"
 	sdk "github.com/conduitio/conduit-connector-sdk"
+	"github.com/go-sql-driver/mysql"
 	"github.com/matryer/is"
 )
 
 func testCdcIterator(ctx context.Context, is *is.I) (common.Iterator, func()) {
+	config, err := mysql.ParseDSN("root:meroxaadmin@tcp(127.0.0.1:3306)/meroxadb?parseTime=true")
+	is.NoErr(err)
+
 	iterator, err := newCdcIterator(ctx, cdcIteratorConfig{
-		SourceConfig: common.SourceConfig{
-			Config: common.Config{
-				Host:     "127.0.0.1",
-				Port:     3306,
-				User:     "root",
-				Password: "meroxaadmin",
-				Database: "meroxadb",
-			},
-			Tables: []string{"users"},
-		},
-		TableKeys: testutils.TableKeys,
+		mysqlConfig: config,
+		tables:      []string{"users"},
+		TableKeys:   testutils.TableKeys,
 	})
 	is.NoErr(err)
 
@@ -47,20 +43,19 @@ func testCdcIteratorAtPosition(
 	ctx context.Context, is *is.I,
 	position sdk.Position,
 ) (common.Iterator, func()) {
+	config, err := mysql.ParseDSN("root:meroxaadmin@tcp(127.0.0.1:3306)/meroxadb?parseTime=true")
+	is.NoErr(err)
+
+	pos, err := common.ParseSDKPosition(position)
+	is.NoErr(err)
+
 	iterator, err := newCdcIterator(ctx, cdcIteratorConfig{
-		SourceConfig: common.SourceConfig{
-			Config: common.Config{
-				Host:     "127.0.0.1",
-				Port:     3306,
-				User:     "root",
-				Password: "meroxaadmin",
-				Database: "meroxadb",
-			},
-			Tables: []string{"users"},
-		},
-		TableKeys: testutils.TableKeys,
-		position:  position,
+		mysqlConfig: config,
+		position:    pos.CdcPosition,
+		tables:      []string{"users"},
+		TableKeys:   testutils.TableKeys,
 	})
+	is.NoErr(err)
 	is.NoErr(err)
 
 	return iterator, func() { is.NoErr(iterator.Teardown(ctx)) }

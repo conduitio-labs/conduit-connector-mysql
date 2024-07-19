@@ -60,7 +60,7 @@ func (s *Source) Configure(ctx context.Context, cfg map[string]string) (err erro
 	return nil
 }
 
-func (s *Source) Open(ctx context.Context, _ sdk.Position) (err error) {
+func (s *Source) Open(ctx context.Context, pos sdk.Position) (err error) {
 	s.db, err = sqlx.Open("mysql", s.config.URL)
 	if err != nil {
 		return fmt.Errorf("failed to connect to mysql: %w", err)
@@ -71,11 +71,25 @@ func (s *Source) Open(ctx context.Context, _ sdk.Position) (err error) {
 		return fmt.Errorf("failed to get table keys: %w", err)
 	}
 
-	s.iterator, err = newSnapshotIterator(ctx, snapshotIteratorConfig{
-		db:        s.db,
-		tableKeys: tableKeys,
-		database:  s.configFromDsn.DBName,
-		tables:    s.config.Tables,
+	iteratorPos, err := common.ParseSDKPosition(pos)
+	if err != nil {
+		return fmt.Errorf("failed to parse sdk.Position: %w", err)
+	}
+
+	s.iterator, err = newCombinedIterator(ctx, combinedIteratorConfig{
+		snapshotConfig: snapshotIteratorConfig{
+			db:        s.db,
+			tableKeys: tableKeys,
+			database:  s.configFromDsn.DBName,
+			tables:    s.config.Tables,
+			position:  iteratorPos.SnapshotPosition,
+		},
+		cdcConfig: cdcIteratorConfig{
+			tables:      s.config.Tables,
+			mysqlConfig: s.configFromDsn,
+			position:    iteratorPos.CdcPosition,
+			TableKeys:   tableKeys,
+		},
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create snapshot iterator: %w", err)

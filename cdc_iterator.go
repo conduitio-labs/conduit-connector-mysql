@@ -44,7 +44,7 @@ type cdcIterator struct {
 type cdcIteratorConfig struct {
 	tables      []string
 	mysqlConfig *mysqldriver.Config
-	position    sdk.Position
+	position    *common.CdcPosition
 	TableKeys   common.TableKeys
 }
 
@@ -86,15 +86,7 @@ func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (common.Itera
 
 func (c *cdcIterator) getStartPosition(config cdcIteratorConfig) (mysql.Position, error) {
 	if config.position != nil {
-		pos, err := common.ParseSDKPosition(config.position)
-		if err != nil {
-			return mysql.Position{}, fmt.Errorf("failed to parse position: %w", err)
-		}
-		if pos.Kind == common.PositionTypeSnapshot {
-			return mysql.Position{}, fmt.Errorf("invalid position type: %s", pos.Kind)
-		}
-
-		return pos.CdcPosition.Position, nil
+		return config.position.Position, nil
 	}
 
 	masterPos, err := c.canal.GetMasterPos()

@@ -67,18 +67,24 @@ type (
 		lastPosition common.SnapshotPosition
 	}
 	snapshotIteratorConfig struct {
-		db            *sqlx.DB
-		tableKeys     common.TableKeys
-		fetchSize     int
-		startPosition common.SnapshotPosition
-		database      string
-		tables        []string
+		db        *sqlx.DB
+		tableKeys common.TableKeys
+		fetchSize int
+		position  *common.SnapshotPosition
+		database  string
+		tables    []string
 	}
 )
 
 func (config *snapshotIteratorConfig) init() error {
-	if config.startPosition.Snapshots == nil {
-		config.startPosition.Snapshots = make(map[common.TableName]common.TablePosition)
+	if config.position != nil {
+		if config.position.Snapshots == nil {
+			config.position.Snapshots = make(map[common.TableName]common.TablePosition)
+		}
+	} else {
+		config.position = &common.SnapshotPosition{
+			Snapshots: map[common.TableName]common.TablePosition{},
+		}
 	}
 
 	if config.fetchSize == 0 {
@@ -105,7 +111,7 @@ func newSnapshotIterator(
 
 	// start position is mutable, so in order to avoid unexpected behaviour in
 	// tests we clone it.
-	lastPosition := config.startPosition.Clone()
+	lastPosition := config.position.Clone()
 
 	iterator := &snapshotIterator{
 		db:           config.db,

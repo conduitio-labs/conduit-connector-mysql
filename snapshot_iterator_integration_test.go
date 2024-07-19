@@ -42,14 +42,17 @@ func testSnapshotIterator(ctx context.Context, is *is.I) (common.Iterator, func(
 
 func testSnapshotIteratorAtPosition(
 	ctx context.Context, is *is.I,
-	position common.SnapshotPosition,
+	position sdk.Position,
 ) (common.Iterator, func()) {
+	pos, err := common.ParseSDKPosition(position)
+	is.NoErr(err)
+
 	iterator, err := newSnapshotIterator(ctx, snapshotIteratorConfig{
-		tableKeys:     testutils.TableKeys,
-		db:            testutils.Connection(is),
-		startPosition: position,
-		database:      "meroxadb",
-		tables:        []string{"users"},
+		tableKeys: testutils.TableKeys,
+		db:        testutils.Connection(is),
+		position:  pos.SnapshotPosition,
+		database:  "meroxadb",
+		tables:    []string{"users"},
 	})
 	is.NoErr(err)
 
@@ -139,7 +142,7 @@ func TestSnapshotIterator_RestartOnPosition(t *testing.T) {
 	}
 
 	var recs []sdk.Record
-	var breakPosition common.SnapshotPosition
+	var breakPosition sdk.Position
 	{
 		it, cleanup := testSnapshotIterator(ctx, is)
 		defer cleanup()
@@ -157,12 +160,7 @@ func TestSnapshotIterator_RestartOnPosition(t *testing.T) {
 			is.NoErr(err)
 		}
 
-		pos, err := common.ParseSDKPosition(recs[len(recs)-1].Position)
-		is.NoErr(err)
-		is.Equal(pos.Kind, common.PositionTypeSnapshot)
-
-		breakPosition = *pos.SnapshotPosition
-		is.NoErr(err)
+		breakPosition = recs[len(recs)-1].Position
 	}
 
 	// read the remaining 90 records

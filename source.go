@@ -60,6 +60,10 @@ func (s *Source) Configure(ctx context.Context, cfg map[string]string) (err erro
 	return nil
 }
 
+func (s *Source) DisableCanalLogs() {
+	s.config.DisableCanalLogs()
+}
+
 func (s *Source) Open(ctx context.Context, pos sdk.Position) (err error) {
 	s.db, err = sqlx.Open("mysql", s.config.URL)
 	if err != nil {
@@ -90,10 +94,11 @@ func (s *Source) Open(ctx context.Context, pos sdk.Position) (err error) {
 			tables:    s.config.Tables,
 		},
 		cdcConfig: cdcIteratorConfig{
-			tables:      s.config.Tables,
-			mysqlConfig: s.configFromDsn,
-			position:    iteratorPos.CdcPosition,
-			TableKeys:   tableKeys,
+			tables:         s.config.Tables,
+			disableLogging: s.config.ShouldDisableCanalLogs(),
+			mysqlConfig:    s.configFromDsn,
+			position:       iteratorPos.CdcPosition,
+			TableKeys:      tableKeys,
 		},
 	})
 	if err != nil {

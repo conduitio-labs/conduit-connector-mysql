@@ -20,6 +20,7 @@ import (
 
 	"github.com/go-mysql-org/go-mysql/canal"
 	"github.com/go-sql-driver/mysql"
+	"github.com/rs/zerolog"
 )
 
 func FormatValue(val any) any {
@@ -39,14 +40,25 @@ func FormatValue(val any) any {
 	}
 }
 
-func NewCanal(config *mysql.Config, tables []string) (*canal.Canal, error) {
+type CanalConfig struct {
+	*mysql.Config
+	Tables         []string
+	DisableLogging bool
+	Logger         *zerolog.Logger
+}
+
+func NewCanal(config CanalConfig) (*canal.Canal, error) {
 	cfg := canal.NewDefaultConfig()
 	cfg.Addr = config.Addr
 	cfg.User = config.User
 	cfg.Password = config.Passwd
 
-	cfg.IncludeTableRegex = tables
-	cfg.Logger = nopLogger{}
+	cfg.IncludeTableRegex = config.Tables
+	if config.DisableLogging {
+		cfg.Logger = nopLogger{}
+	} else {
+		cfg.Logger = zerologCanalLogger{config.Logger}
+	}
 
 	// Disable dumping
 	cfg.Dump.ExecutionPath = ""
@@ -83,3 +95,91 @@ func (n nopLogger) Println(...any)        {}
 func (n nopLogger) Warn(...any)           {}
 func (n nopLogger) Warnf(string, ...any)  {}
 func (n nopLogger) Warnln(...any)         {}
+
+type zerologCanalLogger struct {
+	logger *zerolog.Logger
+}
+
+func (z zerologCanalLogger) Debug(args ...any) {
+	z.logger.Debug().Msg(fmt.Sprint(args...))
+}
+
+func (z zerologCanalLogger) Debugf(format string, args ...any) {
+	z.logger.Debug().Msgf(format, args...)
+}
+
+func (z zerologCanalLogger) Debugln(args ...any) {
+	z.logger.Debug().Msg(fmt.Sprintln(args...))
+}
+
+func (z zerologCanalLogger) Error(args ...any) {
+	z.logger.Error().Msg(fmt.Sprint(args...))
+}
+
+func (z zerologCanalLogger) Errorf(format string, args ...any) {
+	z.logger.Error().Msgf(format, args...)
+}
+
+func (z zerologCanalLogger) Errorln(args ...any) {
+	z.logger.Error().Msg(fmt.Sprintln(args...))
+}
+
+func (z zerologCanalLogger) Fatal(args ...any) {
+	z.logger.Fatal().Msg(fmt.Sprint(args...))
+}
+
+func (z zerologCanalLogger) Fatalf(format string, args ...any) {
+	z.logger.Fatal().Msgf(format, args...)
+}
+
+func (z zerologCanalLogger) Fatalln(args ...any) {
+	z.logger.Fatal().Msg(fmt.Sprintln(args...))
+}
+
+func (z zerologCanalLogger) Info(args ...any) {
+	z.logger.Info().Msg(fmt.Sprint(args...))
+}
+
+func (z zerologCanalLogger) Infof(format string, args ...any) {
+	z.logger.Info().Msgf(format, args...)
+}
+
+func (z zerologCanalLogger) Infoln(args ...any) {
+	z.logger.Info().Msg(fmt.Sprintln(args...))
+}
+
+func (z zerologCanalLogger) Panic(args ...any) {
+	z.logger.Panic().Msg(fmt.Sprint(args...))
+}
+
+func (z zerologCanalLogger) Panicf(format string, args ...any) {
+	z.logger.Panic().Msgf(format, args...)
+}
+
+func (z zerologCanalLogger) Panicln(args ...any) {
+	z.logger.Panic().Msg(fmt.Sprintln(args...))
+}
+
+func (z zerologCanalLogger) Print(args ...any) {
+	z.logger.Info().Msg(fmt.Sprint(args...))
+}
+
+func (z zerologCanalLogger) Printf(format string, args ...any) {
+	z.logger.Info().Msgf(format, args...)
+}
+
+func (z zerologCanalLogger) Println(args ...any) {
+	z.logger.Info().Msg(fmt.Sprintln(args...))
+}
+
+func (z zerologCanalLogger) Warn(args ...any) {
+	z.logger.Warn().Msg(fmt.Sprint(args...))
+}
+
+func (z zerologCanalLogger) Warnf(format string, args ...any) {
+	z.logger.Warn().Msgf(format, args...)
+}
+
+func (z zerologCanalLogger) Warnln(args ...any) {
+	z.logger.Warn().Msg(fmt.Sprintln(args...))
+}

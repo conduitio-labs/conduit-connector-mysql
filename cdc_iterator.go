@@ -42,14 +42,20 @@ type cdcIterator struct {
 }
 
 type cdcIteratorConfig struct {
-	tables      []string
-	mysqlConfig *mysqldriver.Config
-	position    *common.CdcPosition
-	TableKeys   common.TableKeys
+	tables         []string
+	mysqlConfig    *mysqldriver.Config
+	position       *common.CdcPosition
+	disableLogging bool
+	TableKeys      common.TableKeys
 }
 
 func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (common.Iterator, error) {
-	c, err := common.NewCanal(config.mysqlConfig, config.tables)
+	c, err := common.NewCanal(common.CanalConfig{
+		Config:         config.mysqlConfig,
+		Tables:         config.tables,
+		DisableLogging: config.disableLogging,
+		Logger:         sdk.Logger(ctx),
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create canal: %w", err)
 	}

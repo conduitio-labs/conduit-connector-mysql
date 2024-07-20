@@ -27,6 +27,18 @@ type SourceConfig struct {
 	Config
 
 	Tables []string `json:"tables" validate:"required"`
+
+	// disableCanalLogs disables the github.com/go-mysql-org/go-mysql/canal
+	// logs. Useful on tests only.
+	disableCanalLogs bool
+}
+
+func (config *SourceConfig) DisableCanalLogs() {
+	config.disableCanalLogs = true
+}
+
+func (config *SourceConfig) ShouldDisableCanalLogs() bool {
+	return config.disableCanalLogs
 }
 
 func (config SourceConfig) ToMap() map[string]string {

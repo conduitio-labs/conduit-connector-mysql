@@ -33,6 +33,11 @@ func testSource(ctx context.Context, is *is.I) (sdk.Source, func()) {
 		Tables: []string{"users"},
 	}.ToMap())
 
+	type logDisabler interface {
+		DisableCanalLogs()
+	}
+	source.(logDisabler).DisableCanalLogs()
+
 	is.NoErr(source.Open(ctx, nil))
 
 	return source, func() { is.NoErr(source.Teardown(ctx)) }

@@ -39,9 +39,10 @@ func testCombinedIterator(ctx context.Context, is *is.I) (common.Iterator, func(
 			tables:    []string{"users"},
 		},
 		cdcConfig: cdcIteratorConfig{
-			mysqlConfig: config,
-			tables:      []string{"users"},
-			TableKeys:   testutils.TableKeys,
+			mysqlConfig:    config,
+			tables:         []string{"users"},
+			TableKeys:      testutils.TableKeys,
+			disableLogging: true,
 		},
 	})
 	is.NoErr(err)

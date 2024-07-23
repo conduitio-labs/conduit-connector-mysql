@@ -69,8 +69,13 @@ func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (common.Itera
 	}
 
 	go func() {
-		sdk.Logger(ctx).Info().Msg("running canal")
-		iterator.canalRunErrC <- iterator.runCanal(startPosition)
+		handler := &cdcEventHandler{
+			canalDoneC: iterator.canalDoneC,
+			data:       iterator.data,
+		}
+		iterator.canal.SetEventHandler(handler)
+
+		iterator.canalRunErrC <- iterator.canal.RunFrom(startPosition)
 	}()
 
 	return iterator, nil
@@ -97,16 +102,6 @@ func (c *cdcIterator) getStartPosition(config cdcIteratorConfig) (mysql.Position
 	return masterPos, nil
 }
 
-func (c *cdcIterator) runCanal(startPos mysql.Position) error {
-	handler := &cdcEventHandler{
-		canalDoneC: c.canalDoneC,
-		data:       c.data,
-	}
-	c.canal.SetEventHandler(handler)
-
-	return c.canal.RunFrom(startPos)
-}
-
 func (c *cdcIterator) Ack(context.Context, sdk.Position) error {
 	c.acks.Done()
 	return nil
@@ -116,14 +111,14 @@ func (c *cdcIterator) Next(ctx context.Context) (rec sdk.Record, err error) {
 	select {
 	case <-ctx.Done():
 		return rec, fmt.Errorf(
-			"context cancelled from cdc iterator next call: %w", ctx.Err(),
+			"context cancelled from cdc iterator next call: %w", err,
 		)
 	case <-c.canalDoneC:
-		return rec, fmt.Errorf("canal closed")
+		return rec, fmt.Errorf("canal is closed")
 	case data := <-c.data:
 		rec, err := c.buildRecord(data)
 		if err != nil {
-			return sdk.Record{}, fmt.Errorf("failed to build record: %w", err)
+			return rec, fmt.Errorf("failed to build record: %w", err)
 		}
 
 		c.acks.Add(1)

@@ -128,47 +128,41 @@ func newSnapshotIterator(
 		})
 	}
 
-	// close the data channel when all tomb goroutines are done, which will happen:
-	// - when all records are fetched from all tables
-	// - when the iterator teardown method is called
-	go func() {
-		<-iterator.t.Dead()
-		close(iterator.data)
-	}()
-
 	return iterator, nil
 }
 
-func (s *snapshotIterator) Next(ctx context.Context) (sdk.Record, error) {
+func (s *snapshotIterator) Next(ctx context.Context) (rec sdk.Record, err error) {
 	select {
 	case <-ctx.Done():
-		return sdk.Record{}, fmt.Errorf(
-			"context cancelled from snapshot iterator next call: %w", ctx.Err(),
-		)
-	case data, ok := <-s.data:
-		if !ok { // closed
-			if err := s.t.Err(); err != nil {
-				return sdk.Record{}, fmt.Errorf("fetchers exited unexpectedly: %w", err)
-			}
-			if err := s.acks.Wait(ctx); err != nil {
-				return sdk.Record{}, fmt.Errorf("failed to wait for acks: %w", err)
-			}
-			return sdk.Record{}, ErrSnapshotIteratorDone
+		//nolint:wrapcheck // no need to wrap canceled error
+		return rec, ctx.Err()
+	case <-s.t.Dead():
+		if err := s.t.Err(); err != nil && !errors.Is(err, ErrSnapshotIteratorDone) {
+			return rec, fmt.Errorf(
+				"cannot stop snapshot mode, fetchers exited unexpectedly: %w", err)
 		}
 
+		return rec, ErrSnapshotIteratorDone
+	case data := <-s.data:
 		s.acks.Add(1)
 		return s.buildRecord(data), nil
 	}
 }
 
-func (s *snapshotIterator) Ack(_ context.Context, _ sdk.Position) error {
+func (s *snapshotIterator) Ack(context.Context, sdk.Position) error {
 	s.acks.Done()
 	return nil
 }
 
-func (s *snapshotIterator) Teardown(_ context.Context) error {
-	if s.t != nil {
-		s.t.Kill(errors.New("tearing down snapshot iterator"))
+func (s *snapshotIterator) Teardown(ctx context.Context) error {
+	s.t.Kill(ErrSnapshotIteratorDone)
+	if err := s.t.Err(); err != nil && !errors.Is(err, ErrSnapshotIteratorDone) {
+		return fmt.Errorf(
+			"cannot teardown snapshot mode, fetchers exited unexpectedly: %w", err)
+	}
+
+	if err := s.acks.Wait(ctx); err != nil {
+		return fmt.Errorf("failed to wait for snapshot acks: %w", err)
 	}
 
 	return nil

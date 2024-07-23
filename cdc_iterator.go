@@ -110,9 +110,8 @@ func (c *cdcIterator) Ack(context.Context, sdk.Position) error {
 func (c *cdcIterator) Next(ctx context.Context) (rec sdk.Record, err error) {
 	select {
 	case <-ctx.Done():
-		return rec, fmt.Errorf(
-			"context cancelled from cdc iterator next call: %w", err,
-		)
+		//nolint:wrapcheck // no need to wrap canceled error
+		return rec, ctx.Err()
 	case <-c.canalDoneC:
 		return rec, fmt.Errorf("canal is closed")
 	case data := <-c.data:

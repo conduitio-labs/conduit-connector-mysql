@@ -16,7 +16,6 @@ package mysql
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -27,7 +26,6 @@ import (
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/schema"
 	mysqldriver "github.com/go-sql-driver/mysql"
-	"gopkg.in/tomb.v2"
 )
 
 type cdcIterator struct {
@@ -35,8 +33,8 @@ type cdcIterator struct {
 	acks  *csync.WaitGroup
 	data  chan *canal.RowsEvent
 
-	// canalTomb is a tomb that simplifies handling canal run errors
-	canalTomb *tomb.Tomb
+	canalRunErrC chan error
+	canalDoneC   chan struct{}
 
 	config cdcIteratorConfig
 }
@@ -57,11 +55,12 @@ func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (common.Itera
 	sdk.Logger(ctx).Info().Msg("created canal")
 
 	iterator := &cdcIterator{
-		canal:     c,
-		acks:      &csync.WaitGroup{},
-		data:      make(chan *canal.RowsEvent),
-		canalTomb: &tomb.Tomb{},
-		config:    config,
+		canal:        c,
+		acks:         &csync.WaitGroup{},
+		data:         make(chan *canal.RowsEvent),
+		canalRunErrC: make(chan error),
+		canalDoneC:   make(chan struct{}),
+		config:       config,
 	}
 
 	startPosition, err := iterator.getStartPosition(config)
@@ -69,16 +68,9 @@ func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (common.Itera
 		return nil, fmt.Errorf("failed to get start position: %w", err)
 	}
 
-	iterator.canalTomb.Go(func() error {
-		ctx := iterator.canalTomb.Context(ctx)
-		return iterator.runCanal(ctx, startPosition)
-	})
-
-	// close the data channel when all tomb goroutines are done, which will happen only when
-	// the iterator teardown method is called
 	go func() {
-		<-iterator.canalTomb.Dead()
-		close(iterator.data)
+		sdk.Logger(ctx).Info().Msg("running canal")
+		iterator.canalRunErrC <- iterator.runCanal(startPosition)
 	}()
 
 	return iterator, nil
@@ -105,25 +97,14 @@ func (c *cdcIterator) getStartPosition(config cdcIteratorConfig) (mysql.Position
 	return masterPos, nil
 }
 
-func (c *cdcIterator) runCanal(ctx context.Context, startPos mysql.Position) error {
-	// buffered to allow the goroutine to exit when the iterator is torn down
-	errChan := make(chan error, 1)
-	go func() {
-		handler := &cdcEventHandler{
-			ctx:  ctx,
-			data: c.data,
-		}
-		c.canal.SetEventHandler(handler)
-		errChan <- c.canal.RunFrom(startPos)
-	}()
-
-	select {
-	case <-ctx.Done():
-		c.canal.Close()
-		return fmt.Errorf("context cancelled from runCanal: %w", ctx.Err())
-	case err := <-errChan:
-		return fmt.Errorf("failed to run canal: %w", err)
+func (c *cdcIterator) runCanal(startPos mysql.Position) error {
+	handler := &cdcEventHandler{
+		canalDoneC: c.canalDoneC,
+		data:       c.data,
 	}
+	c.canal.SetEventHandler(handler)
+
+	return c.canal.RunFrom(startPos)
 }
 
 func (c *cdcIterator) Ack(context.Context, sdk.Position) error {
@@ -131,23 +112,15 @@ func (c *cdcIterator) Ack(context.Context, sdk.Position) error {
 	return nil
 }
 
-func (c *cdcIterator) Next(ctx context.Context) (sdk.Record, error) {
+func (c *cdcIterator) Next(ctx context.Context) (rec sdk.Record, err error) {
 	select {
 	case <-ctx.Done():
-		return sdk.Record{}, fmt.Errorf(
+		return rec, fmt.Errorf(
 			"context cancelled from cdc iterator next call: %w", ctx.Err(),
 		)
-	case data, ok := <-c.data:
-		if !ok { // closed
-			if err := c.canalTomb.Err(); err != nil {
-				return sdk.Record{}, fmt.Errorf("canal exited unexpectedly: %w", err)
-			}
-			if err := c.acks.Wait(ctx); err != nil {
-				return sdk.Record{}, fmt.Errorf("failed to wait for acks: %w", err)
-			}
-			return sdk.Record{}, fmt.Errorf("cdc iterator teared down")
-		}
-
+	case <-c.canalDoneC:
+		return rec, fmt.Errorf("canal closed")
+	case data := <-c.data:
 		rec, err := c.buildRecord(data)
 		if err != nil {
 			return sdk.Record{}, fmt.Errorf("failed to build record: %w", err)
@@ -158,9 +131,16 @@ func (c *cdcIterator) Next(ctx context.Context) (sdk.Record, error) {
 	}
 }
 
-func (c *cdcIterator) Teardown(context.Context) error {
-	if c.canalTomb != nil {
-		c.canalTomb.Kill(errors.New("tearing down snapshot iterator"))
+func (c *cdcIterator) Teardown(ctx context.Context) error {
+	close(c.canalDoneC)
+
+	c.canal.Close()
+	if err := <-c.canalRunErrC; err != nil {
+		return fmt.Errorf("failed to stop canal: %w", err)
+	}
+
+	if err := c.acks.Wait(ctx); err != nil {
+		return fmt.Errorf("failed to wait for cdc acks: %w", err)
 	}
 
 	return nil
@@ -277,15 +257,13 @@ type cdcEventHandler struct {
 	// We only want the OnRow event, this allows us to ignore all other event methods
 	canal.DummyEventHandler
 
-	//nolint:containedctx // ctx is used to allow to timeout the OnRow event
-	ctx  context.Context
-	data chan *canal.RowsEvent
+	canalDoneC chan struct{}
+	data       chan *canal.RowsEvent
 }
 
 func (h *cdcEventHandler) OnRow(e *canal.RowsEvent) error {
 	select {
-	case <-h.ctx.Done():
-		return fmt.Errorf("context cancelled from OnRow: %w", h.ctx.Err())
+	case <-h.canalDoneC:
 	case h.data <- e:
 	}
 

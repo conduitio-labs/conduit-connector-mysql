@@ -16,16 +16,13 @@ package testutils
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"reflect"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	sdk "github.com/conduitio/conduit-connector-sdk"
-	"github.com/gookit/goutil/dump"
+	"github.com/google/go-cmp/cmp"
 	"github.com/jmoiron/sqlx"
 	"github.com/matryer/is"
 	"github.com/rs/zerolog"
@@ -59,7 +56,7 @@ var TableKeys = map[common.TableName]common.PrimaryKeyName{
 }
 
 type User struct {
-	ID        int       `db:"id"`
+	ID        int64     `db:"id"`
 	Username  string    `db:"username"`
 	Email     string    `db:"email"`
 	CreatedAt time.Time `db:"created_at"`
@@ -88,7 +85,7 @@ func (UsersTable) Recreate(is *is.I, db *sqlx.DB) {
 
 	_, err = db.Exec(`
 	CREATE TABLE users (
-		id INT AUTO_INCREMENT PRIMARY KEY,
+		id BIGINT AUTO_INCREMENT PRIMARY KEY,
 		username VARCHAR(255) NOT NULL,
 		email VARCHAR(255) NOT NULL,
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -151,7 +148,7 @@ func ReadAndAssertInsert(
 
 	IsDataEqual(is, rec.Key, sdk.StructuredData{
 		"id":     user.ID,
-		"table":  "users",
+		"table":  common.TableName("users"),
 		"action": "insert",
 	})
 
@@ -199,75 +196,14 @@ func ReadAndAssertDelete(
 
 	IsDataEqual(is, rec.Key, sdk.StructuredData{
 		"id":     user.ID,
-		"table":  "users",
+		"table":  common.TableName("users"),
 		"action": "delete",
 	})
 }
 
-var configureDump = sync.OnceFunc(func() {
-	dump.Config(dump.WithoutPosition())
-})
-
 func IsDataEqual(is *is.I, a, b sdk.Data) {
-	configureDump()
-
 	is.Helper()
-	if a == nil && b == nil {
-		return
-	}
-
-	if a == nil || b == nil {
-		is.Fail() // one of the data is nil
-	}
-
-	equal, err := JSONBytesEqual(a.Bytes(), b.Bytes())
-	is.NoErr(err)
-
-	if equal {
-		return
-	}
-
-	aS, okAS := a.(sdk.StructuredData)
-	bS, okBS := b.(sdk.StructuredData)
-
-	// dump structured datas for easier debugging
-
-	if okAS {
-		dump.P(aS)
-	} else {
-		fmt.Println(string(a.Bytes()))
-	}
-	if okBS {
-		dump.P(bS)
-	} else {
-		fmt.Println(string(b.Bytes()))
-	}
-
-	// if both are structured, let's offer a better error
-
-	if okAS && okBS {
-		for key, val := range aS {
-			is.Equal(val, bS[key])
-		}
-		return
-	}
-
-	// otherwise, simply fail the test
-
-	is.Fail() // compared datas are not equal
-}
-
-// JSONBytesEqual compares the JSON in two byte slices.
-func JSONBytesEqual(a, b []byte) (bool, error) {
-	var j, j2 interface{}
-	if err := json.Unmarshal(a, &j); err != nil {
-		return false, fmt.Errorf("failed to unmarshal first JSON: %w", err)
-	}
-	if err := json.Unmarshal(b, &j2); err != nil {
-		return false, fmt.Errorf("failed to unmarshal second JSON: %w", err)
-	}
-
-	return reflect.DeepEqual(j2, j), nil
+	is.Equal("", cmp.Diff(a, b))
 }
 
 func ReadAndAssertSnapshot(
@@ -287,8 +223,8 @@ func ReadAndAssertSnapshot(
 	is.Equal(col, "users")
 
 	IsDataEqual(is, rec.Key, sdk.StructuredData{
+		"key":   common.PrimaryKeyName("id"),
 		"table": common.TableName("users"),
-		"key":   "id",
 		"value": user.ID,
 	})
 
@@ -305,7 +241,7 @@ func AssertUserSnapshot(is *is.I, user User, rec sdk.Record) {
 	is.Equal(col, "users")
 
 	IsDataEqual(is, rec.Key, sdk.StructuredData{
-		"key":   "id",
+		"key":   common.PrimaryKeyName("id"),
 		"value": user.ID,
 		"table": common.TableName("users"),
 	})

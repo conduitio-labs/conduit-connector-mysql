@@ -16,7 +16,6 @@ package mysql
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -38,13 +37,11 @@ type snapshotKey struct {
 }
 
 func (key snapshotKey) ToSDKData() sdk.Data {
-	bs, err := json.Marshal(key)
-	if err != nil {
-		// This should never happen, all Position structs should be valid.
-		panic(err)
+	return sdk.StructuredData{
+		"table": key.Table,
+		"key":   key.Key,
+		"value": key.Value,
 	}
-
-	return sdk.RawData(bs)
 }
 
 type (

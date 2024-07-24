@@ -45,6 +45,7 @@ func NewCanal(config *mysql.Config, tables []string) (*canal.Canal, error) {
 
 	// Disable dumping
 	cfg.Dump.ExecutionPath = ""
+	cfg.ParseTime = true
 
 	c, err := canal.NewCanal(cfg)
 	if err != nil {

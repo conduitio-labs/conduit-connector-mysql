@@ -17,7 +17,6 @@ package mysql
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	"github.com/conduitio/conduit-commons/csync"
@@ -143,34 +142,9 @@ func (c *cdcIterator) Teardown(ctx context.Context) error {
 func buildPayload(columns []schema.TableColumn, rows []any) sdk.StructuredData {
 	payload := sdk.StructuredData{}
 	for i, col := range columns {
-		val := rows[i]
-		if s, ok := val.(string); ok {
-			// I don't know why exactly, but "github.com/go-mysql-org/go-mysql/canal"
-			// returns a string for timestamp columns without timezone. This is a hack
-			// to format the string back into an UTC string.
-			// TODO: investigate this further. Is this a bug in canal?
-			val = tryParseCanalStrDate(s)
-		}
-
-		payload[col.Name] = common.FormatValue(val)
+		payload[col.Name] = common.FormatValue(rows[i])
 	}
 	return payload
-}
-
-func tryParseCanalStrDate(s string) string {
-	parsed, err := time.Parse(time.DateTime, s)
-	if err != nil {
-		return s
-	}
-
-	valCopyInUTC := time.Date(
-		parsed.Year(), parsed.Month(), parsed.Day(),
-		parsed.Hour(), parsed.Minute(), parsed.Second(),
-		parsed.Nanosecond(),
-		time.Now().Location(),
-	).UTC()
-
-	return valCopyInUTC.Format(time.RFC3339)
 }
 
 func (c *cdcIterator) buildRecord(e *canal.RowsEvent) (sdk.Record, error) {

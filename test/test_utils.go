@@ -16,24 +16,28 @@ package testutils
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"reflect"
 	"testing"
+	"time"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	sdk "github.com/conduitio/conduit-connector-sdk"
-	"github.com/gookit/goutil/dump"
+	"github.com/google/go-cmp/cmp"
 	"github.com/jmoiron/sqlx"
 	"github.com/matryer/is"
 	"github.com/rs/zerolog"
 )
 
-func Connection(is *is.I) *sqlx.DB {
-	db, err := sqlx.Open("mysql", "root:meroxaadmin@tcp(127.0.0.1:3306)/meroxadb?parseTime=true")
+const DSN = "root:meroxaadmin@tcp(127.0.0.1:3306)/meroxadb?parseTime=true"
+
+// Connection returns a cleanup function to enforce callers to close the connection.
+// That prevents goleak errors.
+func Connection(is *is.I) (*sqlx.DB, func()) {
+	is.Helper()
+	db, err := sqlx.Open("mysql", DSN)
 	is.NoErr(err)
 
-	return db
+	return db, func() { is.NoErr(db.Close()) }
 }
 
 func TestContext(t *testing.T) context.Context {
@@ -41,15 +45,21 @@ func TestContext(t *testing.T) context.Context {
 	return logger.WithContext(context.Background())
 }
 
+func TestContextNoTraceLog(t *testing.T) context.Context {
+	logger := zerolog.New(zerolog.NewTestWriter(t))
+
+	return logger.Level(zerolog.DebugLevel).WithContext(context.Background())
+}
+
 var TableKeys = map[common.TableName]common.PrimaryKeyName{
 	"users": "id",
 }
 
 type User struct {
-	ID        int    `db:"id"`
-	Username  string `db:"username"`
-	Email     string `db:"email"`
-	CreatedAt string `db:"created_at"`
+	ID        int64     `db:"id"`
+	Username  string    `db:"username"`
+	Email     string    `db:"email"`
+	CreatedAt time.Time `db:"created_at"`
 }
 
 func (u User) Update() User {
@@ -63,7 +73,7 @@ func (u User) ToStructuredData() sdk.StructuredData {
 		"id":         u.ID,
 		"username":   u.Username,
 		"email":      u.Email,
-		"created_at": u.CreatedAt,
+		"created_at": u.CreatedAt.UTC().Format(time.RFC3339),
 	}
 }
 
@@ -75,7 +85,7 @@ func (UsersTable) Recreate(is *is.I, db *sqlx.DB) {
 
 	_, err = db.Exec(`
 	CREATE TABLE users (
-		id INT AUTO_INCREMENT PRIMARY KEY,
+		id BIGINT AUTO_INCREMENT PRIMARY KEY,
 		username VARCHAR(255) NOT NULL,
 		email VARCHAR(255) NOT NULL,
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -124,7 +134,9 @@ func ReadAndAssertInsert(
 	ctx context.Context, is *is.I,
 	iterator common.Iterator, user User,
 ) sdk.Record {
-	rec, err := iterator.Next(ctx)
+	is.Helper()
+
+	rec, err := iterator.Read(ctx)
 	is.NoErr(err)
 	is.NoErr(iterator.Ack(ctx, rec.Position))
 
@@ -136,7 +148,7 @@ func ReadAndAssertInsert(
 
 	IsDataEqual(is, rec.Key, sdk.StructuredData{
 		"id":     user.ID,
-		"table":  "users",
+		"table":  common.TableName("users"),
 		"action": "insert",
 	})
 
@@ -149,7 +161,8 @@ func ReadAndAssertUpdate(
 	ctx context.Context, is *is.I,
 	iterator common.Iterator, prev, next User,
 ) {
-	rec, err := iterator.Next(ctx)
+	is.Helper()
+	rec, err := iterator.Read(ctx)
 	is.NoErr(err)
 	is.NoErr(iterator.Ack(ctx, rec.Position))
 
@@ -168,7 +181,9 @@ func ReadAndAssertDelete(
 	ctx context.Context, is *is.I,
 	iterator common.Iterator, user User,
 ) {
-	rec, err := iterator.Next(ctx)
+	is.Helper()
+
+	rec, err := iterator.Read(ctx)
 	is.NoErr(err)
 	is.NoErr(iterator.Ack(ctx, rec.Position))
 
@@ -181,58 +196,23 @@ func ReadAndAssertDelete(
 
 	IsDataEqual(is, rec.Key, sdk.StructuredData{
 		"id":     user.ID,
-		"table":  "users",
+		"table":  common.TableName("users"),
 		"action": "delete",
 	})
 }
 
 func IsDataEqual(is *is.I, a, b sdk.Data) {
-	if a == nil && b == nil {
-		return
-	}
-
-	if a == nil || b == nil {
-		is.Fail() // one of the data is nil
-	}
-
-	equal, err := JSONBytesEqual(a.Bytes(), b.Bytes())
-	is.NoErr(err)
-
-	// dump structured datas for easier debugging
-	if !equal {
-		if _, ok := a.(sdk.StructuredData); ok {
-			dump.P(a)
-		} else {
-			fmt.Println(string(a.Bytes()))
-		}
-		if _, ok := b.(sdk.StructuredData); ok {
-			dump.P(b)
-		} else {
-			fmt.Println(string(b.Bytes()))
-		}
-	}
-
-	is.True(equal) // compared datas are not equal
-}
-
-// JSONBytesEqual compares the JSON in two byte slices.
-func JSONBytesEqual(a, b []byte) (bool, error) {
-	var j, j2 interface{}
-	if err := json.Unmarshal(a, &j); err != nil {
-		return false, fmt.Errorf("failed to unmarshal first JSON: %w", err)
-	}
-	if err := json.Unmarshal(b, &j2); err != nil {
-		return false, fmt.Errorf("failed to unmarshal second JSON: %w", err)
-	}
-
-	return reflect.DeepEqual(j2, j), nil
+	is.Helper()
+	is.Equal("", cmp.Diff(a, b))
 }
 
 func ReadAndAssertSnapshot(
 	ctx context.Context, is *is.I,
 	iterator common.Iterator, user User,
 ) {
-	rec, err := iterator.Next(ctx)
+	is.Helper()
+
+	rec, err := iterator.Read(ctx)
 	is.NoErr(err)
 	is.NoErr(iterator.Ack(ctx, rec.Position))
 
@@ -243,8 +223,8 @@ func ReadAndAssertSnapshot(
 	is.Equal(col, "users")
 
 	IsDataEqual(is, rec.Key, sdk.StructuredData{
+		"key":   common.PrimaryKeyName("id"),
 		"table": common.TableName("users"),
-		"key":   "id",
 		"value": user.ID,
 	})
 
@@ -252,6 +232,8 @@ func ReadAndAssertSnapshot(
 }
 
 func AssertUserSnapshot(is *is.I, user User, rec sdk.Record) {
+	is.Helper()
+
 	is.Equal(rec.Operation, sdk.OperationSnapshot)
 
 	col, err := rec.Metadata.GetCollection()
@@ -259,7 +241,7 @@ func AssertUserSnapshot(is *is.I, user User, rec sdk.Record) {
 	is.Equal(col, "users")
 
 	IsDataEqual(is, rec.Key, sdk.StructuredData{
-		"key":   "id",
+		"key":   common.PrimaryKeyName("id"),
 		"value": user.ID,
 		"table": common.TableName("users"),
 	})

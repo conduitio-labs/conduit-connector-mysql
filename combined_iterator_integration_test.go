@@ -26,20 +26,23 @@ import (
 )
 
 func testCombinedIterator(ctx context.Context, is *is.I) (common.Iterator, func()) {
-	config, err := mysql.ParseDSN("root:meroxaadmin@tcp(127.0.0.1:3306)/meroxadb?parseTime=true")
+	db, _ := testutils.Connection(is)
+
+	config, err := mysql.ParseDSN(testutils.DSN)
 	is.NoErr(err)
 
 	iterator, err := newCombinedIterator(ctx, combinedIteratorConfig{
 		snapshotConfig: snapshotIteratorConfig{
 			tableKeys: testutils.TableKeys,
-			db:        testutils.Connection(is),
+			db:        db,
 			database:  "meroxadb",
 			tables:    []string{"users"},
 		},
 		cdcConfig: cdcIteratorConfig{
-			mysqlConfig: config,
-			tables:      []string{"users"},
-			TableKeys:   testutils.TableKeys,
+			mysqlConfig:    config,
+			tables:         []string{"users"},
+			TableKeys:      testutils.TableKeys,
+			disableLogging: true,
 		},
 	})
 	is.NoErr(err)
@@ -50,7 +53,8 @@ func testCombinedIterator(ctx context.Context, is *is.I) (common.Iterator, func(
 func TestCombinedIterator(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
-	db := testutils.Connection(is)
+	db, closeDB := testutils.Connection(is)
+	defer closeDB()
 
 	userTable.Recreate(is, db)
 

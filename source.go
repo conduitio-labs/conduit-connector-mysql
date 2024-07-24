@@ -60,6 +60,10 @@ func (s *Source) Configure(ctx context.Context, cfg map[string]string) (err erro
 	return nil
 }
 
+func (s *Source) DisableCanalLogs() {
+	s.config.DisableCanalLogs()
+}
+
 func (s *Source) Open(ctx context.Context, pos sdk.Position) (err error) {
 	s.db, err = sqlx.Open("mysql", s.config.URL)
 	if err != nil {
@@ -71,24 +75,30 @@ func (s *Source) Open(ctx context.Context, pos sdk.Position) (err error) {
 		return fmt.Errorf("failed to get table keys: %w", err)
 	}
 
-	iteratorPos, err := common.ParseSDKPosition(pos)
-	if err != nil {
-		return fmt.Errorf("failed to parse sdk.Position: %w", err)
+	var iteratorPos common.Position
+	if pos != nil {
+		parsed, err := common.ParseSDKPosition(pos)
+		if err != nil {
+			return fmt.Errorf("failed to parse sdk.Position: %w", err)
+		}
+
+		iteratorPos = parsed
 	}
 
 	s.iterator, err = newCombinedIterator(ctx, combinedIteratorConfig{
 		snapshotConfig: snapshotIteratorConfig{
 			db:        s.db,
 			tableKeys: tableKeys,
+			position:  iteratorPos.SnapshotPosition,
 			database:  s.configFromDsn.DBName,
 			tables:    s.config.Tables,
-			position:  iteratorPos.SnapshotPosition,
 		},
 		cdcConfig: cdcIteratorConfig{
-			tables:      s.config.Tables,
-			mysqlConfig: s.configFromDsn,
-			position:    iteratorPos.CdcPosition,
-			TableKeys:   tableKeys,
+			tables:         s.config.Tables,
+			disableLogging: s.config.ShouldDisableCanalLogs(),
+			mysqlConfig:    s.configFromDsn,
+			position:       iteratorPos.CdcPosition,
+			TableKeys:      tableKeys,
 		},
 	})
 	if err != nil {
@@ -101,7 +111,7 @@ func (s *Source) Open(ctx context.Context, pos sdk.Position) (err error) {
 
 func (s *Source) Read(ctx context.Context) (sdk.Record, error) {
 	//nolint:wrapcheck // error already wrapped in iterator
-	return s.iterator.Next(ctx)
+	return s.iterator.Read(ctx)
 }
 
 func (s *Source) Ack(ctx context.Context, _ sdk.Position) error {

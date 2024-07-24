@@ -16,6 +16,7 @@ package mysql
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 
@@ -45,17 +46,27 @@ func newFetchWorker(db *sqlx.DB, data chan fetchData, config fetchWorkerConfig) 
 	}
 }
 
-func (w *fetchWorker) run(ctx context.Context) error {
-	sdk.Logger(ctx).Info().Msgf("starting fetcher for table %q", w.config.table)
+func (w *fetchWorker) run(ctx context.Context) (err error) {
+	sdk.Logger(ctx).Info().Msgf("started fetcher for table %q", w.config.table)
+	defer sdk.Logger(ctx).Info().Msgf("finished fetcher for table %q", w.config.table)
+
+	tx, err := w.db.BeginTxx(ctx, &sql.TxOptions{
+		Isolation: sql.LevelRepeatableRead,
+		ReadOnly:  true,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create transaction: %w", err)
+	}
+	defer func() { err = errors.Join(err, tx.Commit()) }()
+
+	snapshotEnd, err := w.getMaxValue(ctx, tx)
+	if err != nil {
+		return fmt.Errorf("failed to get max value: %w", err)
+	}
 
 	lastRead := w.config.lastPosition.Snapshots[w.config.table].LastRead
 	for {
-		snapshotEnd, err := w.getMaxValue(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to get max value: %w", err)
-		}
-
-		rows, err := w.selectRowsChunk(ctx, lastRead, snapshotEnd)
+		rows, err := w.selectRowsChunk(ctx, tx, lastRead, snapshotEnd)
 		if err != nil {
 			return fmt.Errorf("failed to select rows chunk: %w", err)
 		}
@@ -74,7 +85,13 @@ func (w *fetchWorker) run(ctx context.Context) error {
 				return fmt.Errorf("failed to build fetch data: %w", err)
 			}
 
-			w.data <- data
+			select {
+			case w.data <- data:
+			case <-ctx.Done():
+				return fmt.Errorf(
+					"fetch worker context done while waiting for data: %w", ctx.Err(),
+				)
+			}
 		}
 	}
 
@@ -82,7 +99,7 @@ func (w *fetchWorker) run(ctx context.Context) error {
 }
 
 // getMaxValue fetches the maximum value of the primary key from the table.
-func (w *fetchWorker) getMaxValue(ctx context.Context) (int64, error) {
+func (w *fetchWorker) getMaxValue(ctx context.Context, tx *sqlx.Tx) (int64, error) {
 	var maxValueRow struct {
 		MaxValue *int64 `db:"max_value"`
 	}
@@ -91,7 +108,7 @@ func (w *fetchWorker) getMaxValue(ctx context.Context) (int64, error) {
 		"SELECT MAX(%s) as max_value FROM %s",
 		w.config.primaryKey, w.config.table,
 	)
-	row := w.db.QueryRowxContext(ctx, query)
+	row := tx.QueryRowxContext(ctx, query)
 	if err := row.StructScan(&maxValueRow); err != nil {
 		return 0, fmt.Errorf("failed to get max value: %w", err)
 	}
@@ -110,6 +127,7 @@ func (w *fetchWorker) getMaxValue(ctx context.Context) (int64, error) {
 
 func (w *fetchWorker) selectRowsChunk(
 	ctx context.Context,
+	tx *sqlx.Tx,
 	start, end int64,
 ) (scannedRows []sdk.StructuredData, err error) {
 	query := fmt.Sprint(`
@@ -126,7 +144,7 @@ func (w *fetchWorker) selectRowsChunk(
 			"fetchSize": w.config.fetchSize,
 		})
 
-	rows, err := w.db.QueryxContext(ctx, query, start, end, w.config.fetchSize)
+	rows, err := tx.QueryxContext(ctx, query, start, end, w.config.fetchSize)
 	if err != nil {
 		logDataEvt.Msg("failed to query rows")
 		return nil, fmt.Errorf("failed to query rows: %w", err)

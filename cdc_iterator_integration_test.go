@@ -26,13 +26,14 @@ import (
 )
 
 func testCdcIterator(ctx context.Context, is *is.I) (common.Iterator, func()) {
-	config, err := mysql.ParseDSN("root:meroxaadmin@tcp(127.0.0.1:3306)/meroxadb?parseTime=true")
+	config, err := mysql.ParseDSN(testutils.DSN)
 	is.NoErr(err)
 
 	iterator, err := newCdcIterator(ctx, cdcIteratorConfig{
-		mysqlConfig: config,
-		tables:      []string{"users"},
-		TableKeys:   testutils.TableKeys,
+		mysqlConfig:    config,
+		tables:         []string{"users"},
+		TableKeys:      testutils.TableKeys,
+		disableLogging: true,
 	})
 	is.NoErr(err)
 
@@ -43,17 +44,18 @@ func testCdcIteratorAtPosition(
 	ctx context.Context, is *is.I,
 	position sdk.Position,
 ) (common.Iterator, func()) {
-	config, err := mysql.ParseDSN("root:meroxaadmin@tcp(127.0.0.1:3306)/meroxadb?parseTime=true")
+	config, err := mysql.ParseDSN(testutils.DSN)
 	is.NoErr(err)
 
 	pos, err := common.ParseSDKPosition(position)
 	is.NoErr(err)
 
 	iterator, err := newCdcIterator(ctx, cdcIteratorConfig{
-		mysqlConfig: config,
-		position:    pos.CdcPosition,
-		tables:      []string{"users"},
-		TableKeys:   testutils.TableKeys,
+		mysqlConfig:    config,
+		position:       pos.CdcPosition,
+		tables:         []string{"users"},
+		TableKeys:      testutils.TableKeys,
+		disableLogging: true,
 	})
 	is.NoErr(err)
 	is.NoErr(err)
@@ -65,7 +67,8 @@ func TestCDCIterator_InsertAction(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 
-	db := testutils.Connection(is)
+	db, closeDB := testutils.Connection(is)
+	defer closeDB()
 
 	userTable.Recreate(is, db)
 
@@ -85,7 +88,8 @@ func TestCDCIterator_DeleteAction(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 
-	db := testutils.Connection(is)
+	db, closeDB := testutils.Connection(is)
+	defer closeDB()
 
 	userTable.Recreate(is, db)
 
@@ -109,7 +113,8 @@ func TestCDCIterator_UpdateAction(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 
-	db := testutils.Connection(is)
+	db, closeDB := testutils.Connection(is)
+	defer closeDB()
 
 	userTable.Recreate(is, db)
 
@@ -133,7 +138,8 @@ func TestCDCIterator_RestartOnPosition(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 
-	db := testutils.Connection(is)
+	db, closeDB := testutils.Connection(is)
+	defer closeDB()
 
 	userTable.Recreate(is, db)
 

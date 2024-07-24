@@ -42,14 +42,20 @@ type cdcIterator struct {
 }
 
 type cdcIteratorConfig struct {
-	tables      []string
-	mysqlConfig *mysqldriver.Config
-	position    *common.CdcPosition
-	TableKeys   common.TableKeys
+	tables         []string
+	mysqlConfig    *mysqldriver.Config
+	position       *common.CdcPosition
+	disableLogging bool
+	TableKeys      common.TableKeys
 }
 
 func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (common.Iterator, error) {
-	c, err := common.NewCanal(config.mysqlConfig, config.tables)
+	c, err := common.NewCanal(common.CanalConfig{
+		Config:         config.mysqlConfig,
+		Tables:         config.tables,
+		DisableLogging: config.disableLogging,
+		Logger:         sdk.Logger(ctx),
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create canal: %w", err)
 	}
@@ -111,7 +117,6 @@ func (c *cdcIterator) runCanal(ctx context.Context, startPos mysql.Position) err
 
 	select {
 	case <-ctx.Done():
-		c.canal.Close()
 		return fmt.Errorf("context cancelled from runCanal: %w", ctx.Err())
 	case err := <-errChan:
 		return fmt.Errorf("failed to run canal: %w", err)
@@ -123,7 +128,7 @@ func (c *cdcIterator) Ack(context.Context, sdk.Position) error {
 	return nil
 }
 
-func (c *cdcIterator) Next(ctx context.Context) (sdk.Record, error) {
+func (c *cdcIterator) Read(ctx context.Context) (sdk.Record, error) {
 	select {
 	case <-ctx.Done():
 		return sdk.Record{}, fmt.Errorf("context cancelled: %w", ctx.Err())
@@ -152,6 +157,8 @@ func (c *cdcIterator) Teardown(context.Context) error {
 	if c.canalTomb != nil {
 		c.canalTomb.Kill(errors.New("tearing down snapshot iterator"))
 	}
+
+	c.canal.Close()
 
 	return nil
 }
@@ -258,7 +265,7 @@ func buildRecordKey(
 
 	return sdk.StructuredData{
 		string(primaryKey): val,
-		"table":            string(table),
+		"table":            table,
 		"action":           action,
 	}, nil
 }

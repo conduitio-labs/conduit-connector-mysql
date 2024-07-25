@@ -17,17 +17,19 @@ package mysql
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/go-mysql-org/go-mysql/canal"
+	"github.com/go-mysql-org/go-mysql/replication"
 	"github.com/go-mysql-org/go-mysql/schema"
 	mysqldriver "github.com/go-sql-driver/mysql"
 )
 
 type cdcIterator struct {
-	canal *common.Canal
-	data  chan *canal.RowsEvent
+	canal       *common.Canal
+	rowsEventsC chan rowEvent
 
 	canalRunErrC chan error
 	canalDoneC   chan struct{}
@@ -50,11 +52,20 @@ func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (common.Itera
 
 	sdk.Logger(ctx).Info().Msg("created canal")
 
+	pos, err := c.GetMasterPos()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get master pos when creating cdc iterator: %w", err)
+	}
+
+	rowsEventsC := make(chan rowEvent)
+	canalDoneC := make(chan struct{})
+	eventHandler := newCdcEventHandler(pos.Name, canalDoneC, rowsEventsC)
+
 	iterator := &cdcIterator{
 		canal:        c,
-		data:         make(chan *canal.RowsEvent),
+		rowsEventsC:  rowsEventsC,
 		canalRunErrC: make(chan error),
-		canalDoneC:   make(chan struct{}),
+		canalDoneC:   canalDoneC,
 		config:       config,
 	}
 
@@ -64,12 +75,7 @@ func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (common.Itera
 	}
 
 	go func() {
-		handler := &cdcEventHandler{
-			canalDoneC: iterator.canalDoneC,
-			data:       iterator.data,
-		}
-		iterator.canal.SetEventHandler(handler)
-
+		iterator.canal.SetEventHandler(eventHandler)
 		iterator.canalRunErrC <- iterator.canal.RunFrom(startPosition)
 	}()
 
@@ -112,7 +118,7 @@ func (c *cdcIterator) Next(ctx context.Context) (rec sdk.Record, err error) {
 		return rec, ctx.Err()
 	case <-c.canalDoneC:
 		return rec, fmt.Errorf("canal is closed")
-	case data := <-c.data:
+	case data := <-c.rowsEventsC:
 		rec, err := c.buildRecord(data)
 		if err != nil {
 			return rec, fmt.Errorf("failed to build record: %w", err)
@@ -147,16 +153,14 @@ func buildPayload(columns []schema.TableColumn, rows []any) sdk.StructuredData {
 	return payload
 }
 
-func (c *cdcIterator) buildRecord(e *canal.RowsEvent) (sdk.Record, error) {
-	pos, err := c.canal.GetMasterPos()
-	if err != nil {
-		return sdk.Record{}, fmt.Errorf("failed to get master position from buildRecord: %w", err)
+func (c *cdcIterator) buildRecord(e rowEvent) (sdk.Record, error) {
+	pos := common.CdcPosition{
+		Name: e.binlogName,
+		Pos:  e.Header.LogPos,
 	}
 
 	metadata := sdk.Metadata{}
 	metadata.SetCollection(e.Table.Name)
-
-	pos.Pos = e.Header.LogPos
 
 	switch e.Action {
 	case canal.InsertAction:
@@ -217,18 +221,75 @@ func buildRecordKey(
 	return sdk.StructuredData{string(primaryKey): val}, nil
 }
 
+type rowEvent struct {
+	*canal.RowsEvent
+	binlogName string
+}
+
+type binlogName struct {
+	*sync.RWMutex
+	name string
+}
+
+func newBinlogName(name string) *binlogName {
+	return &binlogName{
+		RWMutex: &sync.RWMutex{},
+		name:    name,
+	}
+}
+
+func (b *binlogName) set(name string) {
+	b.Lock()
+	defer b.Unlock()
+	b.name = name
+}
+
+func (b *binlogName) get() string {
+	b.RLock()
+	defer b.RUnlock()
+	return b.name
+}
+
 type cdcEventHandler struct {
-	// We only want the OnRow event, this allows us to ignore all other event methods
 	canal.DummyEventHandler
 
-	canalDoneC chan struct{}
-	data       chan *canal.RowsEvent
+	// the row event log position and the binary log name are not given in sync
+	// by mysql canal, so we need to coordinate them manually. That's why we map
+	// the row event to a custom struct aswell.
+	binlogName *binlogName
+
+	canalDoneC  chan struct{}
+	rowsEventsC chan rowEvent
+}
+
+var _ canal.EventHandler = new(cdcEventHandler)
+
+func newCdcEventHandler(
+	initialBinlogName string,
+	canalDoneC chan struct{},
+	rowsEventsC chan rowEvent,
+) *cdcEventHandler {
+	return &cdcEventHandler{
+		binlogName:  newBinlogName(initialBinlogName),
+		canalDoneC:  canalDoneC,
+		rowsEventsC: rowsEventsC,
+	}
+}
+
+func (h *cdcEventHandler) OnRotate(
+	header *replication.EventHeader,
+	evt *replication.RotateEvent,
+) error {
+	h.binlogName.set(string(evt.NextLogName))
+	return nil
 }
 
 func (h *cdcEventHandler) OnRow(e *canal.RowsEvent) error {
+	binlogName := h.binlogName.get()
+	rowEvent := rowEvent{e, binlogName}
 	select {
 	case <-h.canalDoneC:
-	case h.data <- e:
+	case h.rowsEventsC <- rowEvent:
 	}
 
 	return nil

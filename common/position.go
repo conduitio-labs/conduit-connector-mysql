@@ -19,7 +19,6 @@ import (
 	"fmt"
 
 	sdk "github.com/conduitio/conduit-connector-sdk"
-	"github.com/go-mysql-org/go-mysql/mysql"
 )
 
 type PositionType string
@@ -76,7 +75,8 @@ type TablePosition struct {
 }
 
 type CdcPosition struct {
-	mysql.Position
+	Name string `json:"name"`
+	Pos  uint32 `json:"pos"`
 }
 
 func (p CdcPosition) ToSDKPosition() sdk.Position {

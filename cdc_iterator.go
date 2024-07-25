@@ -19,17 +19,14 @@ import (
 	"fmt"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
-	"github.com/conduitio/conduit-commons/csync"
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/go-mysql-org/go-mysql/canal"
-	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/schema"
 	mysqldriver "github.com/go-sql-driver/mysql"
 )
 
 type cdcIterator struct {
-	canal *canal.Canal
-	acks  *csync.WaitGroup
+	canal *common.Canal
 	data  chan *canal.RowsEvent
 
 	canalRunErrC chan error
@@ -55,7 +52,6 @@ func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (common.Itera
 
 	iterator := &cdcIterator{
 		canal:        c,
-		acks:         &csync.WaitGroup{},
 		data:         make(chan *canal.RowsEvent),
 		canalRunErrC: make(chan error),
 		canalDoneC:   make(chan struct{}),
@@ -80,29 +76,32 @@ func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (common.Itera
 	return iterator, nil
 }
 
-func (c *cdcIterator) getStartPosition(config cdcIteratorConfig) (mysql.Position, error) {
+func (c *cdcIterator) getStartPosition(config cdcIteratorConfig) (common.CdcPosition, error) {
+	var cdcPosition common.CdcPosition
 	if config.position != nil {
 		pos, err := common.ParseSDKPosition(config.position)
 		if err != nil {
-			return mysql.Position{}, fmt.Errorf("failed to parse position: %w", err)
+			return cdcPosition, fmt.Errorf("failed to parse position: %w", err)
 		}
 		if pos.Kind == common.PositionTypeSnapshot {
-			return mysql.Position{}, fmt.Errorf("invalid position type: %s", pos.Kind)
+			return cdcPosition, fmt.Errorf("invalid position type: %s", pos.Kind)
 		}
 
-		return pos.CdcPosition.Position, nil
+		return *pos.CdcPosition, nil
 	}
 
 	masterPos, err := c.canal.GetMasterPos()
 	if err != nil {
-		return mysql.Position{}, fmt.Errorf("failed to get master position: %w", err)
+		return cdcPosition, fmt.Errorf("failed to get master position: %w", err)
 	}
 
-	return masterPos, nil
+	return common.CdcPosition{
+		Name: masterPos.Name,
+		Pos:  masterPos.Pos,
+	}, nil
 }
 
 func (c *cdcIterator) Ack(context.Context, sdk.Position) error {
-	c.acks.Done()
 	return nil
 }
 
@@ -119,7 +118,6 @@ func (c *cdcIterator) Next(ctx context.Context) (rec sdk.Record, err error) {
 			return rec, fmt.Errorf("failed to build record: %w", err)
 		}
 
-		c.acks.Add(1)
 		return rec, nil
 	}
 }
@@ -128,12 +126,14 @@ func (c *cdcIterator) Teardown(ctx context.Context) error {
 	close(c.canalDoneC)
 
 	c.canal.Close()
-	if err := <-c.canalRunErrC; err != nil {
-		return fmt.Errorf("failed to stop canal: %w", err)
-	}
-
-	if err := c.acks.Wait(ctx); err != nil {
-		return fmt.Errorf("failed to wait for cdc acks: %w", err)
+	select {
+	case <-ctx.Done():
+		//nolint:wrapcheck // no need to wrap canceled error
+		return ctx.Err()
+	case err := <-c.canalRunErrC:
+		if err != nil {
+			return fmt.Errorf("failed to stop canal: %w", err)
+		}
 	}
 
 	return nil
@@ -160,7 +160,7 @@ func (c *cdcIterator) buildRecord(e *canal.RowsEvent) (sdk.Record, error) {
 
 	switch e.Action {
 	case canal.InsertAction:
-		position := common.CdcPosition{Position: pos}.ToSDKPosition()
+		position := pos.ToSDKPosition()
 		payload := buildPayload(e.Table.Columns, e.Rows[0])
 
 		table := common.TableName(e.Table.Name)
@@ -173,7 +173,7 @@ func (c *cdcIterator) buildRecord(e *canal.RowsEvent) (sdk.Record, error) {
 
 		return sdk.Util.Source.NewRecordCreate(position, metadata, key, payload), nil
 	case canal.DeleteAction:
-		position := common.CdcPosition{Position: pos}.ToSDKPosition()
+		position := pos.ToSDKPosition()
 
 		payload := buildPayload(e.Table.Columns, e.Rows[0])
 
@@ -187,7 +187,7 @@ func (c *cdcIterator) buildRecord(e *canal.RowsEvent) (sdk.Record, error) {
 
 		return sdk.Util.Source.NewRecordDelete(position, metadata, key), nil
 	case canal.UpdateAction:
-		position := common.CdcPosition{Position: pos}.ToSDKPosition()
+		position := pos.ToSDKPosition()
 		before := buildPayload(e.Table.Columns, e.Rows[0])
 		after := buildPayload(e.Table.Columns, e.Rows[1])
 

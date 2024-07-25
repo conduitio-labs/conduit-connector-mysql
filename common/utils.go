@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/go-mysql-org/go-mysql/canal"
+	mysqlorg "github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-sql-driver/mysql"
 )
 
@@ -35,7 +36,31 @@ func FormatValue(val any) any {
 	}
 }
 
-func NewCanal(config *mysql.Config, tables []string) (*canal.Canal, error) {
+// Canal is a wrapper around *canal.Canal to enforce our custom CdcPosition.
+type Canal struct{ *canal.Canal }
+
+func (c *Canal) RunFrom(pos CdcPosition) error {
+	mysqlPos := mysqlorg.Position{
+		Name: pos.Name,
+		Pos:  pos.Pos,
+	}
+
+	//nolint:wrapcheck // Canal wraps *canal.Canal, no need for more error wrapping
+	return c.Canal.RunFrom(mysqlPos)
+}
+
+func (c *Canal) GetMasterPos() (CdcPosition, error) {
+	pos, err := c.Canal.GetMasterPos()
+	cdcPosition := CdcPosition{
+		Name: pos.Name,
+		Pos:  pos.Pos,
+	}
+
+	//nolint:wrapcheck // Canal wraps *canal.Canal, no need for more error wrapping
+	return cdcPosition, err
+}
+
+func NewCanal(config *mysql.Config, tables []string) (*Canal, error) {
 	cfg := canal.NewDefaultConfig()
 	cfg.Addr = config.Addr
 	cfg.User = config.User
@@ -52,5 +77,5 @@ func NewCanal(config *mysql.Config, tables []string) (*canal.Canal, error) {
 		return nil, fmt.Errorf("failed to create mysql canal: %w", err)
 	}
 
-	return c, nil
+	return &Canal{c}, nil
 }

@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	sdk "github.com/conduitio/conduit-connector-sdk"
@@ -161,6 +162,8 @@ func (c *cdcIterator) buildRecord(e rowEvent) (sdk.Record, error) {
 
 	metadata := sdk.Metadata{}
 	metadata.SetCollection(e.Table.Name)
+	createdAt := time.Unix(int64(e.Header.Timestamp), 0).UTC()
+	metadata.SetCreatedAt(createdAt)
 
 	switch e.Action {
 	case canal.InsertAction:

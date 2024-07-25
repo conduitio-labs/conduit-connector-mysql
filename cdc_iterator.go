@@ -280,7 +280,7 @@ func newCdcEventHandler(
 }
 
 func (h *cdcEventHandler) OnRotate(
-	header *replication.EventHeader,
+	_ *replication.EventHeader,
 	evt *replication.RotateEvent,
 ) error {
 	h.binlogName.set(string(evt.NextLogName))

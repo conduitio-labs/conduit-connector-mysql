@@ -16,7 +16,6 @@ package mysql
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -32,19 +31,12 @@ var ErrSnapshotIteratorDone = errors.New("snapshot complete")
 const defaultFetchSize = 50000
 
 type snapshotKey struct {
-	Table common.TableName      `json:"table"`
 	Key   common.PrimaryKeyName `json:"key"`
 	Value any                   `json:"value"`
 }
 
 func (key snapshotKey) ToSDKData() sdk.Data {
-	bs, err := json.Marshal(key)
-	if err != nil {
-		// This should never happen, all Position structs should be valid.
-		panic(err)
-	}
-
-	return sdk.RawData(bs)
+	return sdk.StructuredData{string(key.Key): key.Value}
 }
 
 type (
@@ -55,6 +47,7 @@ type (
 	// iterator itself.
 	fetchData struct {
 		key      snapshotKey
+		table    common.TableName
 		payload  sdk.StructuredData
 		position common.TablePosition
 	}
@@ -169,11 +162,11 @@ func (s *snapshotIterator) Teardown(ctx context.Context) error {
 }
 
 func (s *snapshotIterator) buildRecord(d fetchData) sdk.Record {
-	s.lastPosition.Snapshots[d.key.Table] = d.position
+	s.lastPosition.Snapshots[d.table] = d.position
 
 	pos := s.lastPosition.ToSDKPosition()
 	metadata := make(sdk.Metadata)
-	metadata.SetCollection(string(d.key.Table))
+	metadata.SetCollection(string(d.table))
 
 	key := d.key.ToSDKData()
 

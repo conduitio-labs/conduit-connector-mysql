@@ -146,12 +146,7 @@ func ReadAndAssertInsert(
 	is.NoErr(err)
 	is.Equal(col, "users")
 
-	IsDataEqual(is, rec.Key, sdk.StructuredData{
-		"id":     user.ID,
-		"table":  "users",
-		"action": "insert",
-	})
-
+	IsDataEqual(is, rec.Key, sdk.StructuredData{"id": user.ID})
 	IsDataEqual(is, rec.Payload.After, user.ToStructuredData())
 
 	return rec
@@ -166,11 +161,13 @@ func ReadAndAssertUpdate(
 	is.NoErr(iterator.Ack(ctx, rec.Position))
 
 	is.Equal(rec.Operation, sdk.OperationUpdate)
-	is.Equal(rec.Metadata["mysql.action"], "update")
 
 	col, err := rec.Metadata.GetCollection()
 	is.NoErr(err)
 	is.Equal(col, "users")
+
+	IsDataEqual(is, rec.Key, sdk.StructuredData{"id": prev.ID})
+	IsDataEqual(is, rec.Key, sdk.StructuredData{"id": next.ID})
 
 	IsDataEqual(is, rec.Payload.Before, prev.ToStructuredData())
 	IsDataEqual(is, rec.Payload.After, next.ToStructuredData())
@@ -185,17 +182,12 @@ func ReadAndAssertDelete(
 	is.NoErr(iterator.Ack(ctx, rec.Position))
 
 	is.Equal(rec.Operation, sdk.OperationDelete)
-	is.Equal(rec.Metadata["mysql.action"], "delete")
 
 	col, err := rec.Metadata.GetCollection()
 	is.NoErr(err)
 	is.Equal(col, "users")
 
-	IsDataEqual(is, rec.Key, sdk.StructuredData{
-		"id":     user.ID,
-		"table":  "users",
-		"action": "delete",
-	})
+	IsDataEqual(is, rec.Key, sdk.StructuredData{"id": user.ID})
 }
 
 func IsDataEqual(is *is.I, a, b sdk.Data) {
@@ -254,12 +246,7 @@ func ReadAndAssertSnapshot(
 	is.NoErr(err)
 	is.Equal(col, "users")
 
-	IsDataEqual(is, rec.Key, sdk.StructuredData{
-		"table": common.TableName("users"),
-		"key":   "id",
-		"value": user.ID,
-	})
-
+	IsDataEqual(is, rec.Key, sdk.StructuredData{"id": user.ID})
 	IsDataEqual(is, rec.Payload.After, user.ToStructuredData())
 }
 
@@ -270,11 +257,6 @@ func AssertUserSnapshot(is *is.I, user User, rec sdk.Record) {
 	is.NoErr(err)
 	is.Equal(col, "users")
 
-	IsDataEqual(is, rec.Key, sdk.StructuredData{
-		"key":   "id",
-		"value": user.ID,
-		"table": common.TableName("users"),
-	})
-
+	IsDataEqual(is, rec.Key, sdk.StructuredData{"id": user.ID})
 	IsDataEqual(is, rec.Payload.After, user.ToStructuredData())
 }

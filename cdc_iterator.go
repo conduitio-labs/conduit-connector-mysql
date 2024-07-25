@@ -153,7 +153,7 @@ func (c *cdcIterator) buildRecord(e *canal.RowsEvent) (sdk.Record, error) {
 		return sdk.Record{}, fmt.Errorf("failed to get master position from buildRecord: %w", err)
 	}
 
-	metadata := sdk.Metadata{"mysql.action": e.Action}
+	metadata := sdk.Metadata{}
 	metadata.SetCollection(e.Table.Name)
 
 	pos.Pos = e.Header.LogPos
@@ -166,7 +166,7 @@ func (c *cdcIterator) buildRecord(e *canal.RowsEvent) (sdk.Record, error) {
 		table := common.TableName(e.Table.Name)
 		primaryKey := c.config.TableKeys[table]
 
-		key, err := buildRecordKey(primaryKey, table, e.Action, payload)
+		key, err := buildRecordKey(primaryKey, payload)
 		if err != nil {
 			return sdk.Record{}, fmt.Errorf("failed to build record key: %w", err)
 		}
@@ -180,7 +180,7 @@ func (c *cdcIterator) buildRecord(e *canal.RowsEvent) (sdk.Record, error) {
 		table := common.TableName(e.Table.Name)
 		primaryKey := c.config.TableKeys[table]
 
-		key, err := buildRecordKey(primaryKey, table, e.Action, payload)
+		key, err := buildRecordKey(primaryKey, payload)
 		if err != nil {
 			return sdk.Record{}, fmt.Errorf("failed to build record key: %w", err)
 		}
@@ -194,7 +194,7 @@ func (c *cdcIterator) buildRecord(e *canal.RowsEvent) (sdk.Record, error) {
 		table := common.TableName(e.Table.Name)
 		primaryKey := c.config.TableKeys[table]
 
-		key, err := buildRecordKey(primaryKey, table, e.Action, before)
+		key, err := buildRecordKey(primaryKey, before)
 		if err != nil {
 			return sdk.Record{}, fmt.Errorf("failed to build record key: %w", err)
 		}
@@ -206,19 +206,15 @@ func (c *cdcIterator) buildRecord(e *canal.RowsEvent) (sdk.Record, error) {
 }
 
 func buildRecordKey(
-	primaryKey common.PrimaryKeyName, table common.TableName,
-	action string, payload sdk.StructuredData,
+	primaryKey common.PrimaryKeyName,
+	payload sdk.StructuredData,
 ) (sdk.StructuredData, error) {
 	val, ok := payload[string(primaryKey)]
 	if !ok {
 		return nil, fmt.Errorf("key %s not found in payload", primaryKey)
 	}
 
-	return sdk.StructuredData{
-		string(primaryKey): val,
-		"table":            string(table),
-		"action":           action,
-	}, nil
+	return sdk.StructuredData{string(primaryKey): val}, nil
 }
 
 type cdcEventHandler struct {

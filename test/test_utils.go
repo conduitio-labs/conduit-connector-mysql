@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strconv"
 	"testing"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
@@ -29,11 +30,19 @@ import (
 	"github.com/rs/zerolog"
 )
 
+var cachedConnection *sqlx.DB
+
 func Connection(is *is.I) *sqlx.DB {
+	if cachedConnection != nil {
+		return cachedConnection
+	}
+
 	db, err := sqlx.Open("mysql", "root:meroxaadmin@tcp(127.0.0.1:3306)/meroxadb?parseTime=true")
 	is.NoErr(err)
 
-	return db
+	cachedConnection = db
+
+	return cachedConnection
 }
 
 func TestContext(t *testing.T) context.Context {
@@ -142,9 +151,7 @@ func ReadAndAssertInsert(
 
 	is.Equal(rec.Operation, sdk.OperationCreate)
 
-	col, err := rec.Metadata.GetCollection()
-	is.NoErr(err)
-	is.Equal(col, "users")
+	assertMetadata(ctx, is, rec.Metadata)
 
 	IsDataEqual(is, rec.Key, sdk.StructuredData{"id": user.ID})
 	IsDataEqual(is, rec.Payload.After, user.ToStructuredData())
@@ -162,9 +169,7 @@ func ReadAndAssertUpdate(
 
 	is.Equal(rec.Operation, sdk.OperationUpdate)
 
-	col, err := rec.Metadata.GetCollection()
-	is.NoErr(err)
-	is.Equal(col, "users")
+	assertMetadata(ctx, is, rec.Metadata)
 
 	IsDataEqual(is, rec.Key, sdk.StructuredData{"id": prev.ID})
 	IsDataEqual(is, rec.Key, sdk.StructuredData{"id": next.ID})
@@ -183,9 +188,7 @@ func ReadAndAssertDelete(
 
 	is.Equal(rec.Operation, sdk.OperationDelete)
 
-	col, err := rec.Metadata.GetCollection()
-	is.NoErr(err)
-	is.Equal(col, "users")
+	assertMetadata(ctx, is, rec.Metadata)
 
 	IsDataEqual(is, rec.Key, sdk.StructuredData{"id": user.ID})
 }
@@ -236,27 +239,45 @@ func ReadAndAssertSnapshot(
 	ctx context.Context, is *is.I,
 	iterator common.Iterator, user User,
 ) {
+	is.Helper()
 	rec, err := iterator.Next(ctx)
 	is.NoErr(err)
 	is.NoErr(iterator.Ack(ctx, rec.Position))
 
 	is.Equal(rec.Operation, sdk.OperationSnapshot)
 
-	col, err := rec.Metadata.GetCollection()
-	is.NoErr(err)
-	is.Equal(col, "users")
+	assertMetadata(ctx, is, rec.Metadata)
 
 	IsDataEqual(is, rec.Key, sdk.StructuredData{"id": user.ID})
 	IsDataEqual(is, rec.Payload.After, user.ToStructuredData())
 }
 
-func AssertUserSnapshot(is *is.I, user User, rec sdk.Record) {
+func AssertUserSnapshot(ctx context.Context, is *is.I, user User, rec sdk.Record) {
 	is.Equal(rec.Operation, sdk.OperationSnapshot)
 
-	col, err := rec.Metadata.GetCollection()
-	is.NoErr(err)
-	is.Equal(col, "users")
+	assertMetadata(ctx, is, rec.Metadata)
 
 	IsDataEqual(is, rec.Key, sdk.StructuredData{"id": user.ID})
 	IsDataEqual(is, rec.Payload.After, user.ToStructuredData())
+}
+
+func assertMetadata(ctx context.Context, is *is.I, metadata sdk.Metadata) {
+	col, err := metadata.GetCollection()
+	is.NoErr(err)
+	is.Equal(col, "users")
+
+	expectedServerID := GetServerID(ctx, is)
+
+	actualServerID, err := strconv.Atoi(metadata[common.ServerIDKey])
+	is.NoErr(err)
+
+	is.Equal(actualServerID, int(expectedServerID))
+}
+
+func GetServerID(ctx context.Context, is *is.I) common.ServerID {
+	db := Connection(is)
+	serverID, err := common.GetServerID(ctx, db)
+	is.NoErr(err)
+
+	return serverID
 }

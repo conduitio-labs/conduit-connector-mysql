@@ -15,11 +15,15 @@
 package common
 
 import (
+	"context"
 	"fmt"
+	"strconv"
 	"time"
 
+	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/go-mysql-org/go-mysql/canal"
 	"github.com/go-sql-driver/mysql"
+	"github.com/jmoiron/sqlx"
 )
 
 func FormatValue(val any) any {
@@ -53,4 +57,25 @@ func NewCanal(config *mysql.Config, tables []string) (*canal.Canal, error) {
 	}
 
 	return c, nil
+}
+
+type ServerID int
+
+const ServerIDKey = "serverID"
+
+func SetServerID(m sdk.Metadata, serverID ServerID) {
+	m[ServerIDKey] = strconv.Itoa(int(serverID))
+}
+
+func GetServerID(ctx context.Context, db *sqlx.DB) (ServerID, error) {
+	var serverIDRow struct {
+		ServerID ServerID `db:"server_id"`
+	}
+
+	row := db.QueryRowxContext(ctx, "SELECT @@server_id as server_id")
+	if err := row.StructScan(&serverIDRow); err != nil {
+		return 0, fmt.Errorf("failed to find server id")
+	}
+
+	return serverIDRow.ServerID, nil
 }

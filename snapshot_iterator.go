@@ -52,12 +52,11 @@ type (
 		position common.TablePosition
 	}
 	snapshotIterator struct {
-		db           *sqlx.DB
 		t            *tomb.Tomb
 		data         chan fetchData
 		acks         csync.WaitGroup
-		fetchSize    int
 		lastPosition common.SnapshotPosition
+		config       snapshotIteratorConfig
 	}
 	snapshotIteratorConfig struct {
 		db            *sqlx.DB
@@ -66,6 +65,7 @@ type (
 		startPosition common.SnapshotPosition
 		database      string
 		tables        []string
+		serverID      common.ServerID
 	}
 )
 
@@ -101,19 +101,18 @@ func newSnapshotIterator(
 	lastPosition := config.startPosition.Clone()
 
 	iterator := &snapshotIterator{
-		db:           config.db,
 		t:            &tomb.Tomb{},
 		data:         make(chan fetchData),
 		acks:         csync.WaitGroup{},
-		fetchSize:    config.fetchSize,
+		config:       config,
 		lastPosition: lastPosition,
 	}
 
 	for table, primaryKey := range config.tableKeys {
-		worker := newFetchWorker(iterator.db, iterator.data, fetchWorkerConfig{
+		worker := newFetchWorker(iterator.config.db, iterator.data, fetchWorkerConfig{
 			lastPosition: iterator.lastPosition,
 			table:        table,
-			fetchSize:    iterator.fetchSize,
+			fetchSize:    iterator.config.fetchSize,
 			primaryKey:   primaryKey,
 		})
 		iterator.t.Go(func() error {
@@ -167,6 +166,7 @@ func (s *snapshotIterator) buildRecord(d fetchData) sdk.Record {
 	pos := s.lastPosition.ToSDKPosition()
 	metadata := make(sdk.Metadata)
 	metadata.SetCollection(string(d.table))
+	common.SetServerID(metadata, s.config.serverID)
 
 	key := d.key.ToSDKData()
 

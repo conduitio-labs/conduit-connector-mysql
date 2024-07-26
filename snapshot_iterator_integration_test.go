@@ -29,11 +29,13 @@ import (
 var userTable testutils.UsersTable
 
 func testSnapshotIterator(ctx context.Context, is *is.I) (common.Iterator, func()) {
+	serverID := testutils.GetServerID(ctx, is)
 	iterator, err := newSnapshotIterator(ctx, snapshotIteratorConfig{
 		tableKeys: testutils.TableKeys,
 		db:        testutils.Connection(is),
 		database:  "meroxadb",
 		tables:    []string{"users"},
+		serverID:  serverID,
 	})
 	is.NoErr(err)
 
@@ -44,12 +46,14 @@ func testSnapshotIteratorAtPosition(
 	ctx context.Context, is *is.I,
 	position common.SnapshotPosition,
 ) (common.Iterator, func()) {
+	serverID := testutils.GetServerID(ctx, is)
 	iterator, err := newSnapshotIterator(ctx, snapshotIteratorConfig{
 		tableKeys:     testutils.TableKeys,
 		db:            testutils.Connection(is),
 		startPosition: position,
 		database:      "meroxadb",
 		tables:        []string{"users"},
+		serverID:      serverID,
 	})
 	is.NoErr(err)
 
@@ -185,6 +189,6 @@ func TestSnapshotIterator_RestartOnPosition(t *testing.T) {
 
 	is.Equal(len(recs), 100)
 	for i, rec := range recs {
-		testutils.AssertUserSnapshot(is, users[i], rec)
+		testutils.AssertUserSnapshot(ctx, is, users[i], rec)
 	}
 }

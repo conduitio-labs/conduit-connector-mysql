@@ -42,6 +42,7 @@ type cdcIteratorConfig struct {
 	mysqlConfig *mysqldriver.Config
 	position    sdk.Position
 	TableKeys   common.TableKeys
+	serverID    common.ServerID
 }
 
 func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (common.Iterator, error) {
@@ -159,6 +160,7 @@ func (c *cdcIterator) buildRecord(e rowEvent) (sdk.Record, error) {
 	metadata.SetCollection(e.Table.Name)
 	createdAt := time.Unix(int64(e.Header.Timestamp), 0).UTC()
 	metadata.SetCreatedAt(createdAt)
+	common.SetServerID(metadata, c.config.serverID)
 
 	switch e.Action {
 	case canal.InsertAction:

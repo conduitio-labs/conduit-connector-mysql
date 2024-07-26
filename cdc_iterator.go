@@ -29,7 +29,7 @@ import (
 )
 
 type cdcIterator struct {
-	canal       *common.Canal
+	canal       *canal.Canal
 	rowsEventsC chan rowEvent
 
 	canalRunErrC chan error
@@ -77,7 +77,8 @@ func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (common.Itera
 
 	go func() {
 		iterator.canal.SetEventHandler(eventHandler)
-		iterator.canalRunErrC <- iterator.canal.RunFrom(startPosition)
+		pos := startPosition.ToMysqlPos()
+		iterator.canalRunErrC <- iterator.canal.RunFrom(pos)
 	}()
 
 	return iterator, nil

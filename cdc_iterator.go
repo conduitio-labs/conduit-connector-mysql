@@ -17,7 +17,6 @@ package mysql
 import (
 	"context"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
@@ -230,37 +229,13 @@ type rowEvent struct {
 	binlogName string
 }
 
-type binlogName struct {
-	*sync.RWMutex
-	name string
-}
-
-func newBinlogName(name string) *binlogName {
-	return &binlogName{
-		RWMutex: &sync.RWMutex{},
-		name:    name,
-	}
-}
-
-func (b *binlogName) set(name string) {
-	b.Lock()
-	defer b.Unlock()
-	b.name = name
-}
-
-func (b *binlogName) get() string {
-	b.RLock()
-	defer b.RUnlock()
-	return b.name
-}
-
 type cdcEventHandler struct {
 	canal.DummyEventHandler
 
 	// the row event log position and the binary log name are not given in sync
 	// by mysql canal, so we need to coordinate them manually. That's why we map
 	// the row event to a custom struct aswell.
-	binlogName *binlogName
+	binlogName string
 
 	canalDoneC  chan struct{}
 	rowsEventsC chan rowEvent
@@ -274,7 +249,7 @@ func newCdcEventHandler(
 	rowsEventsC chan rowEvent,
 ) *cdcEventHandler {
 	return &cdcEventHandler{
-		binlogName:  newBinlogName(initialBinlogName),
+		binlogName:  initialBinlogName,
 		canalDoneC:  canalDoneC,
 		rowsEventsC: rowsEventsC,
 	}
@@ -284,13 +259,12 @@ func (h *cdcEventHandler) OnRotate(
 	_ *replication.EventHeader,
 	evt *replication.RotateEvent,
 ) error {
-	h.binlogName.set(string(evt.NextLogName))
+	h.binlogName = string(evt.NextLogName)
 	return nil
 }
 
 func (h *cdcEventHandler) OnRow(e *canal.RowsEvent) error {
-	binlogName := h.binlogName.get()
-	rowEvent := rowEvent{e, binlogName}
+	rowEvent := rowEvent{e, h.binlogName}
 	select {
 	case <-h.canalDoneC:
 	case h.rowsEventsC <- rowEvent:

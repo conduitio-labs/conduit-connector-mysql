@@ -52,14 +52,8 @@ func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (common.Itera
 
 	sdk.Logger(ctx).Info().Msg("created canal")
 
-	pos, err := c.GetMasterPos()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get master pos when creating cdc iterator: %w", err)
-	}
-
 	rowsEventsC := make(chan rowEvent)
 	canalDoneC := make(chan struct{})
-	eventHandler := newCdcEventHandler(pos.Name, canalDoneC, rowsEventsC)
 
 	iterator := &cdcIterator{
 		canal:        c,
@@ -73,6 +67,7 @@ func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (common.Itera
 	if err != nil {
 		return nil, fmt.Errorf("failed to get start position: %w", err)
 	}
+	eventHandler := newCdcEventHandler(startPosition.Name, canalDoneC, rowsEventsC)
 
 	go func() {
 		iterator.canal.SetEventHandler(eventHandler)

@@ -133,6 +133,9 @@ func (s *snapshotIterator) Next(ctx context.Context) (rec sdk.Record, err error)
 			return rec, fmt.Errorf(
 				"cannot stop snapshot mode, fetchers exited unexpectedly: %w", err)
 		}
+		if err := s.acks.Wait(ctx); err != nil {
+			return rec, fmt.Errorf("failed to wait for acks on snapshot iterator done: %w", err)
+		}
 
 		return rec, ErrSnapshotIteratorDone
 	case data := <-s.data:

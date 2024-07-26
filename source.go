@@ -71,11 +71,17 @@ func (s *Source) Open(ctx context.Context, _ sdk.Position) (err error) {
 		return fmt.Errorf("failed to get table keys: %w", err)
 	}
 
+	serverID, err := common.GetServerID(ctx, s.db)
+	if err != nil {
+		return fmt.Errorf("failed to get server id: %w", err)
+	}
+
 	s.iterator, err = newSnapshotIterator(ctx, snapshotIteratorConfig{
 		db:        s.db,
 		tableKeys: tableKeys,
 		database:  s.configFromDsn.DBName,
 		tables:    s.config.Tables,
+		serverID:  serverID,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create snapshot iterator: %w", err)

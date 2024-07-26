@@ -29,13 +29,10 @@ func testCdcIterator(ctx context.Context, is *is.I) (common.Iterator, func()) {
 	config, err := mysql.ParseDSN("root:meroxaadmin@tcp(127.0.0.1:3306)/meroxadb?parseTime=true")
 	is.NoErr(err)
 
-	serverID := testutils.GetServerID(ctx, is)
-
 	iterator, err := newCdcIterator(ctx, cdcIteratorConfig{
 		mysqlConfig: config,
 		tables:      []string{"users"},
 		TableKeys:   testutils.TableKeys,
-		serverID:    serverID,
 	})
 	is.NoErr(err)
 
@@ -49,14 +46,11 @@ func testCdcIteratorAtPosition(
 	config, err := mysql.ParseDSN("root:meroxaadmin@tcp(127.0.0.1:3306)/meroxadb?parseTime=true")
 	is.NoErr(err)
 
-	serverID := testutils.GetServerID(ctx, is)
-
 	iterator, err := newCdcIterator(ctx, cdcIteratorConfig{
 		mysqlConfig: config,
 		position:    position,
 		tables:      []string{"users"},
 		TableKeys:   testutils.TableKeys,
-		serverID:    serverID,
 	})
 	is.NoErr(err)
 	is.NoErr(err)

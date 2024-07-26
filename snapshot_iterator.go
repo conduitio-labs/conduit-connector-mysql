@@ -169,7 +169,7 @@ func (s *snapshotIterator) buildRecord(d fetchData) sdk.Record {
 	pos := s.lastPosition.ToSDKPosition()
 	metadata := make(sdk.Metadata)
 	metadata.SetCollection(string(d.table))
-	common.SetServerID(metadata, s.config.serverID)
+	metadata[common.ServerIDKey] = string(s.config.serverID)
 
 	key := d.key.ToSDKData()
 

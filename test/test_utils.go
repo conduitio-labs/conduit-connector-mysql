@@ -19,7 +19,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
-	"strconv"
 	"testing"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
@@ -268,10 +267,7 @@ func assertMetadata(ctx context.Context, is *is.I, metadata sdk.Metadata) {
 
 	expectedServerID := GetServerID(ctx, is)
 
-	actualServerID, err := strconv.Atoi(metadata[common.ServerIDKey])
-	is.NoErr(err)
-
-	is.Equal(actualServerID, int(expectedServerID))
+	is.Equal(common.ServerID(metadata[common.ServerIDKey]), expectedServerID)
 }
 
 func GetServerID(ctx context.Context, is *is.I) common.ServerID {

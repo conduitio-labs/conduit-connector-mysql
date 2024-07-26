@@ -160,7 +160,7 @@ func (c *cdcIterator) buildRecord(e rowEvent) (sdk.Record, error) {
 	metadata.SetCollection(e.Table.Name)
 	createdAt := time.Unix(int64(e.Header.Timestamp), 0).UTC()
 	metadata.SetCreatedAt(createdAt)
-	common.SetServerID(metadata, c.config.serverID)
+	metadata["mysql.serverID"] = strconv.FormatUint(uint64(e.Header.ServerID), 10)
 
 	switch e.Action {
 	case canal.InsertAction:

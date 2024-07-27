@@ -59,7 +59,7 @@ func NewCanal(config *mysql.Config, tables []string) (*canal.Canal, error) {
 }
 
 // ServerID will go to the record metadata, so it is easier to handle it as a
-// string
+// string.
 type ServerID string
 
 const ServerIDKey = "mysql.serverID"

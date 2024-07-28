@@ -62,7 +62,7 @@ type (
 		db            *sqlx.DB
 		tableKeys     common.TableKeys
 		fetchSize     int
-		startPosition common.SnapshotPosition
+		startPosition *common.SnapshotPosition
 		database      string
 		tables        []string
 		serverID      common.ServerID
@@ -70,8 +70,10 @@ type (
 )
 
 func (config *snapshotIteratorConfig) init() error {
-	if config.startPosition.Snapshots == nil {
-		config.startPosition.Snapshots = make(map[common.TableName]common.TablePosition)
+	if config.startPosition == nil {
+		config.startPosition = &common.SnapshotPosition{
+			Snapshots: map[common.TableName]common.TablePosition{},
+		}
 	}
 
 	if config.fetchSize == 0 {

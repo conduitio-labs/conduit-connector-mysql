@@ -42,14 +42,19 @@ func testCdcIterator(ctx context.Context, is *is.I) (common.Iterator, func()) {
 
 func testCdcIteratorAtPosition(
 	ctx context.Context, is *is.I,
-	position sdk.Position,
+	sdkPos sdk.Position,
 ) (common.Iterator, func()) {
 	config, err := mysql.ParseDSN("root:meroxaadmin@tcp(127.0.0.1:3306)/meroxadb?parseTime=true")
 	is.NoErr(err)
 
+	pos, err := common.ParseSDKPosition(sdkPos)
+	is.NoErr(err)
+
+	is.Equal(pos.Kind, common.PositionTypeCDC)
+
 	iterator, err := newCdcIterator(ctx, cdcIteratorConfig{
 		mysqlConfig: config,
-		position:    position,
+		position:    pos.CdcPosition,
 		tables:      []string{"users"},
 		TableKeys:   testutils.TableKeys,
 	})

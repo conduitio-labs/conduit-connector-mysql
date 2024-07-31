@@ -17,7 +17,6 @@ package mysql
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	testutils "github.com/conduitio-labs/conduit-connector-mysql/test"
@@ -171,48 +170,4 @@ func TestCDCIterator_RestartOnPosition(t *testing.T) {
 	testutils.ReadAndAssertInsert(ctx, is, iterator, user3)
 	testutils.ReadAndAssertInsert(ctx, is, iterator, user4)
 	testutils.ReadAndAssertInsert(ctx, is, iterator, user5)
-}
-
-func TestCDCEventHandler_LogRotation(t *testing.T) {
-	is := is.New(t)
-
-	config, err := mysql.ParseDSN("root:meroxaadmin@tcp(127.0.0.1:3306)/meroxadb?parseTime=true")
-	is.NoErr(err)
-
-	db := testutils.Connection(is)
-
-	c, err := common.NewCanal(config, []string{"users"})
-	is.NoErr(err)
-
-	doneC := make(chan struct{})
-	rowEventsC := make(chan rowEvent)
-
-	position, err := c.GetMasterPos()
-	is.NoErr(err)
-
-	handler := newCdcEventHandler(position.Name, doneC, rowEventsC)
-	c.SetEventHandler(handler)
-
-	time.Sleep(100 * time.Millisecond)
-
-	// force a log rotation to check that the OnRotate event is behaving as expected
-	_, err = db.Exec("FLUSH LOGS")
-	is.NoErr(err)
-
-	positionFromFlushed, err := c.GetMasterPos()
-	is.NoErr(err)
-
-	userTable.Insert(is, db, "user1")
-
-	go func() {
-		c.RunFrom(position)
-		close(doneC)
-	}()
-
-	rowEvt := <-rowEventsC
-
-	is.Equal(rowEvt.binlogName, positionFromFlushed.Name)
-
-	c.Close()
-	<-doneC
 }

@@ -23,7 +23,6 @@ import (
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/go-mysql-org/go-mysql/canal"
-	"github.com/go-mysql-org/go-mysql/replication"
 	"github.com/go-mysql-org/go-mysql/schema"
 	mysqldriver "github.com/go-sql-driver/mysql"
 )
@@ -68,7 +67,7 @@ func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (common.Itera
 	if err != nil {
 		return nil, fmt.Errorf("failed to get start position: %w", err)
 	}
-	eventHandler := newCdcEventHandler(startPosition.Name, canalDoneC, rowsEventsC)
+	eventHandler := newCdcEventHandler(c, canalDoneC, rowsEventsC)
 
 	go func() {
 		iterator.canal.SetEventHandler(eventHandler)
@@ -220,11 +219,7 @@ type rowEvent struct {
 
 type cdcEventHandler struct {
 	canal.DummyEventHandler
-
-	// the row event log position and the binary log name are not given in sync
-	// by mysql canal, so we need to coordinate them manually. That's why we map
-	// the row event to a custom struct aswell.
-	binlogName string
+	canal *canal.Canal
 
 	canalDoneC  chan struct{}
 	rowsEventsC chan rowEvent
@@ -233,27 +228,20 @@ type cdcEventHandler struct {
 var _ canal.EventHandler = new(cdcEventHandler)
 
 func newCdcEventHandler(
-	initialBinlogName string,
+	canal *canal.Canal,
 	canalDoneC chan struct{},
 	rowsEventsC chan rowEvent,
 ) *cdcEventHandler {
 	return &cdcEventHandler{
-		binlogName:  initialBinlogName,
+		canal:       canal,
 		canalDoneC:  canalDoneC,
 		rowsEventsC: rowsEventsC,
 	}
 }
 
-func (h *cdcEventHandler) OnRotate(
-	_ *replication.EventHeader,
-	evt *replication.RotateEvent,
-) error {
-	h.binlogName = string(evt.NextLogName)
-	return nil
-}
-
 func (h *cdcEventHandler) OnRow(e *canal.RowsEvent) error {
-	rowEvent := rowEvent{e, h.binlogName}
+	binlogName := h.canal.SyncedPosition().Name
+	rowEvent := rowEvent{e, binlogName}
 	select {
 	case <-h.canalDoneC:
 	case h.rowsEventsC <- rowEvent:

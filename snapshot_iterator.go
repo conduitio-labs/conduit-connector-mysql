@@ -16,7 +16,6 @@ package mysql
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -32,19 +31,12 @@ var ErrSnapshotIteratorDone = errors.New("snapshot complete")
 const defaultFetchSize = 50000
 
 type snapshotKey struct {
-	Table common.TableName      `json:"table"`
 	Key   common.PrimaryKeyName `json:"key"`
 	Value any                   `json:"value"`
 }
 
 func (key snapshotKey) ToSDKData() sdk.Data {
-	bs, err := json.Marshal(key)
-	if err != nil {
-		// This should never happen, all Position structs should be valid.
-		panic(err)
-	}
-
-	return sdk.RawData(bs)
+	return sdk.StructuredData{string(key.Key): key.Value}
 }
 
 type (
@@ -55,30 +47,33 @@ type (
 	// iterator itself.
 	fetchData struct {
 		key      snapshotKey
+		table    common.TableName
 		payload  sdk.StructuredData
 		position common.TablePosition
 	}
 	snapshotIterator struct {
-		db           *sqlx.DB
 		t            *tomb.Tomb
 		data         chan fetchData
 		acks         csync.WaitGroup
-		fetchSize    int
 		lastPosition common.SnapshotPosition
+		config       snapshotIteratorConfig
 	}
 	snapshotIteratorConfig struct {
 		db            *sqlx.DB
 		tableKeys     common.TableKeys
 		fetchSize     int
-		startPosition common.SnapshotPosition
+		startPosition *common.SnapshotPosition
 		database      string
 		tables        []string
+		serverID      common.ServerID
 	}
 )
 
 func (config *snapshotIteratorConfig) init() error {
-	if config.startPosition.Snapshots == nil {
-		config.startPosition.Snapshots = make(map[common.TableName]common.TablePosition)
+	if config.startPosition == nil {
+		config.startPosition = &common.SnapshotPosition{
+			Snapshots: map[common.TableName]common.TablePosition{},
+		}
 	}
 
 	if config.fetchSize == 0 {
@@ -108,19 +103,18 @@ func newSnapshotIterator(
 	lastPosition := config.startPosition.Clone()
 
 	iterator := &snapshotIterator{
-		db:           config.db,
 		t:            &tomb.Tomb{},
 		data:         make(chan fetchData),
 		acks:         csync.WaitGroup{},
-		fetchSize:    config.fetchSize,
+		config:       config,
 		lastPosition: lastPosition,
 	}
 
 	for table, primaryKey := range config.tableKeys {
-		worker := newFetchWorker(iterator.db, iterator.data, fetchWorkerConfig{
+		worker := newFetchWorker(iterator.config.db, iterator.data, fetchWorkerConfig{
 			lastPosition: iterator.lastPosition,
 			table:        table,
-			fetchSize:    iterator.fetchSize,
+			fetchSize:    iterator.config.fetchSize,
 			primaryKey:   primaryKey,
 		})
 		iterator.t.Go(func() error {
@@ -128,56 +122,56 @@ func newSnapshotIterator(
 		})
 	}
 
-	// close the data channel when all tomb goroutines are done, which will happen:
-	// - when all records are fetched from all tables
-	// - when the iterator teardown method is called
-	go func() {
-		<-iterator.t.Dead()
-		close(iterator.data)
-	}()
-
 	return iterator, nil
 }
 
-func (s *snapshotIterator) Next(ctx context.Context) (sdk.Record, error) {
+func (s *snapshotIterator) Next(ctx context.Context) (rec sdk.Record, err error) {
 	select {
 	case <-ctx.Done():
-		return sdk.Record{}, fmt.Errorf("context cancelled: %w", ctx.Err())
-	case data, ok := <-s.data:
-		if !ok { // closed
-			if err := s.t.Err(); err != nil {
-				return sdk.Record{}, fmt.Errorf("fetchers exited unexpectedly: %w", err)
-			}
-			if err := s.acks.Wait(ctx); err != nil {
-				return sdk.Record{}, fmt.Errorf("failed to wait for acks: %w", err)
-			}
-			return sdk.Record{}, ErrSnapshotIteratorDone
+		//nolint:wrapcheck // no need to wrap canceled error
+		return rec, ctx.Err()
+	case <-s.t.Dead():
+		if err := s.t.Err(); err != nil && !errors.Is(err, ErrSnapshotIteratorDone) {
+			return rec, fmt.Errorf(
+				"cannot stop snapshot mode, fetchers exited unexpectedly: %w", err)
+		}
+		if err := s.acks.Wait(ctx); err != nil {
+			return rec, fmt.Errorf("failed to wait for acks on snapshot iterator done: %w", err)
 		}
 
+		return rec, ErrSnapshotIteratorDone
+	case data := <-s.data:
 		s.acks.Add(1)
 		return s.buildRecord(data), nil
 	}
 }
 
-func (s *snapshotIterator) Ack(_ context.Context, _ sdk.Position) error {
+func (s *snapshotIterator) Ack(context.Context, sdk.Position) error {
 	s.acks.Done()
 	return nil
 }
 
-func (s *snapshotIterator) Teardown(_ context.Context) error {
-	if s.t != nil {
-		s.t.Kill(errors.New("tearing down snapshot iterator"))
+func (s *snapshotIterator) Teardown(ctx context.Context) error {
+	s.t.Kill(ErrSnapshotIteratorDone)
+	if err := s.t.Err(); err != nil && !errors.Is(err, ErrSnapshotIteratorDone) {
+		return fmt.Errorf(
+			"cannot teardown snapshot mode, fetchers exited unexpectedly: %w", err)
+	}
+
+	if err := s.acks.Wait(ctx); err != nil {
+		return fmt.Errorf("failed to wait for snapshot acks: %w", err)
 	}
 
 	return nil
 }
 
 func (s *snapshotIterator) buildRecord(d fetchData) sdk.Record {
-	s.lastPosition.Snapshots[d.key.Table] = d.position
+	s.lastPosition.Snapshots[d.table] = d.position
 
 	pos := s.lastPosition.ToSDKPosition()
 	metadata := make(sdk.Metadata)
-	metadata.SetCollection(string(d.key.Table))
+	metadata.SetCollection(string(d.table))
+	metadata[common.ServerIDKey] = string(s.config.serverID)
 
 	key := d.key.ToSDKData()
 

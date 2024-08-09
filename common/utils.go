@@ -15,11 +15,14 @@
 package common
 
 import (
+	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/go-mysql-org/go-mysql/canal"
 	"github.com/go-sql-driver/mysql"
+	"github.com/jmoiron/sqlx"
 )
 
 func FormatValue(val any) any {
@@ -45,6 +48,7 @@ func NewCanal(config *mysql.Config, tables []string) (*canal.Canal, error) {
 
 	// Disable dumping
 	cfg.Dump.ExecutionPath = ""
+	cfg.ParseTime = true
 
 	c, err := canal.NewCanal(cfg)
 	if err != nil {
@@ -52,4 +56,25 @@ func NewCanal(config *mysql.Config, tables []string) (*canal.Canal, error) {
 	}
 
 	return c, nil
+}
+
+// ServerID will go to the record metadata, so it is easier to handle it as a
+// string.
+type ServerID string
+
+const ServerIDKey = "mysql.serverID"
+
+func GetServerID(ctx context.Context, db *sqlx.DB) (ServerID, error) {
+	var serverIDRow struct {
+		ServerID uint64 `db:"server_id"`
+	}
+
+	row := db.QueryRowxContext(ctx, "SELECT @@server_id as server_id")
+	if err := row.StructScan(&serverIDRow); err != nil {
+		return "", fmt.Errorf("failed to scan server id: %w", err)
+	}
+
+	serverID := strconv.FormatUint(serverIDRow.ServerID, 10)
+
+	return ServerID(serverID), nil
 }

@@ -76,7 +76,15 @@ type TablePosition struct {
 }
 
 type CdcPosition struct {
-	mysql.Position
+	Name string `json:"name"`
+	Pos  uint32 `json:"pos"`
+}
+
+func (p CdcPosition) ToMysqlPos() mysql.Position {
+	return mysql.Position{
+		Name: p.Name,
+		Pos:  p.Pos,
+	}
 }
 
 func (p CdcPosition) ToSDKPosition() sdk.Position {

@@ -174,10 +174,10 @@ func (w *fetchWorker) buildFetchData(
 
 	return fetchData{
 		key: snapshotKey{
-			Table: w.config.table,
 			Key:   w.config.primaryKey,
 			Value: keyVal,
 		},
+		table:    w.config.table,
 		payload:  payload,
 		position: position,
 	}, nil

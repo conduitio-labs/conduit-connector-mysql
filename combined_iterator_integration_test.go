@@ -29,8 +29,11 @@ func testCombinedIterator(ctx context.Context, is *is.I) (common.Iterator, func(
 	config, err := mysql.ParseDSN("root:meroxaadmin@tcp(127.0.0.1:3306)/meroxadb?parseTime=true")
 	is.NoErr(err)
 
+	serverID := testutils.GetServerID(ctx, is)
+
 	iterator, err := newCombinedIterator(ctx, combinedIteratorConfig{
 		snapshotConfig: snapshotIteratorConfig{
+			serverID:  serverID,
 			tableKeys: testutils.TableKeys,
 			db:        testutils.Connection(is),
 			database:  "meroxadb",
@@ -63,7 +66,6 @@ func TestCombinedIterator(t *testing.T) {
 
 	// ci is slow, we need a bit of time for the setup to initialize canal.Canal.
 	// Theoretically it should not matter, as we get the position at the start.
-	// Documented at issue
 	time.Sleep(time.Second)
 
 	user1Updated := userTable.Update(is, db, user1.Update())

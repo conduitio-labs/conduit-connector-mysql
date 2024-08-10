@@ -11,7 +11,7 @@ linters-settings:
   goconst:
     ignore-tests: true
   goheader:
-    template-path: '.golangci.goheader.template'
+    template-path: ".golangci.goheader.template"
     values:
       regexp:
         copyright-year: 20[2-9]\d

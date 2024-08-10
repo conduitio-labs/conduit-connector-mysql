@@ -71,25 +71,17 @@ func (s *Source) Open(ctx context.Context, pos sdk.Position) (err error) {
 		return fmt.Errorf("failed to get table keys: %w", err)
 	}
 
-	iteratorPos, err := common.ParseSDKPosition(pos)
+	serverID, err := common.GetServerID(ctx, s.db)
 	if err != nil {
-		return fmt.Errorf("failed to parse sdk.Position: %w", err)
+		return fmt.Errorf("failed to get server id: %w", err)
 	}
 
-	s.iterator, err = newCombinedIterator(ctx, combinedIteratorConfig{
-		snapshotConfig: snapshotIteratorConfig{
-			db:        s.db,
-			tableKeys: tableKeys,
-			database:  s.configFromDsn.DBName,
-			tables:    s.config.Tables,
-			position:  iteratorPos.SnapshotPosition,
-		},
-		cdcConfig: cdcIteratorConfig{
-			tables:      s.config.Tables,
-			mysqlConfig: s.configFromDsn,
-			position:    iteratorPos.CdcPosition,
-			TableKeys:   tableKeys,
-		},
+	s.iterator, err = newSnapshotIterator(ctx, snapshotIteratorConfig{
+		db:        s.db,
+		tableKeys: tableKeys,
+		database:  s.configFromDsn.DBName,
+		tables:    s.config.Tables,
+		serverID:  serverID,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create snapshot iterator: %w", err)

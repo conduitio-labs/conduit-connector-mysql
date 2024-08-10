@@ -29,11 +29,13 @@ import (
 var userTable testutils.UsersTable
 
 func testSnapshotIterator(ctx context.Context, is *is.I) (common.Iterator, func()) {
+	serverID := testutils.GetServerID(ctx, is)
 	iterator, err := newSnapshotIterator(ctx, snapshotIteratorConfig{
 		tableKeys: testutils.TableKeys,
 		db:        testutils.Connection(is),
 		database:  "meroxadb",
 		tables:    []string{"users"},
+		serverID:  serverID,
 	})
 	is.NoErr(err)
 
@@ -42,17 +44,22 @@ func testSnapshotIterator(ctx context.Context, is *is.I) (common.Iterator, func(
 
 func testSnapshotIteratorAtPosition(
 	ctx context.Context, is *is.I,
-	position sdk.Position,
+	sdkPos sdk.Position,
 ) (common.Iterator, func()) {
-	pos, err := common.ParseSDKPosition(position)
+	serverID := testutils.GetServerID(ctx, is)
+
+	pos, err := common.ParseSDKPosition(sdkPos)
 	is.NoErr(err)
 
+	is.Equal(pos.Kind, common.PositionTypeSnapshot)
+
 	iterator, err := newSnapshotIterator(ctx, snapshotIteratorConfig{
-		tableKeys: testutils.TableKeys,
-		db:        testutils.Connection(is),
-		position:  pos.SnapshotPosition,
-		database:  "meroxadb",
-		tables:    []string{"users"},
+		tableKeys:     testutils.TableKeys,
+		db:            testutils.Connection(is),
+		startPosition: pos.SnapshotPosition,
+		database:      "meroxadb",
+		tables:        []string{"users"},
+		serverID:      serverID,
 	})
 	is.NoErr(err)
 
@@ -183,6 +190,6 @@ func TestSnapshotIterator_RestartOnPosition(t *testing.T) {
 
 	is.Equal(len(recs), 100)
 	for i, rec := range recs {
-		testutils.AssertUserSnapshot(is, users[i], rec)
+		testutils.AssertUserSnapshot(ctx, is, users[i], rec)
 	}
 }

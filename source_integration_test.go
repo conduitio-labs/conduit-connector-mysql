@@ -29,6 +29,7 @@ type sourceIterator struct {
 }
 
 func (s sourceIterator) Next(ctx context.Context) (sdk.Record, error) {
+	//nolint:wrapcheck // wrapped already
 	return s.Source.Read(ctx)
 }
 

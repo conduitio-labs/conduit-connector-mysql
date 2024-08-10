@@ -25,7 +25,7 @@ import (
 	"github.com/matryer/is"
 )
 
-// makes sdk.Source compatible with our custom iterator interface
+// makes sdk.Source compatible with our custom iterator interface.
 type sourceIterator struct {
 	sdk.Source
 }

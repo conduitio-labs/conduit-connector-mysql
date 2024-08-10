@@ -20,6 +20,7 @@ import (
 	"time"
 
 	testutils "github.com/conduitio-labs/conduit-connector-mysql/test"
+	"github.com/conduitio/conduit-commons/opencdc"
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/matryer/is"
 )
@@ -28,7 +29,7 @@ type sourceIterator struct {
 	sdk.Source
 }
 
-func (s sourceIterator) Next(ctx context.Context) (sdk.Record, error) {
+func (s sourceIterator) Next(ctx context.Context) (opencdc.Record, error) {
 	//nolint:wrapcheck // wrapped already
 	return s.Source.Read(ctx)
 }

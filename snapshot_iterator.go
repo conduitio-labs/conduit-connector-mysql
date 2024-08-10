@@ -21,6 +21,7 @@ import (
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	"github.com/conduitio/conduit-commons/csync"
+	"github.com/conduitio/conduit-commons/opencdc"
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/jmoiron/sqlx"
 	"gopkg.in/tomb.v2"
@@ -35,8 +36,8 @@ type snapshotKey struct {
 	Value any                   `json:"value"`
 }
 
-func (key snapshotKey) ToSDKData() sdk.Data {
-	return sdk.StructuredData{string(key.Key): key.Value}
+func (key snapshotKey) ToSDKData() opencdc.Data {
+	return opencdc.StructuredData{string(key.Key): key.Value}
 }
 
 type (
@@ -48,7 +49,7 @@ type (
 	fetchData struct {
 		key      snapshotKey
 		table    common.TableName
-		payload  sdk.StructuredData
+		payload  opencdc.StructuredData
 		position common.TablePosition
 	}
 	snapshotIterator struct {
@@ -125,7 +126,7 @@ func newSnapshotIterator(
 	return iterator, nil
 }
 
-func (s *snapshotIterator) Next(ctx context.Context) (rec sdk.Record, err error) {
+func (s *snapshotIterator) Next(ctx context.Context) (rec opencdc.Record, err error) {
 	select {
 	case <-ctx.Done():
 		//nolint:wrapcheck // no need to wrap canceled error
@@ -146,7 +147,7 @@ func (s *snapshotIterator) Next(ctx context.Context) (rec sdk.Record, err error)
 	}
 }
 
-func (s *snapshotIterator) Ack(context.Context, sdk.Position) error {
+func (s *snapshotIterator) Ack(context.Context, opencdc.Position) error {
 	s.acks.Done()
 	return nil
 }
@@ -165,11 +166,11 @@ func (s *snapshotIterator) Teardown(ctx context.Context) error {
 	return nil
 }
 
-func (s *snapshotIterator) buildRecord(d fetchData) sdk.Record {
+func (s *snapshotIterator) buildRecord(d fetchData) opencdc.Record {
 	s.lastPosition.Snapshots[d.table] = d.position
 
 	pos := s.lastPosition.ToSDKPosition()
-	metadata := make(sdk.Metadata)
+	metadata := make(opencdc.Metadata)
 	metadata.SetCollection(string(d.table))
 	metadata[common.ServerIDKey] = string(s.config.serverID)
 

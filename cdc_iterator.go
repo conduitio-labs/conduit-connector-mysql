@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
+	"github.com/conduitio/conduit-commons/opencdc"
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/go-mysql-org/go-mysql/canal"
 	"github.com/go-mysql-org/go-mysql/schema"
@@ -95,11 +96,11 @@ func (c *cdcIterator) getStartPosition(config cdcIteratorConfig) (common.CdcPosi
 	}, nil
 }
 
-func (c *cdcIterator) Ack(context.Context, sdk.Position) error {
+func (c *cdcIterator) Ack(context.Context, opencdc.Position) error {
 	return nil
 }
 
-func (c *cdcIterator) Next(ctx context.Context) (rec sdk.Record, err error) {
+func (c *cdcIterator) Next(ctx context.Context) (rec opencdc.Record, err error) {
 	select {
 	case <-ctx.Done():
 		//nolint:wrapcheck // no need to wrap canceled error
@@ -133,21 +134,21 @@ func (c *cdcIterator) Teardown(ctx context.Context) error {
 	return nil
 }
 
-func buildPayload(columns []schema.TableColumn, rows []any) sdk.StructuredData {
-	payload := sdk.StructuredData{}
+func buildPayload(columns []schema.TableColumn, rows []any) opencdc.StructuredData {
+	payload := opencdc.StructuredData{}
 	for i, col := range columns {
 		payload[col.Name] = common.FormatValue(rows[i])
 	}
 	return payload
 }
 
-func (c *cdcIterator) buildRecord(e rowEvent) (sdk.Record, error) {
+func (c *cdcIterator) buildRecord(e rowEvent) (opencdc.Record, error) {
 	pos := common.CdcPosition{
 		Name: e.binlogName,
 		Pos:  e.Header.LogPos,
 	}
 
-	metadata := sdk.Metadata{}
+	metadata := opencdc.Metadata{}
 	metadata.SetCollection(e.Table.Name)
 	createdAt := time.Unix(int64(e.Header.Timestamp), 0).UTC()
 	metadata.SetCreatedAt(createdAt)
@@ -163,7 +164,7 @@ func (c *cdcIterator) buildRecord(e rowEvent) (sdk.Record, error) {
 
 		key, err := buildRecordKey(primaryKey, payload)
 		if err != nil {
-			return sdk.Record{}, fmt.Errorf("failed to build record key: %w", err)
+			return opencdc.Record{}, fmt.Errorf("failed to build record key: %w", err)
 		}
 
 		return sdk.Util.Source.NewRecordCreate(position, metadata, key, payload), nil
@@ -177,10 +178,10 @@ func (c *cdcIterator) buildRecord(e rowEvent) (sdk.Record, error) {
 
 		key, err := buildRecordKey(primaryKey, payload)
 		if err != nil {
-			return sdk.Record{}, fmt.Errorf("failed to build record key: %w", err)
+			return opencdc.Record{}, fmt.Errorf("failed to build record key: %w", err)
 		}
 
-		return sdk.Util.Source.NewRecordDelete(position, metadata, key), nil
+		return sdk.Util.Source.NewRecordDelete(position, metadata, key, nil), nil
 	case canal.UpdateAction:
 		position := pos.ToSDKPosition()
 		before := buildPayload(e.Table.Columns, e.Rows[0])
@@ -191,25 +192,25 @@ func (c *cdcIterator) buildRecord(e rowEvent) (sdk.Record, error) {
 
 		key, err := buildRecordKey(primaryKey, before)
 		if err != nil {
-			return sdk.Record{}, fmt.Errorf("failed to build record key: %w", err)
+			return opencdc.Record{}, fmt.Errorf("failed to build record key: %w", err)
 		}
 
 		return sdk.Util.Source.NewRecordUpdate(position, metadata, key, before, after), nil
 	}
 
-	return sdk.Record{}, fmt.Errorf("unknown row event action: %s", e.Action)
+	return opencdc.Record{}, fmt.Errorf("unknown row event action: %s", e.Action)
 }
 
 func buildRecordKey(
 	primaryKey common.PrimaryKeyName,
-	payload sdk.StructuredData,
-) (sdk.StructuredData, error) {
+	payload opencdc.StructuredData,
+) (opencdc.StructuredData, error) {
 	val, ok := payload[string(primaryKey)]
 	if !ok {
 		return nil, fmt.Errorf("key %s not found in payload", primaryKey)
 	}
 
-	return sdk.StructuredData{string(primaryKey): val}, nil
+	return opencdc.StructuredData{string(primaryKey): val}, nil
 }
 
 type rowEvent struct {

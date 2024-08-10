@@ -22,7 +22,7 @@ import (
 	"testing"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
-	sdk "github.com/conduitio/conduit-connector-sdk"
+	"github.com/conduitio/conduit-commons/opencdc"
 	"github.com/gookit/goutil/dump"
 	"github.com/jmoiron/sqlx"
 	"github.com/matryer/is"
@@ -66,8 +66,8 @@ func (u User) Update() User {
 	return u
 }
 
-func (u User) ToStructuredData() sdk.StructuredData {
-	return sdk.StructuredData{
+func (u User) ToStructuredData() opencdc.StructuredData {
+	return opencdc.StructuredData{
 		"id":         u.ID,
 		"username":   u.Username,
 		"email":      u.Email,
@@ -131,16 +131,16 @@ func (UsersTable) Delete(is *is.I, db *sqlx.DB, user User) {
 func ReadAndAssertInsert(
 	ctx context.Context, is *is.I,
 	iterator common.Iterator, user User,
-) sdk.Record {
+) opencdc.Record {
 	rec, err := iterator.Next(ctx)
 	is.NoErr(err)
 	is.NoErr(iterator.Ack(ctx, rec.Position))
 
-	is.Equal(rec.Operation, sdk.OperationCreate)
+	is.Equal(rec.Operation, opencdc.OperationCreate)
 
 	assertMetadata(ctx, is, rec.Metadata)
 
-	IsDataEqual(is, rec.Key, sdk.StructuredData{"id": user.ID})
+	IsDataEqual(is, rec.Key, opencdc.StructuredData{"id": user.ID})
 	IsDataEqual(is, rec.Payload.After, user.ToStructuredData())
 
 	return rec
@@ -154,12 +154,12 @@ func ReadAndAssertUpdate(
 	is.NoErr(err)
 	is.NoErr(iterator.Ack(ctx, rec.Position))
 
-	is.Equal(rec.Operation, sdk.OperationUpdate)
+	is.Equal(rec.Operation, opencdc.OperationUpdate)
 
 	assertMetadata(ctx, is, rec.Metadata)
 
-	IsDataEqual(is, rec.Key, sdk.StructuredData{"id": prev.ID})
-	IsDataEqual(is, rec.Key, sdk.StructuredData{"id": next.ID})
+	IsDataEqual(is, rec.Key, opencdc.StructuredData{"id": prev.ID})
+	IsDataEqual(is, rec.Key, opencdc.StructuredData{"id": next.ID})
 
 	IsDataEqual(is, rec.Payload.Before, prev.ToStructuredData())
 	IsDataEqual(is, rec.Payload.After, next.ToStructuredData())
@@ -173,14 +173,14 @@ func ReadAndAssertDelete(
 	is.NoErr(err)
 	is.NoErr(iterator.Ack(ctx, rec.Position))
 
-	is.Equal(rec.Operation, sdk.OperationDelete)
+	is.Equal(rec.Operation, opencdc.OperationDelete)
 
 	assertMetadata(ctx, is, rec.Metadata)
 
-	IsDataEqual(is, rec.Key, sdk.StructuredData{"id": user.ID})
+	IsDataEqual(is, rec.Key, opencdc.StructuredData{"id": user.ID})
 }
 
-func IsDataEqual(is *is.I, a, b sdk.Data) {
+func IsDataEqual(is *is.I, a, b opencdc.Data) {
 	if a == nil && b == nil {
 		return
 	}
@@ -194,12 +194,12 @@ func IsDataEqual(is *is.I, a, b sdk.Data) {
 
 	// dump structured datas for easier debugging
 	if !equal {
-		if _, ok := a.(sdk.StructuredData); ok {
+		if _, ok := a.(opencdc.StructuredData); ok {
 			dump.P(a)
 		} else {
 			fmt.Println(string(a.Bytes()))
 		}
-		if _, ok := b.(sdk.StructuredData); ok {
+		if _, ok := b.(opencdc.StructuredData); ok {
 			dump.P(b)
 		} else {
 			fmt.Println(string(b.Bytes()))
@@ -231,24 +231,24 @@ func ReadAndAssertSnapshot(
 	is.NoErr(err)
 	is.NoErr(iterator.Ack(ctx, rec.Position))
 
-	is.Equal(rec.Operation, sdk.OperationSnapshot)
+	is.Equal(rec.Operation, opencdc.OperationSnapshot)
 
 	assertMetadata(ctx, is, rec.Metadata)
 
-	IsDataEqual(is, rec.Key, sdk.StructuredData{"id": user.ID})
+	IsDataEqual(is, rec.Key, opencdc.StructuredData{"id": user.ID})
 	IsDataEqual(is, rec.Payload.After, user.ToStructuredData())
 }
 
-func AssertUserSnapshot(ctx context.Context, is *is.I, user User, rec sdk.Record) {
-	is.Equal(rec.Operation, sdk.OperationSnapshot)
+func AssertUserSnapshot(ctx context.Context, is *is.I, user User, rec opencdc.Record) {
+	is.Equal(rec.Operation, opencdc.OperationSnapshot)
 
 	assertMetadata(ctx, is, rec.Metadata)
 
-	IsDataEqual(is, rec.Key, sdk.StructuredData{"id": user.ID})
+	IsDataEqual(is, rec.Key, opencdc.StructuredData{"id": user.ID})
 	IsDataEqual(is, rec.Payload.After, user.ToStructuredData())
 }
 
-func assertMetadata(ctx context.Context, is *is.I, metadata sdk.Metadata) {
+func assertMetadata(ctx context.Context, is *is.I, metadata opencdc.Metadata) {
 	col, err := metadata.GetCollection()
 	is.NoErr(err)
 	is.Equal(col, "users")

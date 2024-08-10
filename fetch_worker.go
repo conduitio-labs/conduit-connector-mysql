@@ -20,6 +20,7 @@ import (
 	"fmt"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
+	"github.com/conduitio/conduit-commons/opencdc"
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/jmoiron/sqlx"
 )
@@ -111,7 +112,7 @@ func (w *fetchWorker) getMaxValue(ctx context.Context) (int64, error) {
 func (w *fetchWorker) selectRowsChunk(
 	ctx context.Context,
 	start, end int64,
-) (scannedRows []sdk.StructuredData, err error) {
+) (scannedRows []opencdc.StructuredData, err error) {
 	query := fmt.Sprint(`
 		SELECT *
 		FROM `, w.config.table, `
@@ -119,7 +120,7 @@ func (w *fetchWorker) selectRowsChunk(
 		ORDER BY `, w.config.primaryKey, ` LIMIT ?
 	`)
 	logDataEvt := sdk.Logger(ctx).Debug().
-		Any("data", sdk.StructuredData{
+		Any("data", opencdc.StructuredData{
 			"query":     query,
 			"start":     start,
 			"end":       end,
@@ -142,7 +143,7 @@ func (w *fetchWorker) selectRowsChunk(
 	}()
 
 	for rows.Next() {
-		row := sdk.StructuredData{}
+		row := opencdc.StructuredData{}
 		if err := rows.MapScan(row); err != nil {
 			logDataEvt.Msg("failed to map scan row")
 			return nil, fmt.Errorf("failed to map scan row: %w", err)
@@ -164,7 +165,7 @@ func (w *fetchWorker) selectRowsChunk(
 }
 
 func (w *fetchWorker) buildFetchData(
-	payload sdk.StructuredData,
+	payload opencdc.StructuredData,
 	position common.TablePosition,
 ) (fetchData, error) {
 	keyVal, ok := payload[string(w.config.primaryKey)]

@@ -22,7 +22,7 @@ import (
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	testutils "github.com/conduitio-labs/conduit-connector-mysql/test"
-	sdk "github.com/conduitio/conduit-connector-sdk"
+	"github.com/conduitio/conduit-commons/opencdc"
 	"github.com/matryer/is"
 )
 
@@ -44,7 +44,7 @@ func testSnapshotIterator(ctx context.Context, is *is.I) (common.Iterator, func(
 
 func testSnapshotIteratorAtPosition(
 	ctx context.Context, is *is.I,
-	sdkPos sdk.Position,
+	sdkPos opencdc.Position,
 ) (common.Iterator, func()) {
 	serverID := testutils.GetServerID(ctx, is)
 
@@ -148,8 +148,8 @@ func TestSnapshotIterator_RestartOnPosition(t *testing.T) {
 		users = append(users, user)
 	}
 
-	var recs []sdk.Record
-	var breakPosition sdk.Position
+	var recs []opencdc.Record
+	var breakPosition opencdc.Position
 	{
 		it, cleanup := testSnapshotIterator(ctx, is)
 		defer cleanup()

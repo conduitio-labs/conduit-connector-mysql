@@ -1,6 +1,7 @@
 module github.com/conduitio-labs/conduit-connector-mysql
 
-go 1.22.4
+go 1.22.6
+
 require (
 	github.com/conduitio/conduit-commons v0.3.0
 	github.com/conduitio/conduit-connector-sdk v0.10.0

@@ -20,7 +20,7 @@ import (
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	testutils "github.com/conduitio-labs/conduit-connector-mysql/test"
-	sdk "github.com/conduitio/conduit-connector-sdk"
+	"github.com/conduitio/conduit-commons/opencdc"
 	"github.com/go-sql-driver/mysql"
 	"github.com/matryer/is"
 )
@@ -41,7 +41,7 @@ func testCdcIterator(ctx context.Context, is *is.I) (common.Iterator, func()) {
 
 func testCdcIteratorAtPosition(
 	ctx context.Context, is *is.I,
-	sdkPos sdk.Position,
+	sdkPos opencdc.Position,
 ) (common.Iterator, func()) {
 	config, err := mysql.ParseDSN("root:meroxaadmin@tcp(127.0.0.1:3306)/meroxadb?parseTime=true")
 	is.NoErr(err)
@@ -150,7 +150,7 @@ func TestCDCIterator_RestartOnPosition(t *testing.T) {
 	user3 := userTable.Insert(is, db, "user3")
 	user4 := userTable.Insert(is, db, "user4")
 
-	var latestPosition sdk.Position
+	var latestPosition opencdc.Position
 
 	{ // read and ack 2 records
 		testutils.ReadAndAssertInsert(ctx, is, iterator, user1)

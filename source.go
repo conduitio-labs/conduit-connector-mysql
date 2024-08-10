@@ -19,6 +19,8 @@ import (
 	"fmt"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
+	"github.com/conduitio/conduit-commons/config"
+	"github.com/conduitio/conduit-commons/opencdc"
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
@@ -40,14 +42,14 @@ func NewSource() sdk.Source {
 	return sdk.SourceWithMiddleware(&Source{}, sdk.DefaultSourceMiddleware()...)
 }
 
-func (s *Source) Parameters() map[string]sdk.Parameter {
+func (s *Source) Parameters() config.Parameters {
 	// Parameters is a map of named Parameters that describe how to configure
 	// the Source. Parameters can be generated from SourceConfig with paramgen.
 	return s.config.Parameters()
 }
 
-func (s *Source) Configure(ctx context.Context, cfg map[string]string) (err error) {
-	if err := sdk.Util.ParseConfig(cfg, &s.config); err != nil {
+func (s *Source) Configure(ctx context.Context, cfg config.Config) (err error) {
+	if err := sdk.Util.ParseConfig(ctx, cfg, &s.config, s.config.Parameters()); err != nil {
 		return fmt.Errorf("invalid config: %w", err)
 	}
 
@@ -60,7 +62,7 @@ func (s *Source) Configure(ctx context.Context, cfg map[string]string) (err erro
 	return nil
 }
 
-func (s *Source) Open(ctx context.Context, sdkPos sdk.Position) (err error) {
+func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) {
 	s.db, err = sqlx.Open("mysql", s.config.URL)
 	if err != nil {
 		return fmt.Errorf("failed to connect to mysql: %w", err)
@@ -110,14 +112,14 @@ func (s *Source) Open(ctx context.Context, sdkPos sdk.Position) (err error) {
 	return nil
 }
 
-func (s *Source) Read(ctx context.Context) (sdk.Record, error) {
+func (s *Source) Read(ctx context.Context) (opencdc.Record, error) {
 	//nolint:wrapcheck // error already wrapped in iterator
 	return s.iterator.Next(ctx)
 }
 
-func (s *Source) Ack(ctx context.Context, _ sdk.Position) error {
+func (s *Source) Ack(ctx context.Context, _ opencdc.Position) error {
 	//nolint:wrapcheck // error already wrapped in iterator
-	return s.iterator.Ack(ctx, sdk.Position{})
+	return s.iterator.Ack(ctx, opencdc.Position{})
 }
 
 func (s *Source) Teardown(ctx context.Context) error {

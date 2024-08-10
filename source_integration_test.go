@@ -20,15 +20,17 @@ import (
 	"time"
 
 	testutils "github.com/conduitio-labs/conduit-connector-mysql/test"
+	"github.com/conduitio/conduit-commons/opencdc"
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/matryer/is"
 )
 
+// makes sdk.Source compatible with our custom iterator interface.
 type sourceIterator struct {
 	sdk.Source
 }
 
-func (s sourceIterator) Next(ctx context.Context) (sdk.Record, error) {
+func (s sourceIterator) Next(ctx context.Context) (opencdc.Record, error) {
 	//nolint:wrapcheck // wrapped already
 	return s.Source.Read(ctx)
 }
@@ -44,7 +46,7 @@ func TestSourceWorks(t *testing.T) {
 	user2 := userTable.Insert(is, db, "user2")
 	user3 := userTable.Insert(is, db, "user3")
 
-	source := sourceIterator{NewSource()}
+	source := sourceIterator{&Source{}}
 	is.NoErr(source.Configure(ctx, map[string]string{
 		"url":    "root:meroxaadmin@tcp(127.0.0.1:3306)/meroxadb?parseTime=true",
 		"tables": "users",

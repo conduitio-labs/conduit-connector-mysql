@@ -81,7 +81,7 @@ func (s *Source) Open(ctx context.Context, sdkPos sdk.Position) (err error) {
 	if sdkPos != nil {
 		parsed, err := common.ParseSDKPosition(sdkPos)
 		if err != nil {
-			return err
+			return fmt.Errorf("bad source position given: %w", err)
 		}
 		pos = parsed
 	}
@@ -101,14 +101,6 @@ func (s *Source) Open(ctx context.Context, sdkPos sdk.Position) (err error) {
 			position:    pos.CdcPosition,
 			TableKeys:   tableKeys,
 		},
-	})
-
-	s.iterator, err = newSnapshotIterator(ctx, snapshotIteratorConfig{
-		db:        s.db,
-		tableKeys: tableKeys,
-		database:  s.configFromDsn.DBName,
-		tables:    s.config.Tables,
-		serverID:  serverID,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create snapshot iterator: %w", err)

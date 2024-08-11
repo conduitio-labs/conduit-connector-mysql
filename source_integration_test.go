@@ -20,6 +20,7 @@ import (
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	testutils "github.com/conduitio-labs/conduit-connector-mysql/test"
+	"github.com/conduitio/conduit-commons/config"
 	"github.com/conduitio/conduit-commons/opencdc"
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/matryer/is"
@@ -27,17 +28,12 @@ import (
 
 func testSource(ctx context.Context, is *is.I) (sdk.Source, func()) {
 	source := NewSource()
-	source.Configure(ctx, common.SourceConfig{
-		Config: common.Config{
-			URL: testutils.DSN,
-		},
-		Tables: []string{"users"},
-	}.ToMap())
-
-	type logDisabler interface {
-		DisableCanalLogs()
-	}
-	source.(logDisabler).DisableCanalLogs()
+	err := source.Configure(ctx, config.Config{
+		common.SourceConfigUrl:              testutils.DSN,
+		common.SourceConfigTables:           "users",
+		common.SourceConfigDisableCanalLogs: "true",
+	})
+	is.NoErr(err)
 
 	is.NoErr(source.Open(ctx, nil))
 
@@ -47,6 +43,7 @@ func testSource(ctx context.Context, is *is.I) (sdk.Source, func()) {
 type sourceIterator struct{ sdk.Source }
 
 func (s sourceIterator) Next(ctx context.Context) (opencdc.Record, error) {
+	//nolint:wrapcheck // wrapped already
 	return s.Source.Read(ctx)
 }
 
@@ -54,7 +51,8 @@ func TestSource_ConsistentSnapshot(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 
-	db := testutils.Connection(is)
+	db, closeDB := testutils.Connection(is)
+	defer closeDB()
 
 	userTable.Recreate(is, db)
 

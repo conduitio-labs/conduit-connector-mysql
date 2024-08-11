@@ -107,8 +107,8 @@ func (c *cdcIterator) Ack(context.Context, opencdc.Position) error {
 
 func (c *cdcIterator) Next(ctx context.Context) (rec opencdc.Record, err error) {
 	select {
+	//nolint:wrapcheck // no need to wrap canceled error
 	case <-ctx.Done():
-		//nolint:wrapcheck // no need to wrap canceled error
 		return rec, ctx.Err()
 	case <-c.canalDoneC:
 		return rec, fmt.Errorf("canal is closed")

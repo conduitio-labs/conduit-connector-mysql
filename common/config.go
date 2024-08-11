@@ -14,8 +14,6 @@
 
 package common
 
-import "strings"
-
 type Config struct {
 	// URL is the connection string for the Mysql database.
 	URL string `json:"url" validate:"required"`
@@ -26,24 +24,9 @@ type Config struct {
 type SourceConfig struct {
 	Config
 
+	// Tables represents the tables to read from.
 	Tables []string `json:"tables" validate:"required"`
 
-	// disableCanalLogs disables the github.com/go-mysql-org/go-mysql/canal
-	// logs. Useful on tests only.
-	disableCanalLogs bool
-}
-
-func (config *SourceConfig) DisableCanalLogs() {
-	config.disableCanalLogs = true
-}
-
-func (config *SourceConfig) ShouldDisableCanalLogs() bool {
-	return config.disableCanalLogs
-}
-
-func (config SourceConfig) ToMap() map[string]string {
-	return map[string]string{
-		"url":    config.URL,
-		"tables": strings.Join(config.Tables, ","),
-	}
+	// DisableCanalLogs disables verbose logs.
+	DisableCanalLogs bool `json:"disableCanalLogs"`
 }

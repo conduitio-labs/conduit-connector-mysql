@@ -62,10 +62,6 @@ func (s *Source) Configure(ctx context.Context, cfg config.Config) (err error) {
 	return nil
 }
 
-func (s *Source) DisableCanalLogs() {
-	s.config.DisableCanalLogs()
-}
-
 func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) {
 	s.db, err = sqlx.Open("mysql", s.config.URL)
 	if err != nil {

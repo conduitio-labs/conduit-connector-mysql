@@ -39,18 +39,19 @@ type cdcIterator struct {
 }
 
 type cdcIteratorConfig struct {
-	tables         []string
-	mysqlConfig    *mysqldriver.Config
-	position       *common.CdcPosition
-	TableKeys      common.TableKeys
-	disableLogging bool
+	tables              []string
+	mysqlConfig         *mysqldriver.Config
+	position            *common.CdcPosition
+	tableKeys           common.TableKeys
+	disableCanalLogging bool
 }
 
 func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (common.Iterator, error) {
 	c, err := common.NewCanal(common.CanalConfig{
 		Config:         config.mysqlConfig,
 		Tables:         config.tables,
-		DisableLogging: config.disableLogging,
+		DisableLogging: config.disableCanalLogging,
+		Logger:         sdk.Logger(ctx),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create canal: %w", err)
@@ -165,7 +166,7 @@ func (c *cdcIterator) buildRecord(e rowEvent) (opencdc.Record, error) {
 		payload := buildPayload(e.Table.Columns, e.Rows[0])
 
 		table := common.TableName(e.Table.Name)
-		primaryKey := c.config.TableKeys[table]
+		primaryKey := c.config.tableKeys[table]
 
 		key, err := buildRecordKey(primaryKey, payload)
 		if err != nil {
@@ -179,7 +180,7 @@ func (c *cdcIterator) buildRecord(e rowEvent) (opencdc.Record, error) {
 		payload := buildPayload(e.Table.Columns, e.Rows[0])
 
 		table := common.TableName(e.Table.Name)
-		primaryKey := c.config.TableKeys[table]
+		primaryKey := c.config.tableKeys[table]
 
 		key, err := buildRecordKey(primaryKey, payload)
 		if err != nil {
@@ -193,7 +194,7 @@ func (c *cdcIterator) buildRecord(e rowEvent) (opencdc.Record, error) {
 		after := buildPayload(e.Table.Columns, e.Rows[1])
 
 		table := common.TableName(e.Table.Name)
-		primaryKey := c.config.TableKeys[table]
+		primaryKey := c.config.tableKeys[table]
 
 		key, err := buildRecordKey(primaryKey, before)
 		if err != nil {

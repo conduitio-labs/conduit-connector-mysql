@@ -30,10 +30,10 @@ func testCdcIterator(ctx context.Context, is *is.I) (common.Iterator, func()) {
 	is.NoErr(err)
 
 	iterator, err := newCdcIterator(ctx, cdcIteratorConfig{
-		mysqlConfig:    config,
-		tables:         []string{"users"},
-		TableKeys:      testutils.TableKeys,
-		disableLogging: true,
+		mysqlConfig:         config,
+		tables:              []string{"users"},
+		tableKeys:           testutils.TableKeys,
+		disableCanalLogging: true,
 	})
 	is.NoErr(err)
 
@@ -53,11 +53,11 @@ func testCdcIteratorAtPosition(
 	is.Equal(pos.Kind, common.PositionTypeCDC)
 
 	iterator, err := newCdcIterator(ctx, cdcIteratorConfig{
-		mysqlConfig:    config,
-		position:       pos.CdcPosition,
-		tables:         []string{"users"},
-		TableKeys:      testutils.TableKeys,
-		disableLogging: true,
+		mysqlConfig:         config,
+		position:            pos.CdcPosition,
+		tables:              []string{"users"},
+		tableKeys:           testutils.TableKeys,
+		disableCanalLogging: true,
 	})
 	is.NoErr(err)
 	is.NoErr(err)

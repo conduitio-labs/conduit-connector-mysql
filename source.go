@@ -98,10 +98,11 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 			serverID:      serverID,
 		},
 		cdcConfig: cdcIteratorConfig{
-			tables:      s.config.Tables,
-			mysqlConfig: s.configFromDsn,
-			position:    pos.CdcPosition,
-			TableKeys:   tableKeys,
+			tables:              s.config.Tables,
+			mysqlConfig:         s.configFromDsn,
+			position:            pos.CdcPosition,
+			tableKeys:           tableKeys,
+			disableCanalLogging: s.config.DisableCanalLogs,
 		},
 	})
 	if err != nil {

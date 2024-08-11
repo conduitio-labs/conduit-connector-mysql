@@ -40,10 +40,10 @@ func testCombinedIterator(ctx context.Context, is *is.I) (common.Iterator, func(
 			serverID:  testutils.ServerID,
 		},
 		cdcConfig: cdcIteratorConfig{
-			mysqlConfig:    config,
-			tables:         []string{"users"},
-			TableKeys:      testutils.TableKeys,
-			disableLogging: true,
+			mysqlConfig:         config,
+			tables:              []string{"users"},
+			tableKeys:           testutils.TableKeys,
+			disableCanalLogging: true,
 		},
 	})
 	is.NoErr(err)

@@ -27,7 +27,7 @@ import (
 )
 
 func testSource(ctx context.Context, is *is.I) (sdk.Source, func()) {
-	source := NewSource()
+	source := &Source{}
 	err := source.Configure(ctx, config.Config{
 		common.SourceConfigUrl:              testutils.DSN,
 		common.SourceConfigTables:           "users",

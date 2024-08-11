@@ -20,6 +20,7 @@ import (
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	testutils "github.com/conduitio-labs/conduit-connector-mysql/test"
+	"github.com/conduitio/conduit-commons/opencdc"
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/matryer/is"
 )
@@ -43,12 +44,17 @@ func testSource(ctx context.Context, is *is.I) (sdk.Source, func()) {
 	return source, func() { is.NoErr(source.Teardown(ctx)) }
 }
 
+type sourceIterator struct{ sdk.Source }
+
+func (s sourceIterator) Next(ctx context.Context) (opencdc.Record, error) {
+	return s.Source.Read(ctx)
+}
+
 func TestSource_ConsistentSnapshot(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 
-	db, closeDB := testutils.Connection(is)
-	defer closeDB()
+	db := testutils.Connection(is)
 
 	userTable.Recreate(is, db)
 
@@ -64,10 +70,12 @@ func TestSource_ConsistentSnapshot(t *testing.T) {
 	source, teardown := testSource(ctx, is)
 	defer teardown()
 
+	sourceIterator := sourceIterator{source}
+
 	// read 2 records -> they shall be snapshots
 
-	testutils.ReadAndAssertSnapshot(ctx, is, source, user1)
-	testutils.ReadAndAssertSnapshot(ctx, is, source, user2)
+	testutils.ReadAndAssertSnapshot(ctx, is, sourceIterator, user1)
+	testutils.ReadAndAssertSnapshot(ctx, is, sourceIterator, user2)
 
 	// insert 2 rows, delete the 4th inserted row
 
@@ -77,12 +85,12 @@ func TestSource_ConsistentSnapshot(t *testing.T) {
 
 	// read 2 more records -> they shall be snapshots
 
-	testutils.ReadAndAssertSnapshot(ctx, is, source, user3)
-	testutils.ReadAndAssertSnapshot(ctx, is, source, user4)
+	testutils.ReadAndAssertSnapshot(ctx, is, sourceIterator, user3)
+	testutils.ReadAndAssertSnapshot(ctx, is, sourceIterator, user4)
 
 	// read 3 records, should be 2 creates and 1 delete
 
-	testutils.ReadAndAssertInsert(ctx, is, source, user5)
-	testutils.ReadAndAssertInsert(ctx, is, source, user6)
-	testutils.ReadAndAssertDelete(ctx, is, source, user4)
+	testutils.ReadAndAssertInsert(ctx, is, sourceIterator, user5)
+	testutils.ReadAndAssertInsert(ctx, is, sourceIterator, user6)
+	testutils.ReadAndAssertDelete(ctx, is, sourceIterator, user4)
 }

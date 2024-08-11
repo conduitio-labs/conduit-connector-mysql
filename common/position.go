@@ -18,7 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	sdk "github.com/conduitio/conduit-connector-sdk"
+	"github.com/conduitio/conduit-commons/opencdc"
 	"github.com/go-mysql-org/go-mysql/mysql"
 )
 
@@ -39,7 +39,7 @@ type SnapshotPosition struct {
 	Snapshots SnapshotPositions `json:"snapshots,omitempty"`
 }
 
-func (p SnapshotPosition) ToSDKPosition() sdk.Position {
+func (p SnapshotPosition) ToSDKPosition() opencdc.Position {
 	v, err := json.Marshal(Position{
 		Kind:             PositionTypeSnapshot,
 		SnapshotPosition: &p,
@@ -60,7 +60,7 @@ func (p SnapshotPosition) Clone() SnapshotPosition {
 	return newPosition
 }
 
-func ParseSDKPosition(p sdk.Position) (Position, error) {
+func ParseSDKPosition(p opencdc.Position) (Position, error) {
 	var pos Position
 	if err := json.Unmarshal(p, &pos); err != nil {
 		return pos, fmt.Errorf("failed to parse position: %w", err)
@@ -76,10 +76,18 @@ type TablePosition struct {
 }
 
 type CdcPosition struct {
-	mysql.Position
+	Name string `json:"name"`
+	Pos  uint32 `json:"pos"`
 }
 
-func (p CdcPosition) ToSDKPosition() sdk.Position {
+func (p CdcPosition) ToMysqlPos() mysql.Position {
+	return mysql.Position{
+		Name: p.Name,
+		Pos:  p.Pos,
+	}
+}
+
+func (p CdcPosition) ToSDKPosition() opencdc.Position {
 	v, err := json.Marshal(Position{
 		Kind:        PositionTypeCDC,
 		CdcPosition: &p,

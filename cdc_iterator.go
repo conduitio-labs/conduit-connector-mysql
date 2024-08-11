@@ -16,27 +16,24 @@ package mysql
 
 import (
 	"context"
-	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
-	"github.com/conduitio/conduit-commons/csync"
+	"github.com/conduitio/conduit-commons/opencdc"
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/go-mysql-org/go-mysql/canal"
-	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/schema"
 	mysqldriver "github.com/go-sql-driver/mysql"
-	"gopkg.in/tomb.v2"
 )
 
 type cdcIterator struct {
-	canal *canal.Canal
-	acks  *csync.WaitGroup
-	data  chan *canal.RowsEvent
+	canal       *canal.Canal
+	rowsEventsC chan rowEvent
 
-	// canalTomb is a tomb that simplifies handling canal run errors
-	canalTomb *tomb.Tomb
+	canalRunErrC chan error
+	canalDoneC   chan struct{}
 
 	config cdcIteratorConfig
 }
@@ -45,8 +42,8 @@ type cdcIteratorConfig struct {
 	tables         []string
 	mysqlConfig    *mysqldriver.Config
 	position       *common.CdcPosition
-	disableLogging bool
 	TableKeys      common.TableKeys
+	disableLogging bool
 }
 
 func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (common.Iterator, error) {
@@ -54,7 +51,6 @@ func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (common.Itera
 		Config:         config.mysqlConfig,
 		Tables:         config.tables,
 		DisableLogging: config.disableLogging,
-		Logger:         sdk.Logger(ctx),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create canal: %w", err)
@@ -62,228 +58,199 @@ func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (common.Itera
 
 	sdk.Logger(ctx).Info().Msg("created canal")
 
+	rowsEventsC := make(chan rowEvent)
+	canalDoneC := make(chan struct{})
+
 	iterator := &cdcIterator{
-		canal:     c,
-		acks:      &csync.WaitGroup{},
-		data:      make(chan *canal.RowsEvent),
-		canalTomb: &tomb.Tomb{},
-		config:    config,
+		canal:        c,
+		rowsEventsC:  rowsEventsC,
+		canalRunErrC: make(chan error),
+		canalDoneC:   canalDoneC,
+		config:       config,
 	}
 
 	startPosition, err := iterator.getStartPosition(config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get start position: %w", err)
 	}
+	eventHandler := newCdcEventHandler(c, canalDoneC, rowsEventsC)
 
-	iterator.canalTomb.Go(func() error {
-		ctx := iterator.canalTomb.Context(ctx)
-		return iterator.runCanal(ctx, startPosition)
-	})
-
-	// close the data channel when all tomb goroutines are done, which will happen only when
-	// the iterator teardown method is called
 	go func() {
-		<-iterator.canalTomb.Dead()
-		close(iterator.data)
+		iterator.canal.SetEventHandler(eventHandler)
+		pos := startPosition.ToMysqlPos()
+		iterator.canalRunErrC <- iterator.canal.RunFrom(pos)
 	}()
 
 	return iterator, nil
 }
 
-func (c *cdcIterator) getStartPosition(config cdcIteratorConfig) (mysql.Position, error) {
+func (c *cdcIterator) getStartPosition(config cdcIteratorConfig) (common.CdcPosition, error) {
 	if config.position != nil {
-		return config.position.Position, nil
+		return *config.position, nil
 	}
 
+	var cdcPosition common.CdcPosition
 	masterPos, err := c.canal.GetMasterPos()
 	if err != nil {
-		return mysql.Position{}, fmt.Errorf("failed to get master position: %w", err)
+		return cdcPosition, fmt.Errorf("failed to get master position: %w", err)
 	}
 
-	return masterPos, nil
+	return common.CdcPosition{
+		Name: masterPos.Name,
+		Pos:  masterPos.Pos,
+	}, nil
 }
 
-func (c *cdcIterator) runCanal(ctx context.Context, startPos mysql.Position) error {
-	// buffered to allow the goroutine to exit when the iterator is torn down
-	errChan := make(chan error, 1)
-	go func() {
-		handler := &cdcEventHandler{
-			ctx:  ctx,
-			data: c.data,
-		}
-		c.canal.SetEventHandler(handler)
-		errChan <- c.canal.RunFrom(startPos)
-	}()
-
-	select {
-	case <-ctx.Done():
-		return fmt.Errorf("context cancelled from runCanal: %w", ctx.Err())
-	case err := <-errChan:
-		return fmt.Errorf("failed to run canal: %w", err)
-	}
-}
-
-func (c *cdcIterator) Ack(context.Context, sdk.Position) error {
-	c.acks.Done()
+func (c *cdcIterator) Ack(context.Context, opencdc.Position) error {
 	return nil
 }
 
-func (c *cdcIterator) Read(ctx context.Context) (sdk.Record, error) {
+func (c *cdcIterator) Next(ctx context.Context) (rec opencdc.Record, err error) {
 	select {
 	case <-ctx.Done():
-		return sdk.Record{}, fmt.Errorf("context cancelled: %w", ctx.Err())
-	case data, ok := <-c.data:
-		if !ok { // closed
-			if err := c.canalTomb.Err(); err != nil {
-				return sdk.Record{}, fmt.Errorf("canal exited unexpectedly: %w", err)
-			}
-			if err := c.acks.Wait(ctx); err != nil {
-				return sdk.Record{}, fmt.Errorf("failed to wait for acks: %w", err)
-			}
-			return sdk.Record{}, fmt.Errorf("cdc iterator teared down")
-		}
-
+		//nolint:wrapcheck // no need to wrap canceled error
+		return rec, ctx.Err()
+	case <-c.canalDoneC:
+		return rec, fmt.Errorf("canal is closed")
+	case data := <-c.rowsEventsC:
 		rec, err := c.buildRecord(data)
 		if err != nil {
-			return sdk.Record{}, fmt.Errorf("failed to build record: %w", err)
+			return rec, fmt.Errorf("failed to build record: %w", err)
 		}
 
-		c.acks.Add(1)
 		return rec, nil
 	}
 }
 
-func (c *cdcIterator) Teardown(context.Context) error {
-	if c.canalTomb != nil {
-		c.canalTomb.Kill(errors.New("tearing down snapshot iterator"))
-	}
+func (c *cdcIterator) Teardown(ctx context.Context) error {
+	close(c.canalDoneC)
 
 	c.canal.Close()
+	select {
+	case <-ctx.Done():
+		//nolint:wrapcheck // no need to wrap canceled error
+		return ctx.Err()
+	case err := <-c.canalRunErrC:
+		if err != nil {
+			return fmt.Errorf("failed to stop canal: %w", err)
+		}
+	}
 
 	return nil
 }
 
-func buildPayload(columns []schema.TableColumn, rows []any) sdk.StructuredData {
-	payload := sdk.StructuredData{}
+func buildPayload(columns []schema.TableColumn, rows []any) opencdc.StructuredData {
+	payload := opencdc.StructuredData{}
 	for i, col := range columns {
-		val := rows[i]
-		if s, ok := val.(string); ok {
-			// I don't know why exactly, but "github.com/go-mysql-org/go-mysql/canal"
-			// returns a string for timestamp columns without timezone. This is a hack
-			// to format the string back into an UTC string.
-			// TODO: investigate this further. Is this a bug in canal?
-			val = tryParseCanalStrDate(s)
-		}
-
-		payload[col.Name] = common.FormatValue(val)
+		payload[col.Name] = common.FormatValue(rows[i])
 	}
 	return payload
 }
 
-func tryParseCanalStrDate(s string) string {
-	parsed, err := time.Parse(time.DateTime, s)
-	if err != nil {
-		return s
+func (c *cdcIterator) buildRecord(e rowEvent) (opencdc.Record, error) {
+	pos := common.CdcPosition{
+		Name: e.binlogName,
+		Pos:  e.Header.LogPos,
 	}
 
-	valCopyInUTC := time.Date(
-		parsed.Year(), parsed.Month(), parsed.Day(),
-		parsed.Hour(), parsed.Minute(), parsed.Second(),
-		parsed.Nanosecond(),
-		time.Now().Location(),
-	).UTC()
-
-	return valCopyInUTC.Format(time.RFC3339)
-}
-
-func (c *cdcIterator) buildRecord(e *canal.RowsEvent) (sdk.Record, error) {
-	pos, err := c.canal.GetMasterPos()
-	if err != nil {
-		return sdk.Record{}, fmt.Errorf("failed to get master position from buildRecord: %w", err)
-	}
-
-	metadata := sdk.Metadata{"mysql.action": e.Action}
+	metadata := opencdc.Metadata{}
 	metadata.SetCollection(e.Table.Name)
-
-	pos.Pos = e.Header.LogPos
+	createdAt := time.Unix(int64(e.Header.Timestamp), 0).UTC()
+	metadata.SetCreatedAt(createdAt)
+	metadata[common.ServerIDKey] = strconv.FormatUint(uint64(e.Header.ServerID), 10)
 
 	switch e.Action {
 	case canal.InsertAction:
-		position := common.CdcPosition{Position: pos}.ToSDKPosition()
+		position := pos.ToSDKPosition()
 		payload := buildPayload(e.Table.Columns, e.Rows[0])
 
 		table := common.TableName(e.Table.Name)
 		primaryKey := c.config.TableKeys[table]
 
-		key, err := buildRecordKey(primaryKey, table, e.Action, payload)
+		key, err := buildRecordKey(primaryKey, payload)
 		if err != nil {
-			return sdk.Record{}, fmt.Errorf("failed to build record key: %w", err)
+			return opencdc.Record{}, fmt.Errorf("failed to build record key: %w", err)
 		}
 
 		return sdk.Util.Source.NewRecordCreate(position, metadata, key, payload), nil
 	case canal.DeleteAction:
-		position := common.CdcPosition{Position: pos}.ToSDKPosition()
+		position := pos.ToSDKPosition()
 
 		payload := buildPayload(e.Table.Columns, e.Rows[0])
 
 		table := common.TableName(e.Table.Name)
 		primaryKey := c.config.TableKeys[table]
 
-		key, err := buildRecordKey(primaryKey, table, e.Action, payload)
+		key, err := buildRecordKey(primaryKey, payload)
 		if err != nil {
-			return sdk.Record{}, fmt.Errorf("failed to build record key: %w", err)
+			return opencdc.Record{}, fmt.Errorf("failed to build record key: %w", err)
 		}
 
-		return sdk.Util.Source.NewRecordDelete(position, metadata, key), nil
+		return sdk.Util.Source.NewRecordDelete(position, metadata, key, nil), nil
 	case canal.UpdateAction:
-		position := common.CdcPosition{Position: pos}.ToSDKPosition()
+		position := pos.ToSDKPosition()
 		before := buildPayload(e.Table.Columns, e.Rows[0])
 		after := buildPayload(e.Table.Columns, e.Rows[1])
 
 		table := common.TableName(e.Table.Name)
 		primaryKey := c.config.TableKeys[table]
 
-		key, err := buildRecordKey(primaryKey, table, e.Action, before)
+		key, err := buildRecordKey(primaryKey, before)
 		if err != nil {
-			return sdk.Record{}, fmt.Errorf("failed to build record key: %w", err)
+			return opencdc.Record{}, fmt.Errorf("failed to build record key: %w", err)
 		}
 
 		return sdk.Util.Source.NewRecordUpdate(position, metadata, key, before, after), nil
 	}
 
-	return sdk.Record{}, fmt.Errorf("unknown row event action: %s", e.Action)
+	return opencdc.Record{}, fmt.Errorf("unknown row event action: %s", e.Action)
 }
 
 func buildRecordKey(
-	primaryKey common.PrimaryKeyName, table common.TableName,
-	action string, payload sdk.StructuredData,
-) (sdk.StructuredData, error) {
+	primaryKey common.PrimaryKeyName,
+	payload opencdc.StructuredData,
+) (opencdc.StructuredData, error) {
 	val, ok := payload[string(primaryKey)]
 	if !ok {
 		return nil, fmt.Errorf("key %s not found in payload", primaryKey)
 	}
 
-	return sdk.StructuredData{
-		string(primaryKey): val,
-		"table":            table,
-		"action":           action,
-	}, nil
+	return opencdc.StructuredData{string(primaryKey): val}, nil
+}
+
+type rowEvent struct {
+	*canal.RowsEvent
+	binlogName string
 }
 
 type cdcEventHandler struct {
-	// We only want the OnRow event, this allows us to ignore all other event methods
 	canal.DummyEventHandler
+	canal *canal.Canal
 
-	//nolint:containedctx // ctx is used to allow to timeout the OnRow event
-	ctx  context.Context
-	data chan *canal.RowsEvent
+	canalDoneC  chan struct{}
+	rowsEventsC chan rowEvent
+}
+
+var _ canal.EventHandler = new(cdcEventHandler)
+
+func newCdcEventHandler(
+	canal *canal.Canal,
+	canalDoneC chan struct{},
+	rowsEventsC chan rowEvent,
+) *cdcEventHandler {
+	return &cdcEventHandler{
+		canal:       canal,
+		canalDoneC:  canalDoneC,
+		rowsEventsC: rowsEventsC,
+	}
 }
 
 func (h *cdcEventHandler) OnRow(e *canal.RowsEvent) error {
+	binlogName := h.canal.SyncedPosition().Name
+	rowEvent := rowEvent{e, binlogName}
 	select {
-	case <-h.ctx.Done():
-		return fmt.Errorf("context cancelled from OnRow: %w", h.ctx.Err())
-	case h.data <- e:
+	case <-h.canalDoneC:
+	case h.rowsEventsC <- rowEvent:
 	}
 
 	return nil

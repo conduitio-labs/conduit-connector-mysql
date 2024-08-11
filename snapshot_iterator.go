@@ -21,6 +21,7 @@ import (
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	"github.com/conduitio/conduit-commons/csync"
+	"github.com/conduitio/conduit-commons/opencdc"
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/jmoiron/sqlx"
 	"gopkg.in/tomb.v2"
@@ -31,17 +32,12 @@ var ErrSnapshotIteratorDone = errors.New("snapshot complete")
 const defaultFetchSize = 50000
 
 type snapshotKey struct {
-	Table common.TableName      `json:"table"`
 	Key   common.PrimaryKeyName `json:"key"`
 	Value any                   `json:"value"`
 }
 
-func (key snapshotKey) ToSDKData() sdk.Data {
-	return sdk.StructuredData{
-		"table": key.Table,
-		"key":   key.Key,
-		"value": key.Value,
-	}
+func (key snapshotKey) ToSDKData() opencdc.Data {
+	return opencdc.StructuredData{string(key.Key): key.Value}
 }
 
 type (
@@ -52,34 +48,31 @@ type (
 	// iterator itself.
 	fetchData struct {
 		key      snapshotKey
-		payload  sdk.StructuredData
+		table    common.TableName
+		payload  opencdc.StructuredData
 		position common.TablePosition
 	}
 	snapshotIterator struct {
-		db           *sqlx.DB
 		t            *tomb.Tomb
 		data         chan fetchData
 		acks         csync.WaitGroup
-		fetchSize    int
 		lastPosition common.SnapshotPosition
+		config       snapshotIteratorConfig
 	}
 	snapshotIteratorConfig struct {
-		db        *sqlx.DB
-		tableKeys common.TableKeys
-		fetchSize int
-		position  *common.SnapshotPosition
-		database  string
-		tables    []string
+		db            *sqlx.DB
+		tableKeys     common.TableKeys
+		fetchSize     int
+		startPosition *common.SnapshotPosition
+		database      string
+		tables        []string
+		serverID      common.ServerID
 	}
 )
 
 func (config *snapshotIteratorConfig) init() error {
-	if config.position != nil {
-		if config.position.Snapshots == nil {
-			config.position.Snapshots = make(map[common.TableName]common.TablePosition)
-		}
-	} else {
-		config.position = &common.SnapshotPosition{
+	if config.startPosition == nil {
+		config.startPosition = &common.SnapshotPosition{
 			Snapshots: map[common.TableName]common.TablePosition{},
 		}
 	}
@@ -108,22 +101,21 @@ func newSnapshotIterator(
 
 	// start position is mutable, so in order to avoid unexpected behaviour in
 	// tests we clone it.
-	lastPosition := config.position.Clone()
+	lastPosition := config.startPosition.Clone()
 
 	iterator := &snapshotIterator{
-		db:           config.db,
 		t:            &tomb.Tomb{},
 		data:         make(chan fetchData),
 		acks:         csync.WaitGroup{},
-		fetchSize:    config.fetchSize,
+		config:       config,
 		lastPosition: lastPosition,
 	}
 
 	for table, primaryKey := range config.tableKeys {
-		worker := newFetchWorker(iterator.db, iterator.data, fetchWorkerConfig{
+		worker := newFetchWorker(iterator.config.db, iterator.data, fetchWorkerConfig{
 			lastPosition: iterator.lastPosition,
 			table:        table,
-			fetchSize:    iterator.fetchSize,
+			fetchSize:    iterator.config.fetchSize,
 			primaryKey:   primaryKey,
 		})
 		iterator.t.Go(func() error {
@@ -132,50 +124,44 @@ func newSnapshotIterator(
 		})
 	}
 
-	// close the data channel when all tomb goroutines are done, which will happen:
-	// - when all records are fetched from all tables
-	// - when the iterator teardown method is called
-	go func() {
-		_ = iterator.t.Wait()
-		close(iterator.data)
-	}()
-
 	return iterator, nil
 }
 
-func (s *snapshotIterator) Read(ctx context.Context) (sdk.Record, error) {
+func (s *snapshotIterator) Next(ctx context.Context) (rec opencdc.Record, err error) {
 	select {
 	case <-ctx.Done():
-		return sdk.Record{}, fmt.Errorf("context cancelled: %w", ctx.Err())
-	case data, ok := <-s.data:
-		if !ok { // closed
-			if err := s.t.Err(); err != nil {
-				return sdk.Record{}, fmt.Errorf("fetchers exited unexpectedly: %w", err)
-			}
-			if err := s.acks.Wait(ctx); err != nil {
-				return sdk.Record{}, fmt.Errorf("failed to wait for acks: %w", err)
-			}
-
-			sdk.Logger(ctx).Info().Msg("last snapshot read already done")
-
-			return sdk.Record{}, ErrSnapshotIteratorDone
+		//nolint:wrapcheck // no need to wrap canceled error
+		return rec, ctx.Err()
+	case <-s.t.Dead():
+		if err := s.t.Err(); err != nil && !errors.Is(err, ErrSnapshotIteratorDone) {
+			return rec, fmt.Errorf(
+				"cannot stop snapshot mode, fetchers exited unexpectedly: %w", err)
+		}
+		if err := s.acks.Wait(ctx); err != nil {
+			return rec, fmt.Errorf("failed to wait for acks on snapshot iterator done: %w", err)
 		}
 
-		sdk.Logger(ctx).Trace().Msg("received snapshot fetch data")
-
+		return rec, ErrSnapshotIteratorDone
+	case data := <-s.data:
 		s.acks.Add(1)
 		return s.buildRecord(data), nil
 	}
 }
 
-func (s *snapshotIterator) Ack(_ context.Context, _ sdk.Position) error {
+func (s *snapshotIterator) Ack(context.Context, opencdc.Position) error {
 	s.acks.Done()
 	return nil
 }
 
 func (s *snapshotIterator) Teardown(ctx context.Context) error {
-	if s.t != nil {
-		s.t.Kill(errors.New("tearing down snapshot iterator"))
+	s.t.Kill(ErrSnapshotIteratorDone)
+	if err := s.t.Err(); err != nil && !errors.Is(err, ErrSnapshotIteratorDone) {
+		return fmt.Errorf(
+			"cannot teardown snapshot mode, fetchers exited unexpectedly: %w", err)
+	}
+
+	if err := s.acks.Wait(ctx); err != nil {
+		return fmt.Errorf("failed to wait for snapshot acks: %w", err)
 	}
 
 	// waiting for the workers to finish will allow us to have an easier time
@@ -184,8 +170,8 @@ func (s *snapshotIterator) Teardown(ctx context.Context) error {
 
 	sdk.Logger(ctx).Info().Msg("all workers done")
 
-	if s.db != nil {
-		if err := s.db.Close(); err != nil {
+	if s.config.db != nil {
+		if err := s.config.db.Close(); err != nil {
 			return fmt.Errorf("failed to close database: %w", err)
 		}
 	}
@@ -195,12 +181,13 @@ func (s *snapshotIterator) Teardown(ctx context.Context) error {
 	return nil
 }
 
-func (s *snapshotIterator) buildRecord(d fetchData) sdk.Record {
-	s.lastPosition.Snapshots[d.key.Table] = d.position
+func (s *snapshotIterator) buildRecord(d fetchData) opencdc.Record {
+	s.lastPosition.Snapshots[d.table] = d.position
 
 	pos := s.lastPosition.ToSDKPosition()
-	metadata := make(sdk.Metadata)
-	metadata.SetCollection(string(d.key.Table))
+	metadata := make(opencdc.Metadata)
+	metadata.SetCollection(string(d.table))
+	metadata[common.ServerIDKey] = string(s.config.serverID)
 
 	key := d.key.ToSDKData()
 

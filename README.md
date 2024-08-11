@@ -21,7 +21,7 @@ It (will) operate in two modes: snapshot and CDC. Currently only snapshot mode i
 
 Snapshot mode is the first stage of the source sync process. It reads all rows from the configured tables as record snapshots.
 
-In snapshot mode, the record payload consists of [sdk.StructuredData](https://pkg.go.dev/github.com/conduitio/conduit-connector-sdk@v0.9.1#StructuredData), with each key being a column and each value being that column's value.
+In snapshot mode, the record payload consists of [opencdc.StructuredData](https://pkg.go.dev/github.com/conduitio/conduit-connector-sdk@v0.9.1#StructuredData), with each key being a column and each value being that column's value.
 
 ### CDC mode (planned)
 

@@ -19,6 +19,8 @@ import (
 	"fmt"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
+	"github.com/conduitio/conduit-commons/config"
+	"github.com/conduitio/conduit-commons/opencdc"
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
@@ -40,14 +42,14 @@ func NewSource() sdk.Source {
 	return sdk.SourceWithMiddleware(&Source{}, sdk.DefaultSourceMiddleware()...)
 }
 
-func (s *Source) Parameters() map[string]sdk.Parameter {
+func (s *Source) Parameters() config.Parameters {
 	// Parameters is a map of named Parameters that describe how to configure
 	// the Source. Parameters can be generated from SourceConfig with paramgen.
 	return s.config.Parameters()
 }
 
-func (s *Source) Configure(ctx context.Context, cfg map[string]string) (err error) {
-	if err := sdk.Util.ParseConfig(cfg, &s.config); err != nil {
+func (s *Source) Configure(ctx context.Context, cfg config.Config) (err error) {
+	if err := sdk.Util.ParseConfig(ctx, cfg, &s.config, s.config.Parameters()); err != nil {
 		return fmt.Errorf("invalid config: %w", err)
 	}
 
@@ -64,7 +66,7 @@ func (s *Source) DisableCanalLogs() {
 	s.config.DisableCanalLogs()
 }
 
-func (s *Source) Open(ctx context.Context, pos sdk.Position) (err error) {
+func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) {
 	s.db, err = sqlx.Open("mysql", s.config.URL)
 	if err != nil {
 		return fmt.Errorf("failed to connect to mysql: %w", err)
@@ -75,30 +77,35 @@ func (s *Source) Open(ctx context.Context, pos sdk.Position) (err error) {
 		return fmt.Errorf("failed to get table keys: %w", err)
 	}
 
-	var iteratorPos common.Position
-	if pos != nil {
-		parsed, err := common.ParseSDKPosition(pos)
-		if err != nil {
-			return fmt.Errorf("failed to parse sdk.Position: %w", err)
-		}
+	serverID, err := common.GetServerID(ctx, s.db)
+	if err != nil {
+		return fmt.Errorf("failed to get server id: %w", err)
+	}
 
-		iteratorPos = parsed
+	// set positions by default to nil, so that iterators know if starting from no position
+	var pos common.Position
+	if sdkPos != nil {
+		parsed, err := common.ParseSDKPosition(sdkPos)
+		if err != nil {
+			return fmt.Errorf("bad source position given: %w", err)
+		}
+		pos = parsed
 	}
 
 	s.iterator, err = newCombinedIterator(ctx, combinedIteratorConfig{
 		snapshotConfig: snapshotIteratorConfig{
-			db:        s.db,
-			tableKeys: tableKeys,
-			position:  iteratorPos.SnapshotPosition,
-			database:  s.configFromDsn.DBName,
-			tables:    s.config.Tables,
+			db:            s.db,
+			tableKeys:     tableKeys,
+			startPosition: pos.SnapshotPosition,
+			database:      s.configFromDsn.DBName,
+			tables:        s.config.Tables,
+			serverID:      serverID,
 		},
 		cdcConfig: cdcIteratorConfig{
-			tables:         s.config.Tables,
-			disableLogging: s.config.ShouldDisableCanalLogs(),
-			mysqlConfig:    s.configFromDsn,
-			position:       iteratorPos.CdcPosition,
-			TableKeys:      tableKeys,
+			tables:      s.config.Tables,
+			mysqlConfig: s.configFromDsn,
+			position:    pos.CdcPosition,
+			TableKeys:   tableKeys,
 		},
 	})
 	if err != nil {
@@ -109,14 +116,14 @@ func (s *Source) Open(ctx context.Context, pos sdk.Position) (err error) {
 	return nil
 }
 
-func (s *Source) Read(ctx context.Context) (sdk.Record, error) {
+func (s *Source) Read(ctx context.Context) (opencdc.Record, error) {
 	//nolint:wrapcheck // error already wrapped in iterator
-	return s.iterator.Read(ctx)
+	return s.iterator.Next(ctx)
 }
 
-func (s *Source) Ack(ctx context.Context, _ sdk.Position) error {
+func (s *Source) Ack(ctx context.Context, _ opencdc.Position) error {
 	//nolint:wrapcheck // error already wrapped in iterator
-	return s.iterator.Ack(ctx, sdk.Position{})
+	return s.iterator.Ack(ctx, opencdc.Position{})
 }
 
 func (s *Source) Teardown(ctx context.Context) error {

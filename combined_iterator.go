@@ -20,7 +20,7 @@ import (
 	"fmt"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
-	sdk "github.com/conduitio/conduit-connector-sdk"
+	"github.com/conduitio/conduit-commons/opencdc"
 )
 
 type combinedIterator struct {
@@ -57,19 +57,19 @@ func newCombinedIterator(
 	return iterator, nil
 }
 
-func (c *combinedIterator) Ack(ctx context.Context, pos sdk.Position) error {
+func (c *combinedIterator) Ack(ctx context.Context, pos opencdc.Position) error {
 	//nolint:wrapcheck // error already wrapped in iterator
 	return c.currentIterator.Ack(ctx, pos)
 }
 
-func (c *combinedIterator) Read(ctx context.Context) (sdk.Record, error) {
-	rec, err := c.currentIterator.Read(ctx)
+func (c *combinedIterator) Next(ctx context.Context) (opencdc.Record, error) {
+	rec, err := c.currentIterator.Next(ctx)
 	if errors.Is(err, ErrSnapshotIteratorDone) {
 		c.currentIterator = c.cdcIterator
 		//nolint:wrapcheck // error already wrapped in iterator
-		return c.currentIterator.Read(ctx)
+		return c.currentIterator.Next(ctx)
 	} else if err != nil {
-		return sdk.Record{}, fmt.Errorf("failed to get next record: %w", err)
+		return opencdc.Record{}, fmt.Errorf("failed to get next record: %w", err)
 	}
 
 	return rec, nil

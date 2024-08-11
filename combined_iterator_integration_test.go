@@ -26,7 +26,7 @@ import (
 )
 
 func testCombinedIterator(ctx context.Context, is *is.I) (common.Iterator, func()) {
-	db, _ := testutils.Connection(is)
+	db := testutils.Connection(is)
 
 	config, err := mysql.ParseDSN(testutils.DSN)
 	is.NoErr(err)
@@ -53,8 +53,7 @@ func testCombinedIterator(ctx context.Context, is *is.I) (common.Iterator, func(
 func TestCombinedIterator(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
-	db, closeDB := testutils.Connection(is)
-	defer closeDB()
+	db := testutils.Connection(is)
 
 	userTable.Recreate(is, db)
 
@@ -67,7 +66,6 @@ func TestCombinedIterator(t *testing.T) {
 
 	// ci is slow, we need a bit of time for the setup to initialize canal.Canal.
 	// Theoretically it should not matter, as we get the position at the start.
-	// Documented at issue
 	time.Sleep(time.Second)
 
 	user1Updated := userTable.Update(is, db, user1.Update())

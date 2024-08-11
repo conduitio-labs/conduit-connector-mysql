@@ -20,7 +20,7 @@ import (
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	testutils "github.com/conduitio-labs/conduit-connector-mysql/test"
-	sdk "github.com/conduitio/conduit-connector-sdk"
+	"github.com/conduitio/conduit-commons/opencdc"
 	"github.com/go-sql-driver/mysql"
 	"github.com/matryer/is"
 )
@@ -42,13 +42,15 @@ func testCdcIterator(ctx context.Context, is *is.I) (common.Iterator, func()) {
 
 func testCdcIteratorAtPosition(
 	ctx context.Context, is *is.I,
-	position sdk.Position,
+	sdkPos opencdc.Position,
 ) (common.Iterator, func()) {
 	config, err := mysql.ParseDSN(testutils.DSN)
 	is.NoErr(err)
 
-	pos, err := common.ParseSDKPosition(position)
+	pos, err := common.ParseSDKPosition(sdkPos)
 	is.NoErr(err)
+
+	is.Equal(pos.Kind, common.PositionTypeCDC)
 
 	iterator, err := newCdcIterator(ctx, cdcIteratorConfig{
 		mysqlConfig:    config,
@@ -67,8 +69,7 @@ func TestCDCIterator_InsertAction(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 
-	db, closeDB := testutils.Connection(is)
-	defer closeDB()
+	db := testutils.Connection(is)
 
 	userTable.Recreate(is, db)
 
@@ -88,8 +89,7 @@ func TestCDCIterator_DeleteAction(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 
-	db, closeDB := testutils.Connection(is)
-	defer closeDB()
+	db := testutils.Connection(is)
 
 	userTable.Recreate(is, db)
 
@@ -113,8 +113,7 @@ func TestCDCIterator_UpdateAction(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 
-	db, closeDB := testutils.Connection(is)
-	defer closeDB()
+	db := testutils.Connection(is)
 
 	userTable.Recreate(is, db)
 
@@ -138,8 +137,7 @@ func TestCDCIterator_RestartOnPosition(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 
-	db, closeDB := testutils.Connection(is)
-	defer closeDB()
+	db := testutils.Connection(is)
 
 	userTable.Recreate(is, db)
 
@@ -154,7 +152,7 @@ func TestCDCIterator_RestartOnPosition(t *testing.T) {
 	user3 := userTable.Insert(is, db, "user3")
 	user4 := userTable.Insert(is, db, "user4")
 
-	var latestPosition sdk.Position
+	var latestPosition opencdc.Position
 
 	{ // read and ack 2 records
 		testutils.ReadAndAssertInsert(ctx, is, iterator, user1)

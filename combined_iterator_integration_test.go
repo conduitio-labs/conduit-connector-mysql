@@ -25,8 +25,8 @@ import (
 	"github.com/matryer/is"
 )
 
-func testCombinedIterator(ctx context.Context, is *is.I) (common.Iterator, func()) {
-	db, _ := testutils.Connection(is)
+func testCombinedIterator(ctx context.Context, t *testing.T, is *is.I) (common.Iterator, func()) {
+	db := testutils.Connection(t)
 
 	config, err := mysql.ParseDSN(testutils.DSN)
 	is.NoErr(err)
@@ -51,11 +51,10 @@ func testCombinedIterator(ctx context.Context, is *is.I) (common.Iterator, func(
 	return iterator, func() { is.NoErr(iterator.Teardown(ctx)) }
 }
 
-func TestCombinedIterator(t *testing.T) {
+func TestCombinedIterator_SnapshotAndCDC(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
-	db, closeDB := testutils.Connection(is)
-	defer closeDB()
+	db := testutils.Connection(t)
 
 	userTable.Recreate(is, db)
 
@@ -63,7 +62,7 @@ func TestCombinedIterator(t *testing.T) {
 	user2 := userTable.Insert(is, db, "user2")
 	user3 := userTable.Insert(is, db, "user3")
 
-	iterator, cleanup := testCombinedIterator(ctx, is)
+	iterator, cleanup := testCombinedIterator(ctx, t, is)
 	defer cleanup()
 
 	// ci is slow, we need a bit of time for the setup to initialize canal.Canal.

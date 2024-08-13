@@ -29,8 +29,8 @@ import (
 
 var userTable testutils.UsersTable
 
-func testSnapshotIterator(ctx context.Context, is *is.I) (common.Iterator, func()) {
-	db, _ := testutils.Connection(is)
+func testSnapshotIterator(ctx context.Context, t *testing.T, is *is.I) (common.Iterator, func()) {
+	db := testutils.Connection(t)
 
 	serverID, err := common.GetServerID(ctx, db)
 	is.NoErr(err)
@@ -48,10 +48,10 @@ func testSnapshotIterator(ctx context.Context, is *is.I) (common.Iterator, func(
 }
 
 func testSnapshotIteratorAtPosition(
-	ctx context.Context, is *is.I,
+	ctx context.Context, t *testing.T, is *is.I,
 	sdkPos opencdc.Position,
 ) (common.Iterator, func()) {
-	db, _ := testutils.Connection(is)
+	db := testutils.Connection(t)
 
 	serverID, err := common.GetServerID(ctx, db)
 	is.NoErr(err)
@@ -80,12 +80,11 @@ func TestSnapshotIterator_EmptyTable(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 
-	db, closeDB := testutils.Connection(is)
-	defer closeDB()
+	db := testutils.Connection(t)
 
 	userTable.Recreate(is, db)
 
-	it, cleanup := testSnapshotIterator(ctx, is)
+	it, cleanup := testSnapshotIterator(ctx, t, is)
 	defer cleanup()
 
 	_, err := it.Next(ctx)
@@ -101,8 +100,7 @@ func TestSnapshotIterator_WithData(t *testing.T) {
 
 	is := is.New(t)
 
-	db, closeDB := testutils.Connection(is)
-	defer closeDB()
+	db := testutils.Connection(t)
 
 	userTable.Recreate(is, db)
 
@@ -112,7 +110,7 @@ func TestSnapshotIterator_WithData(t *testing.T) {
 		users = append(users, user)
 	}
 
-	iterator, cleanup := testSnapshotIterator(ctx, is)
+	iterator, cleanup := testSnapshotIterator(ctx, t, is)
 	defer cleanup()
 
 	for i := 0; i < 100; i++ {
@@ -129,8 +127,7 @@ func TestSnapshotIterator_SmallFetchSize(t *testing.T) {
 	ctx := testutils.TestContextNoTraceLog(t)
 	is := is.New(t)
 
-	db, closeDB := testutils.Connection(is)
-	defer closeDB()
+	db := testutils.Connection(t)
 
 	userTable.Recreate(is, db)
 
@@ -140,7 +137,7 @@ func TestSnapshotIterator_SmallFetchSize(t *testing.T) {
 		users = append(users, user)
 	}
 
-	iterator, cleanup := testSnapshotIterator(ctx, is)
+	iterator, cleanup := testSnapshotIterator(ctx, t, is)
 	defer cleanup()
 
 	for i := 0; i < 100; i++ {
@@ -157,8 +154,7 @@ func TestSnapshotIterator_RestartOnPosition(t *testing.T) {
 	ctx := testutils.TestContextNoTraceLog(t)
 	is := is.New(t)
 
-	db, closeDB := testutils.Connection(is)
-	defer closeDB()
+	db := testutils.Connection(t)
 
 	userTable.Recreate(is, db)
 	var users []testutils.User
@@ -170,7 +166,7 @@ func TestSnapshotIterator_RestartOnPosition(t *testing.T) {
 	var recs []opencdc.Record
 	var breakPosition opencdc.Position
 	{
-		it, cleanup := testSnapshotIterator(ctx, is)
+		it, cleanup := testSnapshotIterator(ctx, t, is)
 		defer cleanup()
 
 		for i := 0; i < 10; i++ {
@@ -193,7 +189,7 @@ func TestSnapshotIterator_RestartOnPosition(t *testing.T) {
 
 	// read the remaining 90 records
 
-	it, cleanup := testSnapshotIteratorAtPosition(ctx, is, breakPosition)
+	it, cleanup := testSnapshotIteratorAtPosition(ctx, t, is, breakPosition)
 	defer cleanup()
 
 	for {

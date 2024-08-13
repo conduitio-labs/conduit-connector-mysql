@@ -46,12 +46,16 @@ func getTestServerID() common.ServerID {
 	return serverID
 }
 
-func Connection(is *is.I) (*sqlx.DB, func()) {
-	is.Helper()
+func Connection(t *testing.T) *sqlx.DB {
+	is := is.New(t)
 	db, err := sqlx.Open("mysql", DSN)
 	is.NoErr(err)
 
-	return db, func() { is.NoErr(db.Close()) }
+	t.Cleanup(func() {
+		is.NoErr(db.Close())
+	})
+
+	return db
 }
 
 func TestContext(t *testing.T) context.Context {

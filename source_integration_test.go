@@ -51,12 +51,11 @@ func TestSource_ConsistentSnapshot(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 
-	db, closeDB := testutils.Connection(is)
-	defer closeDB()
+	db := testutils.Connection(t)
 
 	userTable.Recreate(is, db)
 
-	// insert 4 rows
+	// insert 4 rows, the whole snapshot
 
 	user1 := userTable.Insert(is, db, "user1")
 	user2 := userTable.Insert(is, db, "user2")
@@ -82,11 +81,11 @@ func TestSource_ConsistentSnapshot(t *testing.T) {
 	userTable.Delete(is, db, user4)
 
 	// read 2 more records -> they shall be snapshots
+	// snapshot completed, so previous 2 inserts and delete done while
+	// snapshotting should be captured
 
 	testutils.ReadAndAssertSnapshot(ctx, is, sourceIterator, user3)
 	testutils.ReadAndAssertSnapshot(ctx, is, sourceIterator, user4)
-
-	// read 3 records, should be 2 creates and 1 delete
 
 	testutils.ReadAndAssertInsert(ctx, is, sourceIterator, user5)
 	testutils.ReadAndAssertInsert(ctx, is, sourceIterator, user6)

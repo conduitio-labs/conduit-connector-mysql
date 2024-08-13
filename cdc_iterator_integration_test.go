@@ -69,8 +69,7 @@ func TestCDCIterator_InsertAction(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 
-	db, closeDB := testutils.Connection(is)
-	defer closeDB()
+	db := testutils.Connection(t)
 
 	userTable.Recreate(is, db)
 
@@ -90,8 +89,7 @@ func TestCDCIterator_DeleteAction(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 
-	db, closeDB := testutils.Connection(is)
-	defer closeDB()
+	db := testutils.Connection(t)
 
 	userTable.Recreate(is, db)
 
@@ -115,8 +113,7 @@ func TestCDCIterator_UpdateAction(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 
-	db, closeDB := testutils.Connection(is)
-	defer closeDB()
+	db := testutils.Connection(t)
 
 	userTable.Recreate(is, db)
 
@@ -140,8 +137,7 @@ func TestCDCIterator_RestartOnPosition(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 
-	db, closeDB := testutils.Connection(is)
-	defer closeDB()
+	db := testutils.Connection(t)
 
 	userTable.Recreate(is, db)
 

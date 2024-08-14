@@ -86,7 +86,6 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 			return fmt.Errorf("bad source position given: %w", err)
 		}
 		pos = parsed
-
 	}
 
 	s.iterator, err = newCombinedIterator(ctx, combinedIteratorConfig{

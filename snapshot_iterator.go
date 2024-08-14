@@ -120,7 +120,7 @@ func newSnapshotIterator(
 	// More documentation about why doing it this way at:
 	// https://debezium.io/documentation/reference/stable/connectors/mysql.html#mysql-snapshots
 
-	var workers []*fetchWorker
+	workers := make([]*fetchWorker, 0, len(config.tableKeys))
 	for table, primaryKey := range config.tableKeys {
 		worker := newFetchWorker(iterator.config.db, iterator.data, fetchWorkerConfig{
 			lastPosition: iterator.lastPosition,

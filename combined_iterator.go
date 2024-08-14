@@ -54,7 +54,7 @@ func newCombinedIterator(
 		DisableLogging: config.disableCanalLogging,
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to start canal at combined iterator: %w", err)
 	}
 
 	snapshotIterator, err := newSnapshotIterator(ctx, snapshotIteratorConfig{

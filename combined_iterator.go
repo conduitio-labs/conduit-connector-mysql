@@ -39,20 +39,35 @@ func newCombinedIterator(
 	ctx context.Context,
 	config combinedIteratorConfig,
 ) (common.Iterator, error) {
-	iterator := &combinedIterator{}
-	var err error
-
-	iterator.cdcIterator, err = newCdcIterator(ctx, config.cdcConfig)
+	canal, err := common.NewCanal(ctx, common.CanalConfig{
+		Config:         config.cdcConfig.mysqlConfig,
+		Tables:         config.cdcConfig.tables,
+		DisableLogging: config.cdcConfig.disableCanalLogging,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create cdc iterator: %w", err)
+		return nil, err
 	}
 
-	iterator.snapshotIterator, err = newSnapshotIterator(ctx, config.snapshotConfig)
+	config.cdcConfig.canal = canal
+	config.snapshotConfig.getMasterPos = canal.GetMasterPos
+
+	snapshotIterator, err := newSnapshotIterator(ctx, config.snapshotConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create snapshot iterator: %w", err)
 	}
 
-	iterator.currentIterator = iterator.snapshotIterator
+	config.cdcConfig.position = &snapshotIterator.cdcStartPosition
+
+	cdcIterator, err := newCdcIterator(ctx, config.cdcConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create cdc iterator: %w", err)
+	}
+
+	iterator := &combinedIterator{
+		snapshotIterator: snapshotIterator,
+		cdcIterator:      cdcIterator,
+		currentIterator:  snapshotIterator,
+	}
 
 	return iterator, nil
 }

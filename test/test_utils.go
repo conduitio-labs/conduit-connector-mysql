@@ -22,6 +22,8 @@ import (
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	"github.com/conduitio/conduit-commons/opencdc"
+	"github.com/go-mysql-org/go-mysql/canal"
+	"github.com/go-sql-driver/mysql"
 	"github.com/google/go-cmp/cmp"
 	"github.com/jmoiron/sqlx"
 	"github.com/matryer/is"
@@ -242,4 +244,20 @@ func assertMetadata(is *is.I, metadata opencdc.Metadata) {
 	is.Equal(col, "users")
 
 	is.Equal(common.ServerID(metadata[common.ServerIDKey]), ServerID)
+}
+
+func NewCanal(ctx context.Context, is *is.I) *canal.Canal {
+	is.Helper()
+
+	config, err := mysql.ParseDSN(DSN)
+	is.NoErr(err)
+
+	canal, err := common.NewCanal(ctx, common.CanalConfig{
+		Config:         config,
+		Tables:         []string{"users"},
+		DisableLogging: true,
+	})
+	is.NoErr(err)
+
+	return canal
 }

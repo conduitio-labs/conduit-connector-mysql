@@ -35,16 +35,22 @@ func testSnapshotIterator(ctx context.Context, t *testing.T, is *is.I) (common.I
 	serverID, err := common.GetServerID(ctx, db)
 	is.NoErr(err)
 
+	canal := testutils.NewCanal(ctx, is)
+
 	iterator, err := newSnapshotIterator(ctx, snapshotIteratorConfig{
-		tableKeys: testutils.TableKeys,
-		db:        db,
-		database:  "meroxadb",
-		tables:    []string{"users"},
-		serverID:  serverID,
+		getMasterPos: canal.GetMasterPos,
+		tableKeys:    testutils.TableKeys,
+		db:           db,
+		database:     "meroxadb",
+		tables:       []string{"users"},
+		serverID:     serverID,
 	})
 	is.NoErr(err)
 
-	return iterator, func() { is.NoErr(iterator.Teardown(ctx)) }
+	return iterator, func() {
+		canal.Close()
+		is.NoErr(iterator.Teardown(ctx))
+	}
 }
 
 func testSnapshotIteratorAtPosition(
@@ -56,12 +62,15 @@ func testSnapshotIteratorAtPosition(
 	serverID, err := common.GetServerID(ctx, db)
 	is.NoErr(err)
 
+	canal := testutils.NewCanal(ctx, is)
+
 	pos, err := common.ParseSDKPosition(sdkPos)
 	is.NoErr(err)
 
 	is.Equal(pos.Kind, common.PositionTypeSnapshot)
 
 	iterator, err := newSnapshotIterator(ctx, snapshotIteratorConfig{
+		getMasterPos:  canal.GetMasterPos,
 		tableKeys:     testutils.TableKeys,
 		db:            db,
 		startPosition: pos.SnapshotPosition,
@@ -71,18 +80,21 @@ func testSnapshotIteratorAtPosition(
 	})
 	is.NoErr(err)
 
-	return iterator, func() { is.NoErr(iterator.Teardown(ctx)) }
+	return iterator, func() {
+		canal.Close()
+		is.NoErr(iterator.Teardown(ctx))
+	}
 }
 
 func TestSnapshotIterator_EmptyTable(t *testing.T) {
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
-
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 
 	db := testutils.Connection(t)
 
 	userTable.Recreate(is, db)
+
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 
 	it, cleanup := testSnapshotIterator(ctx, t, is)
 	defer cleanup()
@@ -94,8 +106,6 @@ func TestSnapshotIterator_EmptyTable(t *testing.T) {
 }
 
 func TestSnapshotIterator_WithData(t *testing.T) {
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
-
 	ctx := testutils.TestContextNoTraceLog(t)
 
 	is := is.New(t)
@@ -109,6 +119,8 @@ func TestSnapshotIterator_WithData(t *testing.T) {
 		user := userTable.Insert(is, db, fmt.Sprintf("user-%v", i))
 		users = append(users, user)
 	}
+
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 
 	iterator, cleanup := testSnapshotIterator(ctx, t, is)
 	defer cleanup()
@@ -122,8 +134,6 @@ func TestSnapshotIterator_WithData(t *testing.T) {
 }
 
 func TestSnapshotIterator_SmallFetchSize(t *testing.T) {
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
-
 	ctx := testutils.TestContextNoTraceLog(t)
 	is := is.New(t)
 
@@ -136,6 +146,8 @@ func TestSnapshotIterator_SmallFetchSize(t *testing.T) {
 		user := userTable.Insert(is, db, fmt.Sprintf("user-%v", i))
 		users = append(users, user)
 	}
+
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 
 	iterator, cleanup := testSnapshotIterator(ctx, t, is)
 	defer cleanup()
@@ -149,8 +161,6 @@ func TestSnapshotIterator_SmallFetchSize(t *testing.T) {
 }
 
 func TestSnapshotIterator_RestartOnPosition(t *testing.T) {
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
-
 	ctx := testutils.TestContextNoTraceLog(t)
 	is := is.New(t)
 
@@ -162,6 +172,8 @@ func TestSnapshotIterator_RestartOnPosition(t *testing.T) {
 		user := userTable.Insert(is, db, fmt.Sprintf("user-%v", i))
 		users = append(users, user)
 	}
+
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 
 	var recs []opencdc.Record
 	var breakPosition opencdc.Position

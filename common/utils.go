@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"time"
 
+	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/go-mysql-org/go-mysql/canal"
 	"github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
@@ -47,10 +48,9 @@ type CanalConfig struct {
 	*mysql.Config
 	Tables         []string
 	DisableLogging bool
-	Logger         *zerolog.Logger
 }
 
-func NewCanal(config CanalConfig) (*canal.Canal, error) {
+func NewCanal(ctx context.Context, config CanalConfig) (*canal.Canal, error) {
 	cfg := canal.NewDefaultConfig()
 	cfg.Addr = config.Addr
 	cfg.User = config.User
@@ -60,7 +60,7 @@ func NewCanal(config CanalConfig) (*canal.Canal, error) {
 	if config.DisableLogging {
 		cfg.Logger = nopLogger{}
 	} else {
-		cfg.Logger = zerologCanalLogger{config.Logger}
+		cfg.Logger = zerologCanalLogger{sdk.Logger(ctx)}
 	}
 
 	// Disable dumping

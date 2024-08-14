@@ -29,7 +29,6 @@ import (
 )
 
 type cdcIterator struct {
-	canal       *canal.Canal
 	rowsEventsC chan rowEvent
 
 	canalRunErrC chan error
@@ -39,6 +38,7 @@ type cdcIterator struct {
 }
 
 type cdcIteratorConfig struct {
+	canal               *canal.Canal
 	tables              []string
 	mysqlConfig         *mysqldriver.Config
 	position            *common.CdcPosition
@@ -47,23 +47,12 @@ type cdcIteratorConfig struct {
 }
 
 func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (common.Iterator, error) {
-	c, err := common.NewCanal(common.CanalConfig{
-		Config:         config.mysqlConfig,
-		Tables:         config.tables,
-		DisableLogging: config.disableCanalLogging,
-		Logger:         sdk.Logger(ctx),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create canal: %w", err)
-	}
-
 	sdk.Logger(ctx).Info().Msg("created canal")
 
 	rowsEventsC := make(chan rowEvent)
 	canalDoneC := make(chan struct{})
 
 	iterator := &cdcIterator{
-		canal:        c,
 		rowsEventsC:  rowsEventsC,
 		canalRunErrC: make(chan error),
 		canalDoneC:   canalDoneC,
@@ -74,12 +63,12 @@ func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (common.Itera
 	if err != nil {
 		return nil, fmt.Errorf("failed to get start position: %w", err)
 	}
-	eventHandler := newCdcEventHandler(c, canalDoneC, rowsEventsC)
+	eventHandler := newCdcEventHandler(config.canal, canalDoneC, rowsEventsC)
 
 	go func() {
-		iterator.canal.SetEventHandler(eventHandler)
+		iterator.config.canal.SetEventHandler(eventHandler)
 		pos := startPosition.ToMysqlPos()
-		iterator.canalRunErrC <- iterator.canal.RunFrom(pos)
+		iterator.canalRunErrC <- iterator.config.canal.RunFrom(pos)
 	}()
 
 	return iterator, nil
@@ -91,7 +80,7 @@ func (c *cdcIterator) getStartPosition(config cdcIteratorConfig) (common.CdcPosi
 	}
 
 	var cdcPosition common.CdcPosition
-	masterPos, err := c.canal.GetMasterPos()
+	masterPos, err := c.config.canal.GetMasterPos()
 	if err != nil {
 		return cdcPosition, fmt.Errorf("failed to get master position: %w", err)
 	}
@@ -126,7 +115,7 @@ func (c *cdcIterator) Next(ctx context.Context) (rec opencdc.Record, err error) 
 func (c *cdcIterator) Teardown(ctx context.Context) error {
 	close(c.canalDoneC)
 
-	c.canal.Close()
+	c.config.canal.Close()
 	select {
 	case <-ctx.Done():
 		//nolint:wrapcheck // no need to wrap canceled error

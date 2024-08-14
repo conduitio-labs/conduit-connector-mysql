@@ -32,19 +32,13 @@ func testCombinedIterator(ctx context.Context, t *testing.T, is *is.I) (common.I
 	is.NoErr(err)
 
 	iterator, err := newCombinedIterator(ctx, combinedIteratorConfig{
-		snapshotConfig: snapshotIteratorConfig{
-			tableKeys: testutils.TableKeys,
-			db:        db,
-			database:  "meroxadb",
-			tables:    []string{"users"},
-			serverID:  testutils.ServerID,
-		},
-		cdcConfig: cdcIteratorConfig{
-			mysqlConfig:         config,
-			tables:              []string{"users"},
-			tableKeys:           testutils.TableKeys,
-			disableCanalLogging: true,
-		},
+		db:                  db,
+		tableKeys:           testutils.TableKeys,
+		database:            "meroxadb",
+		tables:              []string{"users"},
+		serverID:            testutils.ServerID,
+		mysqlConfig:         config,
+		disableCanalLogging: true,
 	})
 	is.NoErr(err)
 

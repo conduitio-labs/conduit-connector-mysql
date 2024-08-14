@@ -86,24 +86,18 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 			return fmt.Errorf("bad source position given: %w", err)
 		}
 		pos = parsed
+
 	}
 
 	s.iterator, err = newCombinedIterator(ctx, combinedIteratorConfig{
-		snapshotConfig: snapshotIteratorConfig{
-			db:            s.db,
-			tableKeys:     tableKeys,
-			startPosition: pos.SnapshotPosition,
-			database:      s.configFromDsn.DBName,
-			tables:        s.config.Tables,
-			serverID:      serverID,
-		},
-		cdcConfig: cdcIteratorConfig{
-			tables:              s.config.Tables,
-			mysqlConfig:         s.configFromDsn,
-			position:            pos.CdcPosition,
-			tableKeys:           tableKeys,
-			disableCanalLogging: s.config.DisableCanalLogs,
-		},
+		db:                    s.db,
+		tableKeys:             tableKeys,
+		startSnapshotPosition: pos.SnapshotPosition,
+		database:              s.configFromDsn.DBName,
+		tables:                s.config.Tables,
+		serverID:              serverID,
+		mysqlConfig:           s.configFromDsn,
+		disableCanalLogging:   s.config.DisableCanalLogs,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create snapshot iterator: %w", err)

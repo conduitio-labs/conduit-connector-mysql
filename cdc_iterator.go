@@ -38,12 +38,11 @@ type cdcIterator struct {
 }
 
 type cdcIteratorConfig struct {
-	canal               *canal.Canal
-	tables              []string
-	mysqlConfig         *mysqldriver.Config
-	position            *common.CdcPosition
-	tableKeys           common.TableKeys
-	disableCanalLogging bool
+	canal       *canal.Canal
+	tables      []string
+	mysqlConfig *mysqldriver.Config
+	position    *common.CdcPosition
+	tableKeys   common.TableKeys
 }
 
 func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (common.Iterator, error) {

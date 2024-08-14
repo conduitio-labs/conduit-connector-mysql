@@ -21,6 +21,8 @@ import (
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	"github.com/conduitio/conduit-commons/opencdc"
+	mysqldriver "github.com/go-sql-driver/mysql"
+	"github.com/jmoiron/sqlx"
 )
 
 type combinedIterator struct {
@@ -31,8 +33,15 @@ type combinedIterator struct {
 }
 
 type combinedIteratorConfig struct {
-	snapshotConfig snapshotIteratorConfig
-	cdcConfig      cdcIteratorConfig
+	db                    *sqlx.DB
+	tableKeys             common.TableKeys
+	fetchSize             int
+	startSnapshotPosition *common.SnapshotPosition
+	database              string
+	tables                []string
+	serverID              common.ServerID
+	mysqlConfig           *mysqldriver.Config
+	disableCanalLogging   bool
 }
 
 func newCombinedIterator(
@@ -40,25 +49,35 @@ func newCombinedIterator(
 	config combinedIteratorConfig,
 ) (common.Iterator, error) {
 	canal, err := common.NewCanal(ctx, common.CanalConfig{
-		Config:         config.cdcConfig.mysqlConfig,
-		Tables:         config.cdcConfig.tables,
-		DisableLogging: config.cdcConfig.disableCanalLogging,
+		Config:         config.mysqlConfig,
+		Tables:         config.tables,
+		DisableLogging: config.disableCanalLogging,
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	config.cdcConfig.canal = canal
-	config.snapshotConfig.getMasterPos = canal.GetMasterPos
-
-	snapshotIterator, err := newSnapshotIterator(ctx, config.snapshotConfig)
+	snapshotIterator, err := newSnapshotIterator(ctx, snapshotIteratorConfig{
+		getMasterPos:  canal.GetMasterPos,
+		db:            config.db,
+		tableKeys:     config.tableKeys,
+		fetchSize:     config.fetchSize,
+		startPosition: config.startSnapshotPosition,
+		database:      config.database,
+		tables:        config.tables,
+		serverID:      config.serverID,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create snapshot iterator: %w", err)
 	}
 
-	config.cdcConfig.position = &snapshotIterator.cdcStartPosition
-
-	cdcIterator, err := newCdcIterator(ctx, config.cdcConfig)
+	cdcIterator, err := newCdcIterator(ctx, cdcIteratorConfig{
+		canal:       canal,
+		tables:      config.tables,
+		mysqlConfig: config.mysqlConfig,
+		position:    &snapshotIterator.cdcStartPosition,
+		tableKeys:   config.tableKeys,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cdc iterator: %w", err)
 	}

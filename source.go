@@ -98,6 +98,7 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 		serverID:              serverID,
 		mysqlConfig:           s.configFromDsn,
 		disableCanalLogging:   s.config.DisableCanalLogs,
+		fetchSize:             s.config.FetchSize,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create snapshot iterator: %w", err)

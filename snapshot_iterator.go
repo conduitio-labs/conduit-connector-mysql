@@ -30,8 +30,6 @@ import (
 
 var ErrSnapshotIteratorDone = errors.New("snapshot complete")
 
-const defaultFetchSize = 50000
-
 type snapshotKey struct {
 	Key   common.PrimaryKeyName `json:"key"`
 	Value any                   `json:"value"`
@@ -81,7 +79,7 @@ func (config *snapshotIteratorConfig) init() error {
 	}
 
 	if config.fetchSize == 0 {
-		config.fetchSize = defaultFetchSize
+		config.fetchSize = common.DefaultFetchSize
 	}
 
 	if config.database == "" {

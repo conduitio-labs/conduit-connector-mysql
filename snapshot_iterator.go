@@ -117,33 +117,16 @@ func newSnapshotIterator(
 		lastPosition: lastPosition,
 	}
 
-	_, err := config.db.ExecContext(ctx, "LOCK TABLES "+strings.Join(config.tables, " READ, ")+" READ")
+	tableList := strings.Join(config.tables, ", ")
+
+	// Acquire global table locks and guarantee a consistent binlog position.
+	_, err := config.db.ExecContext(ctx, "FLUSH TABLES "+tableList+" WITH READ LOCK")
 	if err != nil {
-		return nil, fmt.Errorf("failed to lock tables: %w", err)
-	}
-
-	workers := make([]*fetchWorker, 0, len(config.tableKeys))
-	for table, primaryKey := range config.tableKeys {
-		worker := newFetchWorker(iterator.config.db, iterator.data, fetchWorkerConfig{
-			lastPosition: iterator.lastPosition,
-			table:        table,
-			fetchSize:    iterator.config.fetchSize,
-			primaryKey:   primaryKey,
-		})
-		if err := worker.obtainTx(ctx); err != nil {
-			return nil, fmt.Errorf("failed to fetch transaction for worker: %w", err)
-		}
-
-		workers = append(workers, worker)
+		return nil, fmt.Errorf("failed to flush tables and acquire lock: %w", err)
 	}
 
 	masterPos, err := config.getMasterPos()
 	if err != nil {
-		// cleanup all worker transactions
-		for _, worker := range workers {
-			err = errors.Join(err, worker.tx.Rollback())
-		}
-
 		return nil, fmt.Errorf("failed to get mysql master position after acquiring locks: %w", err)
 	}
 
@@ -152,7 +135,13 @@ func newSnapshotIterator(
 		Pos:  masterPos.Pos,
 	}
 
-	for _, worker := range workers {
+	for table, primaryKey := range config.tableKeys {
+		worker := newFetchWorker(iterator.config.db, iterator.data, fetchWorkerConfig{
+			lastPosition: iterator.lastPosition,
+			table:        table,
+			fetchSize:    iterator.config.fetchSize,
+			primaryKey:   primaryKey,
+		})
 		iterator.t.Go(func() error {
 			ctx := iterator.t.Context(ctx)
 			return worker.run(ctx)

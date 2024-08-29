@@ -48,8 +48,11 @@ func newFetchWorker(db *sqlx.DB, data chan fetchData, config fetchWorkerConfig) 
 	}
 }
 
-func (w *fetchWorker) obtainTx(ctx context.Context) error {
-	tx, err := w.db.BeginTxx(ctx, &sql.TxOptions{
+func (w *fetchWorker) run(ctx context.Context) (err error) {
+	sdk.Logger(ctx).Info().Msgf("started fetcher for table %q", w.config.table)
+	defer sdk.Logger(ctx).Info().Msgf("finished fetcher for table %q", w.config.table)
+
+	w.tx, err = w.db.BeginTxx(ctx, &sql.TxOptions{
 		Isolation: sql.LevelRepeatableRead,
 		ReadOnly:  true,
 	})
@@ -58,18 +61,6 @@ func (w *fetchWorker) obtainTx(ctx context.Context) error {
 	}
 
 	sdk.Logger(ctx).Info().Msgf("obtained tx for table %v", w.config.table)
-
-	w.tx = tx
-	return nil
-}
-
-func (w *fetchWorker) run(ctx context.Context) (err error) {
-	if w.tx == nil {
-		return fmt.Errorf("worker should be run with a transaction set")
-	}
-
-	sdk.Logger(ctx).Info().Msgf("started fetcher for table %q", w.config.table)
-	defer sdk.Logger(ctx).Info().Msgf("finished fetcher for table %q", w.config.table)
 
 	defer func() { err = errors.Join(err, w.tx.Commit()) }()
 

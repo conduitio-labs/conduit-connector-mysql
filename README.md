@@ -8,24 +8,55 @@ Run `make build` to build the connector.
 
 ## Testing
 
-Run `make test` to run all the unit tests. Run `make test-integration` to run the integration tests.
+Run `make test` to run all the unit tests. Run `make test-integration` to run
+the integration tests.
 
-The Docker compose file at `test/docker-compose.yml` can be used to run the required resource locally. It includes [adminer](https://www.adminer.org/) for database management.
+The Docker compose file at `test/docker-compose.yml` can be used to run the
+required resource locally. It includes [adminer](https://www.adminer.org/) for
+database management.
 
 ## Source
 
-A source connector pulls data from an external resource and pushes it to downstream resources via Conduit.
-It (will) operate in two modes: snapshot and CDC. Currently only snapshot mode is supported.
+A source connector pulls data from an external resource and pushes it to
+downstream resources via Conduit.
+
+It (will) operate in two modes: snapshot and CDC. Currently only snapshot mode
+is supported.
 
 ### Snapshot mode
 
-Snapshot mode is the first stage of the source sync process. It reads all rows from the configured tables as record snapshots.
+Snapshot mode is the first stage of the source sync process. It reads all rows
+from the configured tables as record snapshots.
 
-In snapshot mode, the record payload consists of [opencdc.StructuredData](https://pkg.go.dev/github.com/conduitio/conduit-connector-sdk@v0.9.1#StructuredData), with each key being a column and each value being that column's value.
+In snapshot mode, the record payload consists of
+[opencdc.StructuredData](https://pkg.go.dev/github.com/conduitio/conduit-connector-sdk@v0.9.1#StructuredData),
+with each key being a column and each value being that column's value.
 
-### CDC mode (planned)
+The MySQL user account used needs the following privileges for the snapshot mode:
 
-CDC mode is the second stage of the source sync process. It listens to the configured tables for changes and pushes them to downstream resources.
+- SELECT: To read data from the source tables.
+- LOCK TABLES: To acquire read locks on tables during snapshotting.
+- RELOAD: To execute the FLUSH TABLES command.
+- REPLICATION CLIENT: To obtain the binary log position.
+
+### Change Data Capture mode
+
+When the connector switches to CDC mode, it starts streaming changes from the
+obtained position at the start of the snapshot. It uses the row-based binlog format
+to capture detailed changes at the individual row level.
+
+The MySQL user account used needs the following privileges for the CDC mode:
+
+- SELECT: To read data from the source tables.
+- REPLICATION CLIENT: To obtain the binary log position and execute SHOW MASTER STATUS.
+- REPLICATION SLAVE: For reading the binary log.
+
+To ensure compatibility, your MySQL server should be configured to use row-based
+format. You can verify this setting with the following SQL command:
+
+```sql
+SHOW VARIABLES LIKE 'binlog_format';
+```
 
 ### Configuration
 
@@ -34,10 +65,11 @@ CDC mode is the second stage of the source sync process. It listens to the confi
 | `url`    | The connection URL of the MySQL, in the following format (\*): [username[:password]@][protocol[(address)]]/dbname[?param1=value1&...&paramN=valueN] | true     |               |
 | `tables` | The list of tables to pull data from                                                                                                                | true     |               |
 
-(\*): You can find more information [here](https://github.com/go-sql-driver/mysql?tab=readme-ov-file#dsn-data-source-name). For example: `username:password@tcp(127.0.0.1:3306)/dbname`
+(\*): You can find more information
+[here](https://github.com/go-sql-driver/mysql?tab=readme-ov-file#dsn-data-source-name).
+For example: `username:password@tcp(127.0.0.1:3306)/dbname`
 
 ## Planned work
 
-- [ ] Support for source connector cdc mode
 - [ ] Support for destination connector
 - [ ] Support for [multicollection writes](https://meroxa.com/blog/conduit-0.10-comes-with-multiple-collections-support/)

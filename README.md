@@ -47,15 +47,14 @@ to capture detailed changes at the individual row level.
 
 The MySQL user account used needs the following privileges for the CDC mode:
 
-- SELECT: To read data from the source tables.
 - REPLICATION CLIENT: To obtain the binary log position and execute SHOW MASTER STATUS.
 - REPLICATION SLAVE: For reading the binary log.
 
-To ensure compatibility, your MySQL server should be configured to use row-based
-format. You can verify this setting with the following SQL command:
+It needs the MySQL server to be configured to use row-based format and full
+binlog row image. You can verify these settings with these:
 
 ```sql
-SHOW VARIABLES LIKE 'binlog_format';
+SHOW VARIABLES WHERE Variable_name IN ('binlog_format', 'binlog_row_image');
 ```
 
 ### Configuration

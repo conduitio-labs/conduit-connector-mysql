@@ -20,9 +20,6 @@ database management.
 A source connector pulls data from an external resource and pushes it to
 downstream resources via Conduit.
 
-It (will) operate in two modes: snapshot and CDC. Currently only snapshot mode
-is supported.
-
 ### Snapshot mode
 
 Snapshot mode is the first stage of the source sync process. It reads all rows
@@ -32,30 +29,11 @@ In snapshot mode, the record payload consists of
 [opencdc.StructuredData](https://pkg.go.dev/github.com/conduitio/conduit-connector-sdk@v0.9.1#StructuredData),
 with each key being a column and each value being that column's value.
 
-The MySQL user account used needs the following privileges for the snapshot mode:
-
-- SELECT: To read data from the source tables.
-- LOCK TABLES: To acquire read locks on tables during snapshotting.
-- RELOAD: To execute the FLUSH TABLES command.
-- REPLICATION CLIENT: To obtain the binary log position.
-
 ### Change Data Capture mode
 
 When the connector switches to CDC mode, it starts streaming changes from the
 obtained position at the start of the snapshot. It uses the row-based binlog format
 to capture detailed changes at the individual row level.
-
-The MySQL user account used needs the following privileges for the CDC mode:
-
-- REPLICATION CLIENT: To obtain the binary log position and execute SHOW MASTER STATUS.
-- REPLICATION SLAVE: For reading the binary log.
-
-It needs the MySQL server to be configured to use row-based format and full
-binlog row image. You can verify these settings with these:
-
-```sql
-SHOW VARIABLES WHERE Variable_name IN ('binlog_format', 'binlog_row_image');
-```
 
 ### Configuration
 
@@ -68,7 +46,27 @@ SHOW VARIABLES WHERE Variable_name IN ('binlog_format', 'binlog_row_image');
 [here](https://github.com/go-sql-driver/mysql?tab=readme-ov-file#dsn-data-source-name).
 For example: `username:password@tcp(127.0.0.1:3306)/dbname`
 
-## Planned work
+## Requirements and compatibility
 
-- [ ] Support for destination connector
-- [ ] Support for [multicollection writes](https://meroxa.com/blog/conduit-0.10-comes-with-multiple-collections-support/)
+The connector is tested against MySQL v8.0. Compatibility with older versions isn't guaranteed.
+
+### MySQL Server Requirements:
+
+- Binary Log (binlog) must be enabled.
+- Binlog format must be set to ROW.
+- Binlog row image must be set to FULL.
+- Tables must have **sortable** primary keys.
+
+### MySQL User Privileges:
+
+For Snapshot and CDC modes, the following privileges are required:
+
+- SELECT
+- LOCK TABLES
+- RELOAD
+- REPLICATION CLIENT
+- REPLICATION SLAVE
+
+## Destination
+
+(Planned)

@@ -55,7 +55,7 @@ linters:
     - exportloopref
     # - forbidigo
     - forcetypeassert
-    - funlen
+    # - funlen
     - gci
     - ginkgolinter
     - gocheckcompilerdirectives

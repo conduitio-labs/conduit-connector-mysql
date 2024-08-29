@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	"github.com/conduitio/conduit-commons/csync"
@@ -71,7 +72,7 @@ type (
 	}
 )
 
-func (config *snapshotIteratorConfig) init() error {
+func (config *snapshotIteratorConfig) validate() error {
 	if config.startPosition == nil {
 		config.startPosition = &common.SnapshotPosition{
 			Snapshots: map[common.TableName]common.TablePosition{},
@@ -100,7 +101,7 @@ func newSnapshotIterator(
 	ctx context.Context,
 	config snapshotIteratorConfig,
 ) (*snapshotIterator, error) {
-	if err := config.init(); err != nil {
+	if err := config.validate(); err != nil {
 		return nil, fmt.Errorf("invalid snapshot iterator config: %w", err)
 	}
 
@@ -109,16 +110,17 @@ func newSnapshotIterator(
 	lastPosition := config.startPosition.Clone()
 
 	iterator := &snapshotIterator{
-		t:    &tomb.Tomb{},
-		data: make(chan fetchData),
-		acks: csync.WaitGroup{}, config: config,
+		t:            &tomb.Tomb{},
+		data:         make(chan fetchData),
+		acks:         csync.WaitGroup{},
+		config:       config,
 		lastPosition: lastPosition,
 	}
 
-	// We first obtain all transaction locks for every table so that we can then
-	// properly get the master position to start cdc mode.
-	// More documentation about why doing it this way at:
-	// https://debezium.io/documentation/reference/stable/connectors/mysql.html#mysql-snapshots
+	_, err := config.db.ExecContext(ctx, "LOCK TABLES "+strings.Join(config.tables, " READ, ")+" READ")
+	if err != nil {
+		return nil, fmt.Errorf("failed to lock tables: %w", err)
+	}
 
 	workers := make([]*fetchWorker, 0, len(config.tableKeys))
 	for table, primaryKey := range config.tableKeys {
@@ -137,6 +139,7 @@ func newSnapshotIterator(
 
 	masterPos, err := config.getMasterPos()
 	if err != nil {
+		// cleanup all worker transactions
 		for _, worker := range workers {
 			err = errors.Join(err, worker.tx.Rollback())
 		}
@@ -202,6 +205,10 @@ func (s *snapshotIterator) Teardown(ctx context.Context) error {
 
 	sdk.Logger(ctx).Info().Msg("all workers done")
 
+	if _, err := s.config.db.ExecContext(ctx, "UNLOCK TABLES"); err != nil {
+		return fmt.Errorf("failed to unlock tables while tearing down snapshot iterator: %w", err)
+	}
+
 	if s.config.db != nil {
 		if err := s.config.db.Close(); err != nil {
 			return fmt.Errorf("failed to close database: %w", err)
@@ -224,43 +231,4 @@ func (s *snapshotIterator) buildRecord(d fetchData) opencdc.Record {
 	key := d.key.ToSDKData()
 
 	return sdk.Util.Source.NewRecordSnapshot(pos, metadata, key, d.payload)
-}
-
-func getPrimaryKey(db *sqlx.DB, database, table string) (common.PrimaryKeyName, error) {
-	var primaryKey struct {
-		ColumnName common.PrimaryKeyName `db:"COLUMN_NAME"`
-	}
-
-	row := db.QueryRowx(`
-		SELECT COLUMN_NAME 
-		FROM information_schema.key_column_usage 
-		WHERE 
-			constraint_name = 'PRIMARY' 
-			AND table_schema = ?
-			AND table_name = ?
-	`, database, table)
-
-	if err := row.StructScan(&primaryKey); err != nil {
-		return "", fmt.Errorf("failed to get primary key from table %s: %w", table, err)
-	}
-	if err := row.Err(); err != nil {
-		return "", fmt.Errorf("failed to scan primary key from table %s: %w", table, err)
-	}
-
-	return primaryKey.ColumnName, nil
-}
-
-func getTableKeys(db *sqlx.DB, database string, tables []string) (common.TableKeys, error) {
-	tableKeys := make(common.TableKeys)
-
-	for _, table := range tables {
-		primaryKey, err := getPrimaryKey(db, database, table)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get primary key for table %q: %w", table, err)
-		}
-
-		tableKeys[common.TableName(table)] = primaryKey
-	}
-
-	return tableKeys, nil
 }

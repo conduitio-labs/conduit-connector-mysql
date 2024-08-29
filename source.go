@@ -125,3 +125,42 @@ func (s *Source) Teardown(ctx context.Context) error {
 
 	return nil
 }
+
+func getPrimaryKey(db *sqlx.DB, database, table string) (common.PrimaryKeyName, error) {
+	var primaryKey struct {
+		ColumnName common.PrimaryKeyName `db:"COLUMN_NAME"`
+	}
+
+	row := db.QueryRowx(`
+		SELECT COLUMN_NAME
+		FROM information_schema.key_column_usage
+		WHERE
+			constraint_name = 'PRIMARY'
+			AND table_schema = ?
+			AND table_name = ?
+	`, database, table)
+
+	if err := row.StructScan(&primaryKey); err != nil {
+		return "", fmt.Errorf("failed to get primary key from table %s: %w", table, err)
+	}
+	if err := row.Err(); err != nil {
+		return "", fmt.Errorf("failed to scan primary key from table %s: %w", table, err)
+	}
+
+	return primaryKey.ColumnName, nil
+}
+
+func getTableKeys(db *sqlx.DB, database string, tables []string) (common.TableKeys, error) {
+	tableKeys := make(common.TableKeys)
+
+	for _, table := range tables {
+		primaryKey, err := getPrimaryKey(db, database, table)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get primary key for table %q: %w", table, err)
+		}
+
+		tableKeys[common.TableName(table)] = primaryKey
+	}
+
+	return tableKeys, nil
+}

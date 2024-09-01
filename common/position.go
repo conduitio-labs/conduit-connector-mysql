@@ -31,8 +31,8 @@ const (
 
 type Position struct {
 	Kind             PositionType      `json:"kind"`
-	SnapshotPosition *SnapshotPosition `json:"snapshot_position"`
-	CdcPosition      *CdcPosition      `json:"cdc_position"`
+	SnapshotPosition *SnapshotPosition `json:"snapshot_position,omitempty"`
+	CdcPosition      *CdcPosition      `json:"cdc_position,omitempty"`
 }
 
 type SnapshotPosition struct {

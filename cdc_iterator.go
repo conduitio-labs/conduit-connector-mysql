@@ -46,6 +46,7 @@ type cdcIteratorConfig struct {
 	mysqlConfig         *mysqldriver.Config
 	tableKeys           common.TableKeys
 	disableCanalLogging bool
+	startPosition       *common.CdcPosition
 }
 
 func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (*cdcIterator, error) {
@@ -59,10 +60,9 @@ func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (*cdcIterator
 	}
 
 	return &cdcIterator{
-		config: config,
-		canal:  canal,
-		// will be filled later
-		position:     nil,
+		config:       config,
+		canal:        canal,
+		position:     config.startPosition,
 		rowsEventsC:  make(chan rowEvent),
 		canalRunErrC: make(chan error),
 		canalDoneC:   make(chan struct{}),

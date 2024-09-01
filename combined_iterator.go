@@ -37,6 +37,7 @@ type combinedIteratorConfig struct {
 	tableKeys             common.TableKeys
 	fetchSize             int
 	startSnapshotPosition *common.SnapshotPosition
+	startCdcPosition      *common.CdcPosition
 	database              string
 	tables                []string
 	serverID              common.ServerID
@@ -54,13 +55,16 @@ func newCombinedIterator(
 		tableKeys:           config.tableKeys,
 		disableCanalLogging: config.disableCanalLogging,
 		db:                  config.db,
+		startPosition:       config.startCdcPosition,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cdc iterator: %w", err)
 	}
 
-	if err := cdcIterator.obtainStartPosition(ctx); err != nil {
-		return nil, fmt.Errorf("failed to fetch start cdc position: %w", err)
+	if config.startCdcPosition == nil {
+		if err := cdcIterator.obtainStartPosition(ctx); err != nil {
+			return nil, fmt.Errorf("failed to fetch start cdc position: %w", err)
+		}
 	}
 
 	snapshotIterator, err := newSnapshotIterator(ctx, snapshotIteratorConfig{

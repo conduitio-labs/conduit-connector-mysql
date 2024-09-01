@@ -92,6 +92,7 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 		db:                    s.db,
 		tableKeys:             tableKeys,
 		startSnapshotPosition: pos.SnapshotPosition,
+		startCdcPosition:      pos.CdcPosition,
 		database:              s.configFromDsn.DBName,
 		tables:                s.config.Tables,
 		serverID:              serverID,
@@ -127,7 +128,7 @@ func (s *Source) Teardown(ctx context.Context) error {
 
 	if s.db != nil {
 		if err := s.db.Close(); err != nil {
-			return err
+			return fmt.Errorf("failed to close connection: %w", err)
 		}
 	}
 

@@ -48,6 +48,7 @@ func testSnapshotIterator(ctx context.Context, t *testing.T, is *is.I) (common.I
 	is.NoErr(err)
 
 	return iterator, func() {
+		is.NoErr(db.Close())
 		canal.Close()
 		is.NoErr(iterator.Teardown(ctx))
 	}
@@ -81,6 +82,7 @@ func testSnapshotIteratorAtPosition(
 	is.NoErr(err)
 
 	return iterator, func() {
+		is.NoErr(db.Close())
 		canal.Close()
 		is.NoErr(iterator.Teardown(ctx))
 	}

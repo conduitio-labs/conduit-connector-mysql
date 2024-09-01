@@ -119,8 +119,14 @@ func (s *Source) Ack(ctx context.Context, _ opencdc.Position) error {
 
 func (s *Source) Teardown(ctx context.Context) error {
 	if s.iterator != nil {
-		//nolint:wrapcheck // error already wrapped in iterator
-		return s.iterator.Teardown(ctx)
+		if err := s.iterator.Teardown(ctx); err != nil {
+			//nolint:wrapcheck // error already wrapped in iterator
+			return err
+		}
+	}
+
+	if err := s.db.Close(); err != nil {
+		return err
 	}
 
 	return nil

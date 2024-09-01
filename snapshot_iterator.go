@@ -130,6 +130,10 @@ func newSnapshotIterator(
 		return nil, fmt.Errorf("failed to get mysql master position after acquiring locks: %w", err)
 	}
 
+	if _, err := config.db.ExecContext(ctx, "UNLOCK TABLES"); err != nil {
+		return nil, fmt.Errorf("failed to unlock tables while tearing down snapshot iterator: %w", err)
+	}
+
 	iterator.cdcStartPosition = common.CdcPosition{
 		Name: masterPos.Name,
 		Pos:  masterPos.Pos,
@@ -192,19 +196,7 @@ func (s *snapshotIterator) Teardown(ctx context.Context) error {
 	// debugging goroutine leaks.
 	_ = s.t.Wait()
 
-	sdk.Logger(ctx).Info().Msg("all workers done")
-
-	if _, err := s.config.db.ExecContext(ctx, "UNLOCK TABLES"); err != nil {
-		return fmt.Errorf("failed to unlock tables while tearing down snapshot iterator: %w", err)
-	}
-
-	if s.config.db != nil {
-		if err := s.config.db.Close(); err != nil {
-			return fmt.Errorf("failed to close database: %w", err)
-		}
-	}
-
-	sdk.Logger(ctx).Info().Msg("teared down snapshot iterator")
+	sdk.Logger(ctx).Info().Msg("all workers done, teared down snapshot iterator")
 
 	return nil
 }

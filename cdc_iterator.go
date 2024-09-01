@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
@@ -26,60 +27,96 @@ import (
 	"github.com/go-mysql-org/go-mysql/canal"
 	"github.com/go-mysql-org/go-mysql/schema"
 	mysqldriver "github.com/go-sql-driver/mysql"
+	"github.com/jmoiron/sqlx"
 )
 
 type cdcIterator struct {
-	rowsEventsC chan rowEvent
+	config   cdcIteratorConfig
+	canal    *canal.Canal
+	position *common.CdcPosition
 
+	rowsEventsC  chan rowEvent
 	canalRunErrC chan error
 	canalDoneC   chan struct{}
-
-	config cdcIteratorConfig
 }
 
 type cdcIteratorConfig struct {
-	canal       *canal.Canal
-	tables      []string
-	mysqlConfig *mysqldriver.Config
-	position    *common.CdcPosition
-	tableKeys   common.TableKeys
+	db                  *sqlx.DB
+	tables              []string
+	mysqlConfig         *mysqldriver.Config
+	tableKeys           common.TableKeys
+	disableCanalLogging bool
 }
 
-func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (common.Iterator, error) {
-	sdk.Logger(ctx).Info().Msg("created canal")
-
-	rowsEventsC := make(chan rowEvent)
-	canalDoneC := make(chan struct{})
-
-	iterator := &cdcIterator{
-		rowsEventsC:  rowsEventsC,
-		canalRunErrC: make(chan error),
-		canalDoneC:   canalDoneC,
-		config:       config,
-	}
-
-	startPosition, err := iterator.getStartPosition(config)
+func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (*cdcIterator, error) {
+	canal, err := common.NewCanal(ctx, common.CanalConfig{
+		Config:         config.mysqlConfig,
+		Tables:         config.tables,
+		DisableLogging: config.disableCanalLogging,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to get start position: %w", err)
+		return nil, fmt.Errorf("failed to start canal at combined iterator: %w", err)
 	}
-	eventHandler := newCdcEventHandler(config.canal, canalDoneC, rowsEventsC)
+
+	return &cdcIterator{
+		config: config,
+		canal:  canal,
+		// will be filled later
+		position:     nil,
+		rowsEventsC:  make(chan rowEvent),
+		canalRunErrC: make(chan error),
+		canalDoneC:   make(chan struct{}),
+	}, nil
+}
+
+func (c *cdcIterator) obtainStartPosition(ctx context.Context) error {
+	tableList := strings.Join(c.config.tables, ", ")
+
+	_, err := c.config.db.ExecContext(ctx, "FLUSH TABLES "+tableList+" WITH READ LOCK")
+	if err != nil {
+		return fmt.Errorf("failed to flush tables and acquire lock: %w", err)
+	}
+
+	masterPos, err := c.canal.GetMasterPos()
+	if err != nil {
+		return fmt.Errorf("failed to get mysql master position after acquiring locks: %w", err)
+	}
+
+	if _, err := c.config.db.ExecContext(ctx, "UNLOCK TABLES"); err != nil {
+		return fmt.Errorf("failed to unlock tables after getting cdc position: %w", err)
+	}
+
+	c.position = &common.CdcPosition{
+		Name: masterPos.Name,
+		Pos:  masterPos.Pos,
+	}
+
+	return nil
+}
+
+func (c *cdcIterator) start() error {
+	startPosition, err := c.getStartPosition()
+	if err != nil {
+		return fmt.Errorf("failed to get start position: %w", err)
+	}
+	eventHandler := newCdcEventHandler(c.canal, c.canalDoneC, c.rowsEventsC)
 
 	go func() {
-		iterator.config.canal.SetEventHandler(eventHandler)
+		c.canal.SetEventHandler(eventHandler)
 		pos := startPosition.ToMysqlPos()
-		iterator.canalRunErrC <- iterator.config.canal.RunFrom(pos)
+		c.canalRunErrC <- c.canal.RunFrom(pos)
 	}()
 
-	return iterator, nil
+	return nil
 }
 
-func (c *cdcIterator) getStartPosition(config cdcIteratorConfig) (common.CdcPosition, error) {
-	if config.position != nil {
-		return *config.position, nil
+func (c *cdcIterator) getStartPosition() (common.CdcPosition, error) {
+	if c.position != nil {
+		return *c.position, nil
 	}
 
 	var cdcPosition common.CdcPosition
-	masterPos, err := c.config.canal.GetMasterPos()
+	masterPos, err := c.canal.GetMasterPos()
 	if err != nil {
 		return cdcPosition, fmt.Errorf("failed to get master position: %w", err)
 	}
@@ -114,7 +151,7 @@ func (c *cdcIterator) Next(ctx context.Context) (rec opencdc.Record, err error) 
 func (c *cdcIterator) Teardown(ctx context.Context) error {
 	close(c.canalDoneC)
 
-	c.config.canal.Close()
+	c.canal.Close()
 	select {
 	case <-ctx.Done():
 		//nolint:wrapcheck // no need to wrap canceled error

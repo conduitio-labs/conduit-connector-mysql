@@ -18,13 +18,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	"github.com/conduitio/conduit-commons/csync"
 	"github.com/conduitio/conduit-commons/opencdc"
 	sdk "github.com/conduitio/conduit-connector-sdk"
-	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/jmoiron/sqlx"
 	"gopkg.in/tomb.v2"
 )
@@ -53,15 +51,13 @@ type (
 		position common.TablePosition
 	}
 	snapshotIterator struct {
-		t                *tomb.Tomb
-		data             chan fetchData
-		acks             csync.WaitGroup
-		cdcStartPosition common.CdcPosition
-		lastPosition     common.SnapshotPosition
-		config           snapshotIteratorConfig
+		t            *tomb.Tomb
+		data         chan fetchData
+		acks         csync.WaitGroup
+		lastPosition common.SnapshotPosition
+		config       snapshotIteratorConfig
 	}
 	snapshotIteratorConfig struct {
-		getMasterPos  func() (mysql.Position, error)
 		db            *sqlx.DB
 		tableKeys     common.TableKeys
 		fetchSize     int
@@ -90,10 +86,6 @@ func (config *snapshotIteratorConfig) validate() error {
 		return fmt.Errorf("tables is required")
 	}
 
-	if config.getMasterPos == nil {
-		return fmt.Errorf("getMasterPos mandatory")
-	}
-
 	return nil
 }
 
@@ -115,28 +107,6 @@ func newSnapshotIterator(
 		acks:         csync.WaitGroup{},
 		config:       config,
 		lastPosition: lastPosition,
-	}
-
-	tableList := strings.Join(config.tables, ", ")
-
-	// Acquire global table locks and guarantee a consistent binlog position.
-	_, err := config.db.ExecContext(ctx, "FLUSH TABLES "+tableList+" WITH READ LOCK")
-	if err != nil {
-		return nil, fmt.Errorf("failed to flush tables and acquire lock: %w", err)
-	}
-
-	masterPos, err := config.getMasterPos()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get mysql master position after acquiring locks: %w", err)
-	}
-
-	if _, err := config.db.ExecContext(ctx, "UNLOCK TABLES"); err != nil {
-		return nil, fmt.Errorf("failed to unlock tables while tearing down snapshot iterator: %w", err)
-	}
-
-	iterator.cdcStartPosition = common.CdcPosition{
-		Name: masterPos.Name,
-		Pos:  masterPos.Pos,
 	}
 
 	for table, primaryKey := range config.tableKeys {

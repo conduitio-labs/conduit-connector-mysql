@@ -29,13 +29,10 @@ func testCdcIterator(ctx context.Context, is *is.I) (common.Iterator, func()) {
 	config, err := mysql.ParseDSN(testutils.DSN)
 	is.NoErr(err)
 
-	canal := testutils.NewCanal(ctx, is)
-
 	iterator, err := newCdcIterator(ctx, cdcIteratorConfig{
 		mysqlConfig: config,
 		tables:      []string{"users"},
 		tableKeys:   testutils.TableKeys,
-		canal:       canal,
 	})
 	is.NoErr(err)
 
@@ -49,8 +46,6 @@ func testCdcIteratorAtPosition(
 	config, err := mysql.ParseDSN(testutils.DSN)
 	is.NoErr(err)
 
-	canal := testutils.NewCanal(ctx, is)
-
 	pos, err := common.ParseSDKPosition(sdkPos)
 	is.NoErr(err)
 
@@ -58,10 +53,8 @@ func testCdcIteratorAtPosition(
 
 	iterator, err := newCdcIterator(ctx, cdcIteratorConfig{
 		mysqlConfig: config,
-		position:    pos.CdcPosition,
 		tables:      []string{"users"},
 		tableKeys:   testutils.TableKeys,
-		canal:       canal,
 	})
 	is.NoErr(err)
 	is.NoErr(err)

@@ -48,17 +48,22 @@ func newCombinedIterator(
 	ctx context.Context,
 	config combinedIteratorConfig,
 ) (common.Iterator, error) {
-	canal, err := common.NewCanal(ctx, common.CanalConfig{
-		Config:         config.mysqlConfig,
-		Tables:         config.tables,
-		DisableLogging: config.disableCanalLogging,
+	cdcIterator, err := newCdcIterator(ctx, cdcIteratorConfig{
+		tables:              config.tables,
+		mysqlConfig:         config.mysqlConfig,
+		tableKeys:           config.tableKeys,
+		disableCanalLogging: config.disableCanalLogging,
+		db:                  config.db,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to start canal at combined iterator: %w", err)
+		return nil, fmt.Errorf("failed to create cdc iterator: %w", err)
+	}
+
+	if err := cdcIterator.obtainStartPosition(ctx); err != nil {
+		return nil, fmt.Errorf("failed to fetch start cdc position: %w", err)
 	}
 
 	snapshotIterator, err := newSnapshotIterator(ctx, snapshotIteratorConfig{
-		getMasterPos:  canal.GetMasterPos,
 		db:            config.db,
 		tableKeys:     config.tableKeys,
 		fetchSize:     config.fetchSize,
@@ -71,15 +76,8 @@ func newCombinedIterator(
 		return nil, fmt.Errorf("failed to create snapshot iterator: %w", err)
 	}
 
-	cdcIterator, err := newCdcIterator(ctx, cdcIteratorConfig{
-		canal:       canal,
-		tables:      config.tables,
-		mysqlConfig: config.mysqlConfig,
-		position:    &snapshotIterator.cdcStartPosition,
-		tableKeys:   config.tableKeys,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create cdc iterator: %w", err)
+	if err := cdcIterator.start(); err != nil {
+		return nil, fmt.Errorf("failed to start cdc iterator: %w", err)
 	}
 
 	iterator := &combinedIterator{

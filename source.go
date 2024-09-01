@@ -125,8 +125,10 @@ func (s *Source) Teardown(ctx context.Context) error {
 		}
 	}
 
-	if err := s.db.Close(); err != nil {
-		return err
+	if s.db != nil {
+		if err := s.db.Close(); err != nil {
+			return err
+		}
 	}
 
 	return nil

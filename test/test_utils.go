@@ -131,6 +131,18 @@ func (UsersTable) Insert(is *is.I, db *sqlx.DB, username string) User {
 	return user
 }
 
+func (UsersTable) Get(is *is.I, db *sqlx.DB, username string) User {
+	var user User
+	err := db.QueryRowx(`
+		SELECT *
+		FROM users
+		WHERE id = ?;
+	`, username).StructScan(&user)
+	is.NoErr(err)
+
+	return user
+}
+
 func (UsersTable) Update(is *is.I, db *sqlx.DB, user User) User {
 	_, err := db.Exec(`
 		UPDATE users
@@ -150,7 +162,18 @@ func (UsersTable) Delete(is *is.I, db *sqlx.DB, user User) {
 	is.NoErr(err)
 }
 
-func ReadAndAssertInsert(
+func (UsersTable) CountUsers(is *is.I, db *sqlx.DB) int {
+	var count struct {
+		Total int `db:"total"`
+	}
+
+	err := db.QueryRowx("SELECT count(users) as total").StructScan(&count)
+	is.NoErr(err)
+
+	return count.Total
+}
+
+func ReadAndAssertCreate(
 	ctx context.Context, is *is.I,
 	iterator common.Iterator, user User,
 ) opencdc.Record {
@@ -172,7 +195,7 @@ func ReadAndAssertInsert(
 func ReadAndAssertUpdate(
 	ctx context.Context, is *is.I,
 	iterator common.Iterator, prev, next User,
-) {
+) opencdc.Record {
 	is.Helper()
 	rec, err := iterator.Next(ctx)
 	is.NoErr(err)
@@ -187,12 +210,14 @@ func ReadAndAssertUpdate(
 
 	IsDataEqual(is, rec.Payload.Before, prev.ToStructuredData())
 	IsDataEqual(is, rec.Payload.After, next.ToStructuredData())
+
+	return rec
 }
 
 func ReadAndAssertDelete(
 	ctx context.Context, is *is.I,
 	iterator common.Iterator, user User,
-) {
+) opencdc.Record {
 	is.Helper()
 
 	rec, err := iterator.Next(ctx)
@@ -204,6 +229,8 @@ func ReadAndAssertDelete(
 	assertMetadata(is, rec.Metadata)
 
 	IsDataEqual(is, rec.Key, opencdc.StructuredData{"id": user.ID})
+
+	return rec
 }
 
 func IsDataEqual(is *is.I, a, b opencdc.Data) {
@@ -214,7 +241,7 @@ func IsDataEqual(is *is.I, a, b opencdc.Data) {
 func ReadAndAssertSnapshot(
 	ctx context.Context, is *is.I,
 	iterator common.Iterator, user User,
-) {
+) opencdc.Record {
 	is.Helper()
 	rec, err := iterator.Next(ctx)
 	is.NoErr(err)
@@ -226,6 +253,8 @@ func ReadAndAssertSnapshot(
 
 	IsDataEqual(is, rec.Key, opencdc.StructuredData{"id": user.ID})
 	IsDataEqual(is, rec.Payload.After, user.ToStructuredData())
+
+	return rec
 }
 
 func AssertUserSnapshot(is *is.I, user User, rec opencdc.Record) {

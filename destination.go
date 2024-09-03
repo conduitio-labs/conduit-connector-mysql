@@ -14,53 +14,36 @@
 
 package mysql
 
-//go:generate paramgen -output=paramgen_dest.go DestinationConfig
-
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	"github.com/conduitio/conduit-commons/config"
 	"github.com/conduitio/conduit-commons/opencdc"
 	sdk "github.com/conduitio/conduit-connector-sdk"
+	"github.com/jmoiron/sqlx"
 )
 
 type Destination struct {
 	sdk.UnimplementedDestination
 
-	config DestinationConfig
-}
+	db     *sqlx.DB
+	config common.DestinationConfig
 
-type DestinationConfig struct {
-	// Config includes parameters that are the same in the source and destination.
-	common.Config
-	// DestinationConfigParam must be either yes or no (defaults to yes).
-	DestinationConfigParam string `validate:"inclusion=yes|no" default:"yes"`
+	tableSchemas map[string]map[string]any
 }
 
 func NewDestination() sdk.Destination {
-	// Create Destination and wrap it in the default middleware.
 	return sdk.DestinationWithMiddleware(&Destination{}, sdk.DefaultDestinationMiddleware()...)
 }
 
 func (d *Destination) Parameters() config.Parameters {
-	// Parameters is a map of named Parameters that describe how to configure
-	// the Destination. Parameters can be generated from DestinationConfig with
-	// paramgen.
 	return d.config.Parameters()
 }
 
 func (d *Destination) Configure(ctx context.Context, cfg config.Config) error {
-	// Configure is the first function to be called in a connector. It provides
-	// the connector with the configuration that can be validated and stored.
-	// In case the configuration is not valid it should return an error.
-	// Testing if your connector can reach the configured data source should be
-	// done in Open, not in Configure.
-	// The SDK will validate the configuration and populate default values
-	// before calling Configure. If you need to do more complex validations you
-	// can do them manually here.
-
 	sdk.Logger(ctx).Info().Msg("Configuring Destination...")
 	err := sdk.Util.ParseConfig(ctx, cfg, &d.config, d.config.Parameters())
 	if err != nil {
@@ -69,24 +52,70 @@ func (d *Destination) Configure(ctx context.Context, cfg config.Config) error {
 	return nil
 }
 
-func (d *Destination) Open(_ context.Context) error {
-	// Open is called after Configure to signal the plugin it can prepare to
-	// start writing records. If needed, the plugin should open connections in
-	// this function.
+func (d *Destination) Open(ctx context.Context) (err error) {
+	d.db, err = sqlx.Open("mysql", d.config.URL)
+	if err != nil {
+		return fmt.Errorf("failed to connect to mysql: %w", err)
+	}
+
 	return nil
 }
 
-func (d *Destination) Write(_ context.Context, _ []opencdc.Record) (int, error) {
-	// Write writes len(r) records from r to the destination right away without
-	// caching. It should return the number of records written from r
-	// (0 <= n <= len(r)) and any error encountered that caused the write to
-	// stop early. Write must return a non-nil error if it returns n < len(r).
-	return 0, nil
+func (d *Destination) Write(ctx context.Context, recs []opencdc.Record) (int, error) {
+	for _, rec := range recs {
+		switch rec.Operation {
+		case opencdc.OperationSnapshot:
+			for _, rec := range recs {
+				if err := d.insertRecord(ctx, rec); err != nil {
+					return 0, err
+				}
+			}
+		case opencdc.OperationCreate:
+		case opencdc.OperationUpdate:
+		case opencdc.OperationDelete:
+		}
+	}
+
+	return len(recs), nil
 }
 
 func (d *Destination) Teardown(_ context.Context) error {
-	// Teardown signals to the plugin that all records were written and there
-	// will be no more calls to any other function. After Teardown returns, the
-	// plugin should be ready for a graceful shutdown.
+	if d.db != nil {
+		if err := d.db.Close(); err != nil {
+			return fmt.Errorf("failed to close connection: %w", err)
+		}
+	}
+
 	return nil
+}
+
+func (d *Destination) insertRecord(ctx context.Context, rec opencdc.Record) error {
+	switch payload := rec.Payload.After.(type) {
+	case opencdc.RawData:
+		// TODO: support this
+		return fmt.Errorf("writing opencdc.RawData is not supported")
+	case opencdc.StructuredData:
+		var columns, placeholders []string
+		var values []any
+
+		for col, val := range payload {
+			columns = append(columns, col)
+			placeholders = append(placeholders, "?")
+			values = append(values, val)
+		}
+
+		query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)",
+			d.config.Table,
+			strings.Join(columns, ", "),
+			strings.Join(placeholders, ", "))
+
+		_, err := d.db.ExecContext(ctx, query, values...)
+		if err != nil {
+			return fmt.Errorf("failed to insert record: %w", err)
+		}
+
+		return nil
+	}
+
+	return fmt.Errorf("unknown data format")
 }

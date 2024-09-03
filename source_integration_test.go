@@ -87,7 +87,7 @@ func TestSource_ConsistentSnapshot(t *testing.T) {
 	testutils.ReadAndAssertSnapshot(ctx, is, sourceIterator, user3)
 	testutils.ReadAndAssertSnapshot(ctx, is, sourceIterator, user4)
 
-	testutils.ReadAndAssertInsert(ctx, is, sourceIterator, user5)
-	testutils.ReadAndAssertInsert(ctx, is, sourceIterator, user6)
+	testutils.ReadAndAssertCreate(ctx, is, sourceIterator, user5)
+	testutils.ReadAndAssertCreate(ctx, is, sourceIterator, user6)
 	testutils.ReadAndAssertDelete(ctx, is, sourceIterator, user4)
 }

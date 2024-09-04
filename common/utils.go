@@ -25,6 +25,7 @@ import (
 	"github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 	"github.com/rs/zerolog"
+	"github.com/siddontang/go-log/log"
 )
 
 func FormatValue(val any) any {
@@ -58,7 +59,7 @@ func NewCanal(ctx context.Context, config CanalConfig) (*canal.Canal, error) {
 
 	cfg.IncludeTableRegex = config.Tables
 	if config.DisableLogging {
-		cfg.Logger = nopLogger{}
+		cfg.Logger = log.NewDefault(&log.NullHandler{})
 	} else {
 		cfg.Logger = zerologCanalLogger{sdk.Logger(ctx)}
 	}
@@ -74,31 +75,6 @@ func NewCanal(ctx context.Context, config CanalConfig) (*canal.Canal, error) {
 
 	return c, nil
 }
-
-// nopLogger disables logging for go-mysql/canal.
-type nopLogger struct{}
-
-func (n nopLogger) Debug(...any)          {}
-func (n nopLogger) Debugf(string, ...any) {}
-func (n nopLogger) Debugln(...any)        {}
-func (n nopLogger) Error(...any)          {}
-func (n nopLogger) Errorf(string, ...any) {}
-func (n nopLogger) Errorln(...any)        {}
-func (n nopLogger) Fatal(...any)          {}
-func (n nopLogger) Fatalf(string, ...any) {}
-func (n nopLogger) Fatalln(...any)        {}
-func (n nopLogger) Info(...any)           {}
-func (n nopLogger) Infof(string, ...any)  {}
-func (n nopLogger) Infoln(...any)         {}
-func (n nopLogger) Panic(...any)          {}
-func (n nopLogger) Panicf(string, ...any) {}
-func (n nopLogger) Panicln(...any)        {}
-func (n nopLogger) Print(...any)          {}
-func (n nopLogger) Printf(string, ...any) {}
-func (n nopLogger) Println(...any)        {}
-func (n nopLogger) Warn(...any)           {}
-func (n nopLogger) Warnf(string, ...any)  {}
-func (n nopLogger) Warnln(...any)         {}
 
 type zerologCanalLogger struct {
 	logger *zerolog.Logger

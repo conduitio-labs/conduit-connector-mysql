@@ -104,10 +104,10 @@ func (d *Destination) insertRecord(ctx context.Context, rec opencdc.Record) erro
 			values = append(values, val)
 		}
 
-		query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)",
-			d.config.Table,
-			strings.Join(columns, ", "),
-			strings.Join(placeholders, ", "))
+		query := fmt.Sprintf(
+			"INSERT INTO %s (%s) VALUES (%s)",
+			d.config.Table, strings.Join(columns, ", "), strings.Join(placeholders, ", "),
+		)
 
 		_, err := d.db.ExecContext(ctx, query, values...)
 		if err != nil {

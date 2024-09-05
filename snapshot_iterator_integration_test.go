@@ -37,7 +37,7 @@ func testSnapshotIterator(ctx context.Context, t *testing.T, is *is.I) (common.I
 
 	canal := testutils.NewCanal(ctx, is)
 
-	iterator, err := newSnapshotIterator(ctx, snapshotIteratorConfig{
+	iterator, err := newSnapshotIterator(snapshotIteratorConfig{
 		tableKeys: testutils.TableKeys,
 		db:        db,
 		database:  "meroxadb",
@@ -45,6 +45,8 @@ func testSnapshotIterator(ctx context.Context, t *testing.T, is *is.I) (common.I
 		serverID:  serverID,
 	})
 	is.NoErr(err)
+
+	is.NoErr(iterator.setupWorkers(ctx))
 
 	return iterator, func() {
 		is.NoErr(db.Close())
@@ -69,7 +71,7 @@ func testSnapshotIteratorAtPosition(
 
 	is.Equal(pos.Kind, common.PositionTypeSnapshot)
 
-	iterator, err := newSnapshotIterator(ctx, snapshotIteratorConfig{
+	iterator, err := newSnapshotIterator(snapshotIteratorConfig{
 		tableKeys:     testutils.TableKeys,
 		db:            db,
 		startPosition: pos.SnapshotPosition,
@@ -78,6 +80,8 @@ func testSnapshotIteratorAtPosition(
 		serverID:      serverID,
 	})
 	is.NoErr(err)
+
+	is.NoErr(iterator.setupWorkers(ctx))
 
 	return iterator, func() {
 		is.NoErr(db.Close())

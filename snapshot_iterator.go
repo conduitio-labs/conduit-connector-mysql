@@ -55,6 +55,7 @@ type (
 		data         chan fetchData
 		acks         csync.WaitGroup
 		lastPosition common.SnapshotPosition
+		workers      []fetchWorker
 		config       snapshotIteratorConfig
 	}
 	snapshotIteratorConfig struct {
@@ -89,10 +90,7 @@ func (config *snapshotIteratorConfig) validate() error {
 	return nil
 }
 
-func newSnapshotIterator(
-	ctx context.Context,
-	config snapshotIteratorConfig,
-) (*snapshotIterator, error) {
+func newSnapshotIterator(config snapshotIteratorConfig) (*snapshotIterator, error) {
 	if err := config.validate(); err != nil {
 		return nil, fmt.Errorf("invalid snapshot iterator config: %w", err)
 	}
@@ -109,20 +107,36 @@ func newSnapshotIterator(
 		lastPosition: lastPosition,
 	}
 
-	for table, primaryKey := range config.tableKeys {
-		worker := newFetchWorker(iterator.config.db, iterator.data, fetchWorkerConfig{
-			lastPosition: iterator.lastPosition,
+	return iterator, nil
+}
+
+// setupWorkers collects and sets up the snapshot fetch workers. It is separated
+// from the start method so that we can lock and unlock the given tables without
+// starting up the workers.
+func (s *snapshotIterator) setupWorkers(ctx context.Context) error {
+	for table, primaryKey := range s.config.tableKeys {
+		worker := newFetchWorker(s.config.db, s.data, fetchWorkerConfig{
+			lastPosition: s.lastPosition,
 			table:        table,
-			fetchSize:    iterator.config.fetchSize,
+			fetchSize:    s.config.fetchSize,
 			primaryKey:   primaryKey,
 		})
-		iterator.t.Go(func() error {
-			ctx := iterator.t.Context(ctx)
+
+		if err := worker.fetchStartEnd(ctx); err != nil {
+			return fmt.Errorf("failed to start worker: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func (s *snapshotIterator) start(ctx context.Context) {
+	for _, worker := range s.workers {
+		s.t.Go(func() error {
+			ctx := s.t.Context(ctx)
 			return worker.run(ctx)
 		})
 	}
-
-	return iterator, nil
 }
 
 func (s *snapshotIterator) Next(ctx context.Context) (rec opencdc.Record, err error) {

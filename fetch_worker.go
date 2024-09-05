@@ -31,6 +31,8 @@ type fetchWorker struct {
 	data   chan fetchData
 	config fetchWorkerConfig
 	tx     *sqlx.Tx
+
+	start, end int64
 }
 
 type fetchWorkerConfig struct {
@@ -46,6 +48,12 @@ func newFetchWorker(db *sqlx.DB, data chan fetchData, config fetchWorkerConfig) 
 		data:   data,
 		config: config,
 	}
+}
+
+func (w *fetchWorker) fetchStartEnd(ctx context.Context) (err error) {
+	w.start = w.config.lastPosition.Snapshots[w.config.table].LastRead
+	w.end, err = w.getMaxValue(ctx)
+	return err
 }
 
 func (w *fetchWorker) run(ctx context.Context) (err error) {
@@ -64,14 +72,9 @@ func (w *fetchWorker) run(ctx context.Context) (err error) {
 
 	defer func() { err = errors.Join(err, w.tx.Commit()) }()
 
-	snapshotEnd, err := w.getMaxValue(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to get max value: %w", err)
-	}
-
-	lastRead := w.config.lastPosition.Snapshots[w.config.table].LastRead
+	start, end := w.start, w.end
 	for {
-		rows, err := w.selectRowsChunk(ctx, lastRead, snapshotEnd)
+		rows, err := w.selectRowsChunk(ctx, start, end)
 		if err != nil {
 			return fmt.Errorf("failed to select rows chunk: %w", err)
 		}
@@ -80,10 +83,10 @@ func (w *fetchWorker) run(ctx context.Context) (err error) {
 		}
 
 		for _, row := range rows {
-			lastRead++
+			start++
 			position := common.TablePosition{
-				LastRead:    lastRead,
-				SnapshotEnd: snapshotEnd,
+				LastRead:    start,
+				SnapshotEnd: end,
 			}
 			data, err := w.buildFetchData(row, position)
 			if err != nil {

@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	"github.com/conduitio/conduit-commons/opencdc"
@@ -61,13 +62,7 @@ func newCombinedIterator(
 		return nil, fmt.Errorf("failed to create cdc iterator: %w", err)
 	}
 
-	if config.startCdcPosition == nil {
-		if err := cdcIterator.obtainStartPosition(ctx); err != nil {
-			return nil, fmt.Errorf("failed to fetch start cdc position: %w", err)
-		}
-	}
-
-	snapshotIterator, err := newSnapshotIterator(ctx, snapshotIteratorConfig{
+	snapshotIterator, err := newSnapshotIterator(snapshotIteratorConfig{
 		db:            config.db,
 		tableKeys:     config.tableKeys,
 		fetchSize:     config.fetchSize,
@@ -79,6 +74,27 @@ func newCombinedIterator(
 	if err != nil {
 		return nil, fmt.Errorf("failed to create snapshot iterator: %w", err)
 	}
+
+	unlockTables, err := lockTables(ctx, config)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := snapshotIterator.setupWorkers(ctx); err != nil {
+		return nil, err
+	}
+
+	if config.startCdcPosition == nil {
+		if err := cdcIterator.obtainStartPosition(ctx); err != nil {
+			return nil, fmt.Errorf("failed to fetch start cdc position: %w", err)
+		}
+	}
+
+	if err := unlockTables(); err != nil {
+		return nil, err
+	}
+
+	snapshotIterator.start(ctx)
 
 	if err := cdcIterator.start(); err != nil {
 		return nil, fmt.Errorf("failed to start cdc iterator: %w", err)
@@ -125,4 +141,23 @@ func (c *combinedIterator) Teardown(ctx context.Context) error {
 	}
 
 	return errors.Join(errs...)
+}
+
+func lockTables(
+	ctx context.Context,
+	config combinedIteratorConfig,
+) (func() error, error) {
+	tableList := strings.Join(config.tables, ", ")
+
+	_, err := config.db.ExecContext(ctx, "FLUSH TABLES "+tableList+" WITH READ LOCK")
+	if err != nil {
+		return nil, fmt.Errorf("failed to flush tables and acquire lock: %w", err)
+	}
+
+	return func() error {
+		if _, err := config.db.ExecContext(ctx, "UNLOCK TABLES"); err != nil {
+			return fmt.Errorf("failed to unlock tables after getting cdc position: %w", err)
+		}
+		return nil
+	}, nil
 }

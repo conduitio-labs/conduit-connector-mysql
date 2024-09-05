@@ -16,6 +16,7 @@ package mysql
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -65,12 +66,19 @@ func (d *Destination) Write(ctx context.Context, recs []opencdc.Record) (int, er
 	for _, rec := range recs {
 		switch rec.Operation {
 		case opencdc.OperationSnapshot:
-			if err := d.insertRecord(ctx, rec); err != nil {
+			if err := d.upsertRecord(ctx, rec); err != nil {
 				return 0, err
 			}
 		case opencdc.OperationCreate:
+			if err := d.upsertRecord(ctx, rec); err != nil {
+				return 0, err
+			}
 		case opencdc.OperationUpdate:
+			if err := d.upsertRecord(ctx, rec); err != nil {
+				return 0, err
+			}
 		case opencdc.OperationDelete:
+
 		}
 	}
 
@@ -87,33 +95,55 @@ func (d *Destination) Teardown(_ context.Context) error {
 	return nil
 }
 
-func (d *Destination) insertRecord(ctx context.Context, rec opencdc.Record) error {
-	switch payload := rec.Payload.After.(type) {
-	case opencdc.RawData:
-		// TODO: support this
-		return fmt.Errorf("writing opencdc.RawData is not supported")
-	case opencdc.StructuredData:
-		var columns, placeholders []string
-		var values []any
-
-		for col, val := range payload {
-			columns = append(columns, col)
-			placeholders = append(placeholders, "?")
-			values = append(values, val)
+func (d *Destination) upsertRecord(ctx context.Context, rec opencdc.Record) error {
+	payload, isStructured := rec.Payload.After.(opencdc.StructuredData)
+	if !isStructured {
+		data := make(opencdc.StructuredData)
+		if err := json.Unmarshal(rec.Payload.After.Bytes(), &data); err != nil {
+			return fmt.Errorf("failed to json unmarshal non structured data: %w", err)
 		}
 
-		query := fmt.Sprintf(
-			"INSERT INTO %s (%s) VALUES (%s)",
-			d.config.Table, strings.Join(columns, ", "), strings.Join(placeholders, ", "),
-		)
-
-		_, err := d.db.ExecContext(ctx, query, values...)
-		if err != nil {
-			return fmt.Errorf("failed to insert record: %w", err)
-		}
-
-		return nil
+		payload = data
 	}
 
-	return fmt.Errorf("unknown data format")
+	var columns, placeholders []string
+	var values []any
+	var upsertList []string
+
+	for col, val := range payload {
+		columns = append(columns, col)
+		placeholders = append(placeholders, "?")
+		values = append(values, val)
+
+		upsertList = append(upsertList, fmt.Sprint(col, " = VALUES(", col, ")"))
+	}
+
+	query := fmt.Sprintf(`
+		INSERT INTO %s (%s)
+		VALUES (%s)
+		ON DUPLICATE KEY UPDATE %s;`,
+		d.config.Table, strings.Join(columns, ", "),
+		strings.Join(placeholders, ", "),
+		strings.Join(upsertList, ", "),
+	)
+	_, err := d.db.ExecContext(ctx, query, values...)
+	if err != nil {
+		return fmt.Errorf("failed to insert record: %w", err)
+	}
+
+	return nil
+}
+
+func (d *Destination) deleteRecord(ctx context.Context, rec opencdc.Record) error {
+	query := fmt.Sprintf(`
+		DELETE FROM %s	
+		WHERE %s = ?;`,
+		d.config.Table, d.config.Key,
+	)
+	_, err := d.db.ExecContext(ctx, query, rec.Key.Bytes())
+	if err != nil {
+		return fmt.Errorf("failed to insert record: %w", err)
+	}
+
+	return nil
 }

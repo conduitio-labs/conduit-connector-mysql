@@ -32,6 +32,7 @@ func testDestination(ctx context.Context, is *is.I) (sdk.Destination, func()) {
 	err := destination.Configure(ctx, config.Config{
 		common.DestinationConfigUrl:   testutils.DSN,
 		common.DestinationConfigTable: "users",
+		common.DestinationConfigKey:   "id",
 	})
 	is.NoErr(err)
 

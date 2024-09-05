@@ -167,7 +167,7 @@ func (UsersTable) CountUsers(is *is.I, db *sqlx.DB) int {
 		Total int `db:"total"`
 	}
 
-	err := db.QueryRowx("SELECT count(users) as total").StructScan(&count)
+	err := db.QueryRowx("SELECT count(*) as total FROM users").StructScan(&count)
 	is.NoErr(err)
 
 	return count.Total

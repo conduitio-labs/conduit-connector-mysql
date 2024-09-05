@@ -8,12 +8,21 @@ import (
 )
 
 const (
+	DestinationConfigKey   = "key"
 	DestinationConfigTable = "table"
 	DestinationConfigUrl   = "url"
 )
 
 func (DestinationConfig) Parameters() map[string]config.Parameter {
 	return map[string]config.Parameter{
+		DestinationConfigKey: {
+			Default:     "",
+			Description: "Key is the primary key of the specified table.",
+			Type:        config.ParameterTypeString,
+			Validations: []config.Validation{
+				config.ValidationRequired{},
+			},
+		},
 		DestinationConfigTable: {
 			Default:     "",
 			Description: "Table is used as the target table into which records are inserted.",

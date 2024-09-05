@@ -32,8 +32,6 @@ type Destination struct {
 
 	db     *sqlx.DB
 	config common.DestinationConfig
-
-	tableSchemas map[string]map[string]any
 }
 
 func NewDestination() sdk.Destination {
@@ -53,7 +51,7 @@ func (d *Destination) Configure(ctx context.Context, cfg config.Config) error {
 	return nil
 }
 
-func (d *Destination) Open(ctx context.Context) (err error) {
+func (d *Destination) Open(_ context.Context) (err error) {
 	d.db, err = sqlx.Open("mysql", d.config.URL)
 	if err != nil {
 		return fmt.Errorf("failed to connect to mysql: %w", err)
@@ -78,7 +76,9 @@ func (d *Destination) Write(ctx context.Context, recs []opencdc.Record) (int, er
 				return 0, err
 			}
 		case opencdc.OperationDelete:
-
+			if err := d.deleteRecord(ctx, rec); err != nil {
+				return 0, err
+			}
 		}
 	}
 
@@ -106,9 +106,10 @@ func (d *Destination) upsertRecord(ctx context.Context, rec opencdc.Record) erro
 		payload = data
 	}
 
-	var columns, placeholders []string
-	var values []any
-	var upsertList []string
+	columns := make([]string, 0, len(payload))
+	placeholders := make([]string, 0, len(payload))
+	values := make([]any, 0, len(payload))
+	upsertList := make([]string, 0, len(payload))
 
 	for col, val := range payload {
 		columns = append(columns, col)
@@ -135,15 +136,34 @@ func (d *Destination) upsertRecord(ctx context.Context, rec opencdc.Record) erro
 }
 
 func (d *Destination) deleteRecord(ctx context.Context, rec opencdc.Record) error {
+	val, err := d.parseRecordKey(rec.Key)
+	if err != nil {
+		return err
+	}
+
 	query := fmt.Sprintf(`
-		DELETE FROM %s	
+		DELETE FROM %s
 		WHERE %s = ?;`,
 		d.config.Table, d.config.Key,
 	)
-	_, err := d.db.ExecContext(ctx, query, rec.Key.Bytes())
+	_, err = d.db.ExecContext(ctx, query, val)
 	if err != nil {
 		return fmt.Errorf("failed to insert record: %w", err)
 	}
 
 	return nil
+}
+
+func (d *Destination) parseRecordKey(key opencdc.Data) (any, error) {
+	data := make(opencdc.StructuredData)
+	if err := json.Unmarshal(key.Bytes(), &data); err != nil {
+		return nil, fmt.Errorf("failed to parse key: %w", err)
+	}
+
+	val, ok := data[d.config.Key]
+	if !ok {
+		return nil, fmt.Errorf("primary key not found")
+	}
+
+	return val, nil
 }

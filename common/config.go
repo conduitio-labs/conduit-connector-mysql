@@ -43,4 +43,7 @@ type DestinationConfig struct {
 
 	// Table is used as the target table into which records are inserted.
 	Table string `json:"table" validate:"required"`
+
+	// Key is the primary key of the specified table.
+	Key string `json:"key" validate:"required"`
 }

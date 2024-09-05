@@ -65,10 +65,8 @@ func (d *Destination) Write(ctx context.Context, recs []opencdc.Record) (int, er
 	for _, rec := range recs {
 		switch rec.Operation {
 		case opencdc.OperationSnapshot:
-			for _, rec := range recs {
-				if err := d.insertRecord(ctx, rec); err != nil {
-					return 0, err
-				}
+			if err := d.insertRecord(ctx, rec); err != nil {
+				return 0, err
 			}
 		case opencdc.OperationCreate:
 		case opencdc.OperationUpdate:

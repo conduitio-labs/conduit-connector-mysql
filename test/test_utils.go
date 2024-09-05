@@ -131,13 +131,13 @@ func (UsersTable) Insert(is *is.I, db *sqlx.DB, username string) User {
 	return user
 }
 
-func (UsersTable) Get(is *is.I, db *sqlx.DB, username string) User {
+func (UsersTable) Get(is *is.I, db *sqlx.DB, userID int64) User {
 	var user User
 	err := db.QueryRowx(`
 		SELECT *
 		FROM users
 		WHERE id = ?;
-	`, username).StructScan(&user)
+	`, userID).StructScan(&user)
 	is.NoErr(err)
 
 	return user

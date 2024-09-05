@@ -40,7 +40,7 @@ func testCdcIterator(ctx context.Context, t *testing.T, is *is.I) (common.Iterat
 	})
 	is.NoErr(err)
 
-	is.NoErr(iterator.obtainStartPosition(ctx))
+	is.NoErr(iterator.obtainStartPosition())
 	is.NoErr(iterator.start())
 
 	return iterator, func() { is.NoErr(iterator.Teardown(ctx)) }

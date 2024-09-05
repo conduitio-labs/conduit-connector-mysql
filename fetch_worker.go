@@ -27,11 +27,9 @@ import (
 )
 
 type fetchWorker struct {
-	db     *sqlx.DB
-	data   chan fetchData
-	config fetchWorkerConfig
-	tx     *sqlx.Tx
-
+	db         *sqlx.DB
+	data       chan fetchData
+	config     fetchWorkerConfig
 	start, end int64
 }
 
@@ -60,7 +58,7 @@ func (w *fetchWorker) run(ctx context.Context) (err error) {
 	sdk.Logger(ctx).Info().Msgf("started fetcher for table %q", w.config.table)
 	defer sdk.Logger(ctx).Info().Msgf("finished fetcher for table %q", w.config.table)
 
-	w.tx, err = w.db.BeginTxx(ctx, &sql.TxOptions{
+	tx, err := w.db.BeginTxx(ctx, &sql.TxOptions{
 		Isolation: sql.LevelRepeatableRead,
 		ReadOnly:  true,
 	})
@@ -70,11 +68,11 @@ func (w *fetchWorker) run(ctx context.Context) (err error) {
 
 	sdk.Logger(ctx).Info().Msgf("obtained tx for table %v", w.config.table)
 
-	defer func() { err = errors.Join(err, w.tx.Commit()) }()
+	defer func() { err = errors.Join(err, tx.Commit()) }()
 
 	start, end := w.start, w.end
 	for {
-		rows, err := w.selectRowsChunk(ctx, start, end)
+		rows, err := w.selectRowsChunk(ctx, tx, start, end)
 		if err != nil {
 			return fmt.Errorf("failed to select rows chunk: %w", err)
 		}
@@ -116,7 +114,7 @@ func (w *fetchWorker) getMaxValue(ctx context.Context) (int64, error) {
 		"SELECT MAX(%s) as max_value FROM %s",
 		w.config.primaryKey, w.config.table,
 	)
-	row := w.tx.QueryRowxContext(ctx, query)
+	row := w.db.QueryRowxContext(ctx, query)
 	if err := row.StructScan(&maxValueRow); err != nil {
 		return 0, fmt.Errorf("failed to get max value: %w", err)
 	}
@@ -134,7 +132,7 @@ func (w *fetchWorker) getMaxValue(ctx context.Context) (int64, error) {
 }
 
 func (w *fetchWorker) selectRowsChunk(
-	ctx context.Context,
+	ctx context.Context, tx *sqlx.Tx,
 	start, end int64,
 ) (scannedRows []opencdc.StructuredData, err error) {
 	query := fmt.Sprint(`
@@ -151,7 +149,7 @@ func (w *fetchWorker) selectRowsChunk(
 			"fetchSize": w.config.fetchSize,
 		})
 
-	rows, err := w.tx.QueryxContext(ctx, query, start, end, w.config.fetchSize)
+	rows, err := tx.QueryxContext(ctx, query, start, end, w.config.fetchSize)
 	if err != nil {
 		logDataEvt.Msg("failed to query rows")
 		return nil, fmt.Errorf("failed to query rows: %w", err)

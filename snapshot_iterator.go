@@ -55,7 +55,7 @@ type (
 		data         chan fetchData
 		acks         csync.WaitGroup
 		lastPosition common.SnapshotPosition
-		workers      []fetchWorker
+		workers      []*fetchWorker
 		config       snapshotIteratorConfig
 	}
 	snapshotIteratorConfig struct {
@@ -125,6 +125,8 @@ func (s *snapshotIterator) setupWorkers(ctx context.Context) error {
 		if err := worker.fetchStartEnd(ctx); err != nil {
 			return fmt.Errorf("failed to start worker: %w", err)
 		}
+
+		s.workers = append(s.workers, worker)
 	}
 
 	return nil
@@ -136,6 +138,8 @@ func (s *snapshotIterator) start(ctx context.Context) {
 			ctx := s.t.Context(ctx)
 			return worker.run(ctx)
 		})
+
+		sdk.Logger(ctx).Info().Msgf("started worker for table %s", worker.config.table)
 	}
 }
 

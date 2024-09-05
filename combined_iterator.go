@@ -22,6 +22,7 @@ import (
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	"github.com/conduitio/conduit-commons/opencdc"
+	sdk "github.com/conduitio/conduit-connector-sdk"
 	mysqldriver "github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 )
@@ -75,30 +76,44 @@ func newCombinedIterator(
 		return nil, fmt.Errorf("failed to create snapshot iterator: %w", err)
 	}
 
-	unlockTables, err := lockTables(ctx, config)
+	sdk.Logger(ctx).Info().Msg("locking tables to setup fetch workers and obtain cdc start position")
+
+	unlockTables, err := lockTables(ctx, config.db, config.tables)
 	if err != nil {
 		return nil, err
 	}
+
+	sdk.Logger(ctx).Info().Msg("locked tables")
 
 	if err := snapshotIterator.setupWorkers(ctx); err != nil {
 		return nil, err
 	}
 
+	sdk.Logger(ctx).Info().Msg("setup fetch workers")
+
 	if config.startCdcPosition == nil {
-		if err := cdcIterator.obtainStartPosition(ctx); err != nil {
+		if err := cdcIterator.obtainStartPosition(); err != nil {
 			return nil, fmt.Errorf("failed to fetch start cdc position: %w", err)
 		}
+
+		sdk.Logger(ctx).Info().Msg("fetched cdc start position")
 	}
 
 	if err := unlockTables(); err != nil {
 		return nil, err
 	}
 
+	sdk.Logger(ctx).Info().Msg("unlocked tables")
+
 	snapshotIterator.start(ctx)
+
+	sdk.Logger(ctx).Info().Msg("started snapshot iterator")
 
 	if err := cdcIterator.start(); err != nil {
 		return nil, fmt.Errorf("failed to start cdc iterator: %w", err)
 	}
+
+	sdk.Logger(ctx).Info().Msg("started cdc iterator")
 
 	iterator := &combinedIterator{
 		snapshotIterator: snapshotIterator,
@@ -143,19 +158,16 @@ func (c *combinedIterator) Teardown(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-func lockTables(
-	ctx context.Context,
-	config combinedIteratorConfig,
-) (func() error, error) {
-	tableList := strings.Join(config.tables, ", ")
+func lockTables(ctx context.Context, db *sqlx.DB, tables []string) (func() error, error) {
+	tableList := strings.Join(tables, ", ")
 
-	_, err := config.db.ExecContext(ctx, "FLUSH TABLES "+tableList+" WITH READ LOCK")
+	_, err := db.ExecContext(ctx, "FLUSH TABLES "+tableList+" WITH READ LOCK")
 	if err != nil {
 		return nil, fmt.Errorf("failed to flush tables and acquire lock: %w", err)
 	}
 
 	return func() error {
-		if _, err := config.db.ExecContext(ctx, "UNLOCK TABLES"); err != nil {
+		if _, err := db.ExecContext(ctx, "UNLOCK TABLES"); err != nil {
 			return fmt.Errorf("failed to unlock tables after getting cdc position: %w", err)
 		}
 		return nil

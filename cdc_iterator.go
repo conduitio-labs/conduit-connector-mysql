@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
@@ -69,21 +68,10 @@ func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (*cdcIterator
 	}, nil
 }
 
-func (c *cdcIterator) obtainStartPosition(ctx context.Context) error {
-	tableList := strings.Join(c.config.tables, ", ")
-
-	_, err := c.config.db.ExecContext(ctx, "FLUSH TABLES "+tableList+" WITH READ LOCK")
-	if err != nil {
-		return fmt.Errorf("failed to flush tables and acquire lock: %w", err)
-	}
-
+func (c *cdcIterator) obtainStartPosition() error {
 	masterPos, err := c.canal.GetMasterPos()
 	if err != nil {
 		return fmt.Errorf("failed to get mysql master position after acquiring locks: %w", err)
-	}
-
-	if _, err := c.config.db.ExecContext(ctx, "UNLOCK TABLES"); err != nil {
-		return fmt.Errorf("failed to unlock tables after getting cdc position: %w", err)
 	}
 
 	c.position = &common.CdcPosition{

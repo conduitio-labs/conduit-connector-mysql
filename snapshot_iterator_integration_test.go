@@ -47,6 +47,7 @@ func testSnapshotIterator(ctx context.Context, t *testing.T, is *is.I) (common.I
 	is.NoErr(err)
 
 	is.NoErr(iterator.setupWorkers(ctx))
+	iterator.start(ctx)
 
 	return iterator, func() {
 		is.NoErr(db.Close())
@@ -82,6 +83,7 @@ func testSnapshotIteratorAtPosition(
 	is.NoErr(err)
 
 	is.NoErr(iterator.setupWorkers(ctx))
+	iterator.start(ctx)
 
 	return iterator, func() {
 		is.NoErr(db.Close())

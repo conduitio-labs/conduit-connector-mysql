@@ -68,9 +68,9 @@ func TestDestination_OperationSnapshot(t *testing.T) {
 	is.NoErr(err)
 	is.Equal(written, 3)
 
-	insertedUser1 := userTable.Get(is, db, user1.Username)
-	insertedUser2 := userTable.Get(is, db, user2.Username)
-	insertedUser3 := userTable.Get(is, db, user3.Username)
+	insertedUser1 := userTable.Get(is, db, user1.ID)
+	insertedUser2 := userTable.Get(is, db, user2.ID)
+	insertedUser3 := userTable.Get(is, db, user3.ID)
 
 	is.Equal("", cmp.Diff(user1, insertedUser1))
 	is.Equal("", cmp.Diff(user2, insertedUser2))
@@ -104,9 +104,9 @@ func TestDestination_OperationCreate(t *testing.T) {
 	is.NoErr(err)
 	is.Equal(written, 3)
 
-	insertedUser1 := userTable.Get(is, db, user1.Username)
-	insertedUser2 := userTable.Get(is, db, user2.Username)
-	insertedUser3 := userTable.Get(is, db, user3.Username)
+	insertedUser1 := userTable.Get(is, db, user1.ID)
+	insertedUser2 := userTable.Get(is, db, user2.ID)
+	insertedUser3 := userTable.Get(is, db, user3.ID)
 
 	is.Equal("", cmp.Diff(user1, insertedUser1))
 	is.Equal("", cmp.Diff(user2, insertedUser2))
@@ -150,9 +150,9 @@ func TestDestination_OperationUpdate(t *testing.T) {
 	is.NoErr(err)
 	is.Equal(written, 3)
 
-	insertedUser1 := userTable.Get(is, db, user1.Username)
-	insertedUser2 := userTable.Get(is, db, user2.Username)
-	insertedUser3 := userTable.Get(is, db, user3.Username)
+	insertedUser1 := userTable.Get(is, db, user1.ID)
+	insertedUser2 := userTable.Get(is, db, user2.ID)
+	insertedUser3 := userTable.Get(is, db, user3.ID)
 
 	is.Equal("", cmp.Diff(user1Updated, insertedUser1))
 	is.Equal("", cmp.Diff(user2Updated, insertedUser2))

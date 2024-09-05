@@ -93,7 +93,7 @@ func (u User) ToStructuredData() opencdc.StructuredData {
 		"id":         u.ID,
 		"username":   u.Username,
 		"email":      u.Email,
-		"created_at": u.CreatedAt.UTC().Format(time.RFC3339),
+		"created_at": u.CreatedAt.UTC(),
 	}
 }
 

@@ -190,6 +190,14 @@ func TestDestination_OperationDelete(t *testing.T) {
 	rec2 := testutils.ReadAndAssertDelete(ctx, is, sourceIterator{src}, user2)
 	rec3 := testutils.ReadAndAssertDelete(ctx, is, sourceIterator{src}, user3)
 
+	// reset autoincrement primary key
+	userTable.Recreate(is, db)
+
+	// insert users back so that we can assert that connector deletes the data
+	userTable.Insert(is, db, "user1")
+	userTable.Insert(is, db, "user2")
+	userTable.Insert(is, db, "user3")
+
 	written, err := dest.Write(ctx, []opencdc.Record{rec1, rec2, rec3})
 	is.NoErr(err)
 	is.Equal(written, 3)

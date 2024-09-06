@@ -26,7 +26,7 @@ import (
 	"github.com/matryer/is"
 )
 
-func testSource(ctx context.Context, is *is.I) (sdk.Source, func()) {
+func testSource(ctx context.Context, is *is.I) (sourceIterator, func()) {
 	source := &Source{}
 	err := source.Configure(ctx, config.Config{
 		common.SourceConfigUrl:              testutils.DSN,
@@ -37,7 +37,7 @@ func testSource(ctx context.Context, is *is.I) (sdk.Source, func()) {
 
 	is.NoErr(source.Open(ctx, nil))
 
-	return source, func() { is.NoErr(source.Teardown(ctx)) }
+	return sourceIterator{source}, func() { is.NoErr(source.Teardown(ctx)) }
 }
 
 type sourceIterator struct{ sdk.Source }
@@ -67,12 +67,10 @@ func TestSource_ConsistentSnapshot(t *testing.T) {
 	source, teardown := testSource(ctx, is)
 	defer teardown()
 
-	sourceIterator := sourceIterator{source}
-
 	// read 2 records -> they shall be snapshots
 
-	testutils.ReadAndAssertSnapshot(ctx, is, sourceIterator, user1)
-	testutils.ReadAndAssertSnapshot(ctx, is, sourceIterator, user2)
+	testutils.ReadAndAssertSnapshot(ctx, is, source, user1)
+	testutils.ReadAndAssertSnapshot(ctx, is, source, user2)
 
 	// insert 2 rows, delete the 4th inserted row
 
@@ -84,10 +82,10 @@ func TestSource_ConsistentSnapshot(t *testing.T) {
 	// snapshot completed, so previous 2 inserts and delete done while
 	// snapshotting should be captured
 
-	testutils.ReadAndAssertSnapshot(ctx, is, sourceIterator, user3)
-	testutils.ReadAndAssertSnapshot(ctx, is, sourceIterator, user4)
+	testutils.ReadAndAssertSnapshot(ctx, is, source, user3)
+	testutils.ReadAndAssertSnapshot(ctx, is, source, user4)
 
-	testutils.ReadAndAssertCreate(ctx, is, sourceIterator, user5)
-	testutils.ReadAndAssertCreate(ctx, is, sourceIterator, user6)
-	testutils.ReadAndAssertDelete(ctx, is, sourceIterator, user4)
+	testutils.ReadAndAssertCreate(ctx, is, source, user5)
+	testutils.ReadAndAssertCreate(ctx, is, source, user6)
+	testutils.ReadAndAssertDelete(ctx, is, source, user4)
 }

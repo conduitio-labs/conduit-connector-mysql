@@ -193,7 +193,7 @@ func TestDestination_OperationDelete(t *testing.T) {
 	// reset autoincrement primary key
 	userTable.Recreate(is, db)
 
-	// insert users back so that we can assert that connector deletes the data
+	// insert users back to assert deletes where done
 	userTable.Insert(is, db, "user1")
 	userTable.Insert(is, db, "user2")
 	userTable.Insert(is, db, "user3")

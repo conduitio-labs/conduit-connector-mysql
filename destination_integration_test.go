@@ -58,9 +58,9 @@ func TestDestination_OperationSnapshot(t *testing.T) {
 	src, cleanSrc := testSource(ctx, is)
 	defer cleanSrc()
 
-	rec1 := testutils.ReadAndAssertSnapshot(ctx, is, sourceIterator{src}, user1)
-	rec2 := testutils.ReadAndAssertSnapshot(ctx, is, sourceIterator{src}, user2)
-	rec3 := testutils.ReadAndAssertSnapshot(ctx, is, sourceIterator{src}, user3)
+	rec1 := testutils.ReadAndAssertSnapshot(ctx, is, src, user1)
+	rec2 := testutils.ReadAndAssertSnapshot(ctx, is, src, user2)
+	rec3 := testutils.ReadAndAssertSnapshot(ctx, is, src, user3)
 
 	// clean table to assert snapshots were written
 	userTable.Recreate(is, db)
@@ -94,9 +94,9 @@ func TestDestination_OperationCreate(t *testing.T) {
 	user2 := userTable.Insert(is, db, "user2")
 	user3 := userTable.Insert(is, db, "user3")
 
-	rec1 := testutils.ReadAndAssertCreate(ctx, is, sourceIterator{src}, user1)
-	rec2 := testutils.ReadAndAssertCreate(ctx, is, sourceIterator{src}, user2)
-	rec3 := testutils.ReadAndAssertCreate(ctx, is, sourceIterator{src}, user3)
+	rec1 := testutils.ReadAndAssertCreate(ctx, is, src, user1)
+	rec2 := testutils.ReadAndAssertCreate(ctx, is, src, user2)
+	rec3 := testutils.ReadAndAssertCreate(ctx, is, src, user3)
 
 	// clean table to assert snapshots were written
 	userTable.Recreate(is, db)
@@ -136,13 +136,13 @@ func TestDestination_OperationUpdate(t *testing.T) {
 	user3Updated := userTable.Update(is, db, user3.Update())
 
 	// discard snapshots, we want the updates only
-	testutils.ReadAndAssertSnapshot(ctx, is, sourceIterator{src}, user1)
-	testutils.ReadAndAssertSnapshot(ctx, is, sourceIterator{src}, user2)
-	testutils.ReadAndAssertSnapshot(ctx, is, sourceIterator{src}, user3)
+	testutils.ReadAndAssertSnapshot(ctx, is, src, user1)
+	testutils.ReadAndAssertSnapshot(ctx, is, src, user2)
+	testutils.ReadAndAssertSnapshot(ctx, is, src, user3)
 
-	rec1 := testutils.ReadAndAssertUpdate(ctx, is, sourceIterator{src}, user1, user1Updated)
-	rec2 := testutils.ReadAndAssertUpdate(ctx, is, sourceIterator{src}, user2, user2Updated)
-	rec3 := testutils.ReadAndAssertUpdate(ctx, is, sourceIterator{src}, user3, user3Updated)
+	rec1 := testutils.ReadAndAssertUpdate(ctx, is, src, user1, user1Updated)
+	rec2 := testutils.ReadAndAssertUpdate(ctx, is, src, user2, user2Updated)
+	rec3 := testutils.ReadAndAssertUpdate(ctx, is, src, user3, user3Updated)
 
 	// clean table to assert snapshots were written
 	userTable.Recreate(is, db)
@@ -182,13 +182,13 @@ func TestDestination_OperationDelete(t *testing.T) {
 	userTable.Delete(is, db, user3)
 
 	// discard snapshots, we want the deletes only
-	testutils.ReadAndAssertSnapshot(ctx, is, sourceIterator{src}, user1)
-	testutils.ReadAndAssertSnapshot(ctx, is, sourceIterator{src}, user2)
-	testutils.ReadAndAssertSnapshot(ctx, is, sourceIterator{src}, user3)
+	testutils.ReadAndAssertSnapshot(ctx, is, src, user1)
+	testutils.ReadAndAssertSnapshot(ctx, is, src, user2)
+	testutils.ReadAndAssertSnapshot(ctx, is, src, user3)
 
-	rec1 := testutils.ReadAndAssertDelete(ctx, is, sourceIterator{src}, user1)
-	rec2 := testutils.ReadAndAssertDelete(ctx, is, sourceIterator{src}, user2)
-	rec3 := testutils.ReadAndAssertDelete(ctx, is, sourceIterator{src}, user3)
+	rec1 := testutils.ReadAndAssertDelete(ctx, is, src, user1)
+	rec2 := testutils.ReadAndAssertDelete(ctx, is, src, user2)
+	rec3 := testutils.ReadAndAssertDelete(ctx, is, src, user3)
 
 	// reset autoincrement primary key
 	userTable.Recreate(is, db)

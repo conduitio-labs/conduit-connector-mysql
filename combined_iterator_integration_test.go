@@ -25,35 +25,30 @@ import (
 	"github.com/matryer/is"
 )
 
-func testCombinedIterator(ctx context.Context, is *is.I) (common.Iterator, func()) {
-	config, err := mysql.ParseDSN("root:meroxaadmin@tcp(127.0.0.1:3306)/meroxadb?parseTime=true")
+func testCombinedIterator(ctx context.Context, t *testing.T, is *is.I) (common.Iterator, func()) {
+	db := testutils.Connection(t)
+
+	config, err := mysql.ParseDSN(testutils.DSN)
 	is.NoErr(err)
 
-	serverID := testutils.GetServerID(ctx, is)
-
 	iterator, err := newCombinedIterator(ctx, combinedIteratorConfig{
-		snapshotConfig: snapshotIteratorConfig{
-			serverID:  serverID,
-			tableKeys: testutils.TableKeys,
-			db:        testutils.Connection(is),
-			database:  "meroxadb",
-			tables:    []string{"users"},
-		},
-		cdcConfig: cdcIteratorConfig{
-			mysqlConfig: config,
-			tables:      []string{"users"},
-			TableKeys:   testutils.TableKeys,
-		},
+		db:                  db,
+		tableKeys:           testutils.TableKeys,
+		database:            "meroxadb",
+		tables:              []string{"users"},
+		serverID:            testutils.ServerID,
+		mysqlConfig:         config,
+		disableCanalLogging: true,
 	})
 	is.NoErr(err)
 
 	return iterator, func() { is.NoErr(iterator.Teardown(ctx)) }
 }
 
-func TestCombinedIterator(t *testing.T) {
+func TestCombinedIterator_SnapshotAndCDC(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
-	db := testutils.Connection(is)
+	db := testutils.Connection(t)
 
 	userTable.Recreate(is, db)
 
@@ -61,7 +56,7 @@ func TestCombinedIterator(t *testing.T) {
 	user2 := userTable.Insert(is, db, "user2")
 	user3 := userTable.Insert(is, db, "user3")
 
-	iterator, cleanup := testCombinedIterator(ctx, is)
+	iterator, cleanup := testCombinedIterator(ctx, t, is)
 	defer cleanup()
 
 	// ci is slow, we need a bit of time for the setup to initialize canal.Canal.

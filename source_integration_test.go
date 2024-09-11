@@ -17,56 +17,77 @@ package mysql
 import (
 	"context"
 	"testing"
-	"time"
 
+	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	testutils "github.com/conduitio-labs/conduit-connector-mysql/test"
+	"github.com/conduitio/conduit-commons/config"
 	"github.com/conduitio/conduit-commons/opencdc"
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/matryer/is"
 )
 
-// makes sdk.Source compatible with our custom iterator interface.
-type sourceIterator struct {
-	sdk.Source
+func testSource(ctx context.Context, is *is.I) (sdk.Source, func()) {
+	source := &Source{}
+	err := source.Configure(ctx, config.Config{
+		common.SourceConfigUrl:              testutils.DSN,
+		common.SourceConfigTables:           "users",
+		common.SourceConfigDisableCanalLogs: "true",
+	})
+	is.NoErr(err)
+
+	is.NoErr(source.Open(ctx, nil))
+
+	return source, func() { is.NoErr(source.Teardown(ctx)) }
 }
+
+type sourceIterator struct{ sdk.Source }
 
 func (s sourceIterator) Next(ctx context.Context) (opencdc.Record, error) {
 	//nolint:wrapcheck // wrapped already
 	return s.Source.Read(ctx)
 }
 
-func TestSourceWorks(t *testing.T) {
+func TestSource_ConsistentSnapshot(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
-	db := testutils.Connection(is)
+
+	db := testutils.Connection(t)
 
 	userTable.Recreate(is, db)
+
+	// insert 4 rows, the whole snapshot
 
 	user1 := userTable.Insert(is, db, "user1")
 	user2 := userTable.Insert(is, db, "user2")
 	user3 := userTable.Insert(is, db, "user3")
+	user4 := userTable.Insert(is, db, "user4")
 
-	source := sourceIterator{&Source{}}
-	is.NoErr(source.Configure(ctx, map[string]string{
-		"url":    "root:meroxaadmin@tcp(127.0.0.1:3306)/meroxadb?parseTime=true",
-		"tables": "users",
-	}))
+	// start source connector
 
-	is.NoErr(source.Open(ctx, nil))
+	source, teardown := testSource(ctx, is)
+	defer teardown()
 
-	// ci is slow, we need a bit of time for the setup to initialize canal.Canal.
-	// Theoretically it should not matter, as we get the position at the start.
-	time.Sleep(time.Second)
+	sourceIterator := sourceIterator{source}
 
-	user1Updated := userTable.Update(is, db, user1.Update())
-	user2Updated := userTable.Update(is, db, user2.Update())
-	user3Updated := userTable.Update(is, db, user3.Update())
+	// read 2 records -> they shall be snapshots
 
-	testutils.ReadAndAssertSnapshot(ctx, is, source, user1)
-	testutils.ReadAndAssertSnapshot(ctx, is, source, user2)
-	testutils.ReadAndAssertSnapshot(ctx, is, source, user3)
+	testutils.ReadAndAssertSnapshot(ctx, is, sourceIterator, user1)
+	testutils.ReadAndAssertSnapshot(ctx, is, sourceIterator, user2)
 
-	testutils.ReadAndAssertUpdate(ctx, is, source, user1, user1Updated)
-	testutils.ReadAndAssertUpdate(ctx, is, source, user2, user2Updated)
-	testutils.ReadAndAssertUpdate(ctx, is, source, user3, user3Updated)
+	// insert 2 rows, delete the 4th inserted row
+
+	user5 := userTable.Insert(is, db, "user5")
+	user6 := userTable.Insert(is, db, "user6")
+	userTable.Delete(is, db, user4)
+
+	// read 2 more records -> they shall be snapshots
+	// snapshot completed, so previous 2 inserts and delete done while
+	// snapshotting should be captured
+
+	testutils.ReadAndAssertSnapshot(ctx, is, sourceIterator, user3)
+	testutils.ReadAndAssertSnapshot(ctx, is, sourceIterator, user4)
+
+	testutils.ReadAndAssertInsert(ctx, is, sourceIterator, user5)
+	testutils.ReadAndAssertInsert(ctx, is, sourceIterator, user6)
+	testutils.ReadAndAssertDelete(ctx, is, sourceIterator, user4)
 }

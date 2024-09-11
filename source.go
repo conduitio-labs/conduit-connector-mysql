@@ -89,20 +89,16 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 	}
 
 	s.iterator, err = newCombinedIterator(ctx, combinedIteratorConfig{
-		snapshotConfig: snapshotIteratorConfig{
-			db:            s.db,
-			tableKeys:     tableKeys,
-			startPosition: pos.SnapshotPosition,
-			database:      s.configFromDsn.DBName,
-			tables:        s.config.Tables,
-			serverID:      serverID,
-		},
-		cdcConfig: cdcIteratorConfig{
-			tables:      s.config.Tables,
-			mysqlConfig: s.configFromDsn,
-			position:    pos.CdcPosition,
-			TableKeys:   tableKeys,
-		},
+		db:                    s.db,
+		tableKeys:             tableKeys,
+		startSnapshotPosition: pos.SnapshotPosition,
+		startCdcPosition:      pos.CdcPosition,
+		database:              s.configFromDsn.DBName,
+		tables:                s.config.Tables,
+		serverID:              serverID,
+		mysqlConfig:           s.configFromDsn,
+		disableCanalLogging:   s.config.DisableCanalLogs,
+		fetchSize:             s.config.FetchSize,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create snapshot iterator: %w", err)
@@ -124,9 +120,56 @@ func (s *Source) Ack(ctx context.Context, _ opencdc.Position) error {
 
 func (s *Source) Teardown(ctx context.Context) error {
 	if s.iterator != nil {
-		//nolint:wrapcheck // error already wrapped in iterator
-		return s.iterator.Teardown(ctx)
+		if err := s.iterator.Teardown(ctx); err != nil {
+			//nolint:wrapcheck // error already wrapped in iterator
+			return err
+		}
+	}
+
+	if s.db != nil {
+		if err := s.db.Close(); err != nil {
+			return fmt.Errorf("failed to close connection: %w", err)
+		}
 	}
 
 	return nil
+}
+
+func getPrimaryKey(db *sqlx.DB, database, table string) (common.PrimaryKeyName, error) {
+	var primaryKey struct {
+		ColumnName common.PrimaryKeyName `db:"COLUMN_NAME"`
+	}
+
+	row := db.QueryRowx(`
+		SELECT COLUMN_NAME
+		FROM information_schema.key_column_usage
+		WHERE
+			constraint_name = 'PRIMARY'
+			AND table_schema = ?
+			AND table_name = ?
+	`, database, table)
+
+	if err := row.StructScan(&primaryKey); err != nil {
+		return "", fmt.Errorf("failed to get primary key from table %s: %w", table, err)
+	}
+	if err := row.Err(); err != nil {
+		return "", fmt.Errorf("failed to scan primary key from table %s: %w", table, err)
+	}
+
+	return primaryKey.ColumnName, nil
+}
+
+func getTableKeys(db *sqlx.DB, database string, tables []string) (common.TableKeys, error) {
+	tableKeys := make(common.TableKeys)
+
+	for _, table := range tables {
+		primaryKey, err := getPrimaryKey(db, database, table)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get primary key for table %q: %w", table, err)
+		}
+
+		tableKeys[common.TableName(table)] = primaryKey
+	}
+
+	return tableKeys, nil
 }

@@ -26,62 +26,81 @@ import (
 	"github.com/go-mysql-org/go-mysql/canal"
 	"github.com/go-mysql-org/go-mysql/schema"
 	mysqldriver "github.com/go-sql-driver/mysql"
+	"github.com/jmoiron/sqlx"
 )
 
 type cdcIterator struct {
-	canal       *canal.Canal
-	rowsEventsC chan rowEvent
+	config   cdcIteratorConfig
+	canal    *canal.Canal
+	position *common.CdcPosition
 
+	rowsEventsC  chan rowEvent
 	canalRunErrC chan error
 	canalDoneC   chan struct{}
-
-	config cdcIteratorConfig
 }
 
 type cdcIteratorConfig struct {
-	tables      []string
-	mysqlConfig *mysqldriver.Config
-	position    *common.CdcPosition
-	TableKeys   common.TableKeys
+	db                  *sqlx.DB
+	tables              []string
+	mysqlConfig         *mysqldriver.Config
+	tableKeys           common.TableKeys
+	disableCanalLogging bool
+	startPosition       *common.CdcPosition
 }
 
-func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (common.Iterator, error) {
-	c, err := common.NewCanal(config.mysqlConfig, config.tables)
+func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (*cdcIterator, error) {
+	canal, err := common.NewCanal(ctx, common.CanalConfig{
+		Config:         config.mysqlConfig,
+		Tables:         config.tables,
+		DisableLogging: config.disableCanalLogging,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create canal: %w", err)
+		return nil, fmt.Errorf("failed to start canal at combined iterator: %w", err)
 	}
 
-	sdk.Logger(ctx).Info().Msg("created canal")
-
-	rowsEventsC := make(chan rowEvent)
-	canalDoneC := make(chan struct{})
-
-	iterator := &cdcIterator{
-		canal:        c,
-		rowsEventsC:  rowsEventsC,
-		canalRunErrC: make(chan error),
-		canalDoneC:   canalDoneC,
+	return &cdcIterator{
 		config:       config,
+		canal:        canal,
+		position:     config.startPosition,
+		rowsEventsC:  make(chan rowEvent),
+		canalRunErrC: make(chan error),
+		canalDoneC:   make(chan struct{}),
+	}, nil
+}
+
+func (c *cdcIterator) obtainStartPosition() error {
+	masterPos, err := c.canal.GetMasterPos()
+	if err != nil {
+		return fmt.Errorf("failed to get mysql master position after acquiring locks: %w", err)
 	}
 
-	startPosition, err := iterator.getStartPosition(config)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get start position: %w", err)
+	c.position = &common.CdcPosition{
+		Name: masterPos.Name,
+		Pos:  masterPos.Pos,
 	}
-	eventHandler := newCdcEventHandler(c, canalDoneC, rowsEventsC)
+
+	return nil
+}
+
+func (c *cdcIterator) start() error {
+	startPosition, err := c.getStartPosition()
+	if err != nil {
+		return fmt.Errorf("failed to get start position: %w", err)
+	}
+	eventHandler := newCdcEventHandler(c.canal, c.canalDoneC, c.rowsEventsC)
 
 	go func() {
-		iterator.canal.SetEventHandler(eventHandler)
+		c.canal.SetEventHandler(eventHandler)
 		pos := startPosition.ToMysqlPos()
-		iterator.canalRunErrC <- iterator.canal.RunFrom(pos)
+		c.canalRunErrC <- c.canal.RunFrom(pos)
 	}()
 
-	return iterator, nil
+	return nil
 }
 
-func (c *cdcIterator) getStartPosition(config cdcIteratorConfig) (common.CdcPosition, error) {
-	if config.position != nil {
-		return *config.position, nil
+func (c *cdcIterator) getStartPosition() (common.CdcPosition, error) {
+	if c.position != nil {
+		return *c.position, nil
 	}
 
 	var cdcPosition common.CdcPosition
@@ -102,8 +121,8 @@ func (c *cdcIterator) Ack(context.Context, opencdc.Position) error {
 
 func (c *cdcIterator) Next(ctx context.Context) (rec opencdc.Record, err error) {
 	select {
+	//nolint:wrapcheck // no need to wrap canceled error
 	case <-ctx.Done():
-		//nolint:wrapcheck // no need to wrap canceled error
 		return rec, ctx.Err()
 	case <-c.canalDoneC:
 		return rec, fmt.Errorf("canal is closed")
@@ -160,7 +179,7 @@ func (c *cdcIterator) buildRecord(e rowEvent) (opencdc.Record, error) {
 		payload := buildPayload(e.Table.Columns, e.Rows[0])
 
 		table := common.TableName(e.Table.Name)
-		primaryKey := c.config.TableKeys[table]
+		primaryKey := c.config.tableKeys[table]
 
 		key, err := buildRecordKey(primaryKey, payload)
 		if err != nil {
@@ -174,7 +193,7 @@ func (c *cdcIterator) buildRecord(e rowEvent) (opencdc.Record, error) {
 		payload := buildPayload(e.Table.Columns, e.Rows[0])
 
 		table := common.TableName(e.Table.Name)
-		primaryKey := c.config.TableKeys[table]
+		primaryKey := c.config.tableKeys[table]
 
 		key, err := buildRecordKey(primaryKey, payload)
 		if err != nil {
@@ -188,7 +207,7 @@ func (c *cdcIterator) buildRecord(e rowEvent) (opencdc.Record, error) {
 		after := buildPayload(e.Table.Columns, e.Rows[1])
 
 		table := common.TableName(e.Table.Name)
-		primaryKey := c.config.TableKeys[table]
+		primaryKey := c.config.tableKeys[table]
 
 		key, err := buildRecordKey(primaryKey, before)
 		if err != nil {

@@ -8,15 +8,29 @@ import (
 )
 
 const (
-	SourceConfigTables = "tables"
-	SourceConfigUrl    = "url"
+	SourceConfigDisableCanalLogs = "disableCanalLogs"
+	SourceConfigFetchSize        = "fetchSize"
+	SourceConfigTables           = "tables"
+	SourceConfigUrl              = "url"
 )
 
 func (SourceConfig) Parameters() map[string]config.Parameter {
 	return map[string]config.Parameter{
+		SourceConfigDisableCanalLogs: {
+			Default:     "",
+			Description: "DisableCanalLogs disables verbose logs.",
+			Type:        config.ParameterTypeBool,
+			Validations: []config.Validation{},
+		},
+		SourceConfigFetchSize: {
+			Default:     "50000",
+			Description: "FetchSize limits how many rows should be retrieved on each database fetch.",
+			Type:        config.ParameterTypeInt,
+			Validations: []config.Validation{},
+		},
 		SourceConfigTables: {
 			Default:     "",
-			Description: "",
+			Description: "Tables represents the tables to read from.",
 			Type:        config.ParameterTypeString,
 			Validations: []config.Validation{
 				config.ValidationRequired{},

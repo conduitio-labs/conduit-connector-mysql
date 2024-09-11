@@ -20,9 +20,12 @@ import (
 	"strconv"
 	"time"
 
+	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/go-mysql-org/go-mysql/canal"
 	"github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
+	"github.com/rs/zerolog"
+	"github.com/siddontang/go-log/log"
 )
 
 func FormatValue(val any) any {
@@ -32,19 +35,34 @@ func FormatValue(val any) any {
 	case *time.Time:
 		return val.UTC().Format(time.RFC3339)
 	case []uint8:
-		return string(val)
+		s := string(val)
+		if parsed, err := time.Parse(time.DateTime, s); err == nil {
+			return parsed.UTC().Format(time.RFC3339)
+		}
+		return s
 	default:
 		return val
 	}
 }
 
-func NewCanal(config *mysql.Config, tables []string) (*canal.Canal, error) {
+type CanalConfig struct {
+	*mysql.Config
+	Tables         []string
+	DisableLogging bool
+}
+
+func NewCanal(ctx context.Context, config CanalConfig) (*canal.Canal, error) {
 	cfg := canal.NewDefaultConfig()
 	cfg.Addr = config.Addr
 	cfg.User = config.User
 	cfg.Password = config.Passwd
 
-	cfg.IncludeTableRegex = tables
+	cfg.IncludeTableRegex = config.Tables
+	if config.DisableLogging {
+		cfg.Logger = log.NewDefault(&log.NullHandler{})
+	} else {
+		cfg.Logger = zerologCanalLogger{sdk.Logger(ctx)}
+	}
 
 	// Disable dumping
 	cfg.Dump.ExecutionPath = ""
@@ -56,6 +74,94 @@ func NewCanal(config *mysql.Config, tables []string) (*canal.Canal, error) {
 	}
 
 	return c, nil
+}
+
+type zerologCanalLogger struct {
+	logger *zerolog.Logger
+}
+
+func (z zerologCanalLogger) Debug(args ...any) {
+	z.logger.Debug().Msg(fmt.Sprint(args...))
+}
+
+func (z zerologCanalLogger) Debugf(format string, args ...any) {
+	z.logger.Debug().Msgf(format, args...)
+}
+
+func (z zerologCanalLogger) Debugln(args ...any) {
+	z.logger.Debug().Msg(fmt.Sprintln(args...))
+}
+
+func (z zerologCanalLogger) Error(args ...any) {
+	z.logger.Error().Msg(fmt.Sprint(args...))
+}
+
+func (z zerologCanalLogger) Errorf(format string, args ...any) {
+	z.logger.Error().Msgf(format, args...)
+}
+
+func (z zerologCanalLogger) Errorln(args ...any) {
+	z.logger.Error().Msg(fmt.Sprintln(args...))
+}
+
+func (z zerologCanalLogger) Fatal(args ...any) {
+	z.logger.Fatal().Msg(fmt.Sprint(args...))
+}
+
+func (z zerologCanalLogger) Fatalf(format string, args ...any) {
+	z.logger.Fatal().Msgf(format, args...)
+}
+
+func (z zerologCanalLogger) Fatalln(args ...any) {
+	z.logger.Fatal().Msg(fmt.Sprintln(args...))
+}
+
+func (z zerologCanalLogger) Info(args ...any) {
+	z.logger.Info().Msg(fmt.Sprint(args...))
+}
+
+func (z zerologCanalLogger) Infof(format string, args ...any) {
+	z.logger.Info().Msgf(format, args...)
+}
+
+func (z zerologCanalLogger) Infoln(args ...any) {
+	z.logger.Info().Msg(fmt.Sprintln(args...))
+}
+
+func (z zerologCanalLogger) Panic(args ...any) {
+	z.logger.Panic().Msg(fmt.Sprint(args...))
+}
+
+func (z zerologCanalLogger) Panicf(format string, args ...any) {
+	z.logger.Panic().Msgf(format, args...)
+}
+
+func (z zerologCanalLogger) Panicln(args ...any) {
+	z.logger.Panic().Msg(fmt.Sprintln(args...))
+}
+
+func (z zerologCanalLogger) Print(args ...any) {
+	z.logger.Info().Msg(fmt.Sprint(args...))
+}
+
+func (z zerologCanalLogger) Printf(format string, args ...any) {
+	z.logger.Info().Msgf(format, args...)
+}
+
+func (z zerologCanalLogger) Println(args ...any) {
+	z.logger.Info().Msg(fmt.Sprintln(args...))
+}
+
+func (z zerologCanalLogger) Warn(args ...any) {
+	z.logger.Warn().Msg(fmt.Sprint(args...))
+}
+
+func (z zerologCanalLogger) Warnf(format string, args ...any) {
+	z.logger.Warn().Msgf(format, args...)
+}
+
+func (z zerologCanalLogger) Warnln(args ...any) {
+	z.logger.Warn().Msg(fmt.Sprintln(args...))
 }
 
 // ServerID will go to the record metadata, so it is easier to handle it as a

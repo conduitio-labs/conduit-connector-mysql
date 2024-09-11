@@ -29,8 +29,6 @@ import (
 
 var ErrSnapshotIteratorDone = errors.New("snapshot complete")
 
-const defaultFetchSize = 50000
-
 type snapshotKey struct {
 	Key   common.PrimaryKeyName `json:"key"`
 	Value any                   `json:"value"`
@@ -57,6 +55,7 @@ type (
 		data         chan fetchData
 		acks         csync.WaitGroup
 		lastPosition common.SnapshotPosition
+		workers      []*fetchWorker
 		config       snapshotIteratorConfig
 	}
 	snapshotIteratorConfig struct {
@@ -70,7 +69,7 @@ type (
 	}
 )
 
-func (config *snapshotIteratorConfig) init() error {
+func (config *snapshotIteratorConfig) validate() error {
 	if config.startPosition == nil {
 		config.startPosition = &common.SnapshotPosition{
 			Snapshots: map[common.TableName]common.TablePosition{},
@@ -78,7 +77,7 @@ func (config *snapshotIteratorConfig) init() error {
 	}
 
 	if config.fetchSize == 0 {
-		config.fetchSize = defaultFetchSize
+		config.fetchSize = common.DefaultFetchSize
 	}
 
 	if config.database == "" {
@@ -91,15 +90,12 @@ func (config *snapshotIteratorConfig) init() error {
 	return nil
 }
 
-func newSnapshotIterator(
-	ctx context.Context,
-	config snapshotIteratorConfig,
-) (common.Iterator, error) {
-	if err := config.init(); err != nil {
+func newSnapshotIterator(config snapshotIteratorConfig) (*snapshotIterator, error) {
+	if err := config.validate(); err != nil {
 		return nil, fmt.Errorf("invalid snapshot iterator config: %w", err)
 	}
 
-	// start position is mutable, so in order to avoid unexpected behaviour in
+	// Start position is mutable, so in order to avoid unexpected behaviour in
 	// tests we clone it.
 	lastPosition := config.startPosition.Clone()
 
@@ -111,19 +107,40 @@ func newSnapshotIterator(
 		lastPosition: lastPosition,
 	}
 
-	for table, primaryKey := range config.tableKeys {
-		worker := newFetchWorker(iterator.config.db, iterator.data, fetchWorkerConfig{
-			lastPosition: iterator.lastPosition,
+	return iterator, nil
+}
+
+// setupWorkers collects and sets up the snapshot fetch workers. It is separated
+// from the start method so that we can lock and unlock the given tables without
+// starting up the workers.
+func (s *snapshotIterator) setupWorkers(ctx context.Context) error {
+	for table, primaryKey := range s.config.tableKeys {
+		worker := newFetchWorker(s.config.db, s.data, fetchWorkerConfig{
+			lastPosition: s.lastPosition,
 			table:        table,
-			fetchSize:    iterator.config.fetchSize,
+			fetchSize:    s.config.fetchSize,
 			primaryKey:   primaryKey,
 		})
-		iterator.t.Go(func() error {
-			return worker.run(ctx)
-		})
+
+		if err := worker.fetchStartEnd(ctx); err != nil {
+			return fmt.Errorf("failed to start worker: %w", err)
+		}
+
+		s.workers = append(s.workers, worker)
 	}
 
-	return iterator, nil
+	return nil
+}
+
+func (s *snapshotIterator) start(ctx context.Context) {
+	for _, worker := range s.workers {
+		s.t.Go(func() error {
+			ctx := s.t.Context(ctx)
+			return worker.run(ctx)
+		})
+
+		sdk.Logger(ctx).Info().Msgf("started worker for table %s", worker.config.table)
+	}
 }
 
 func (s *snapshotIterator) Next(ctx context.Context) (rec opencdc.Record, err error) {
@@ -163,6 +180,12 @@ func (s *snapshotIterator) Teardown(ctx context.Context) error {
 		return fmt.Errorf("failed to wait for snapshot acks: %w", err)
 	}
 
+	// waiting for the workers to finish will allow us to have an easier time
+	// debugging goroutine leaks.
+	_ = s.t.Wait()
+
+	sdk.Logger(ctx).Info().Msg("all workers done, teared down snapshot iterator")
+
 	return nil
 }
 
@@ -177,43 +200,4 @@ func (s *snapshotIterator) buildRecord(d fetchData) opencdc.Record {
 	key := d.key.ToSDKData()
 
 	return sdk.Util.Source.NewRecordSnapshot(pos, metadata, key, d.payload)
-}
-
-func getPrimaryKey(db *sqlx.DB, database, table string) (common.PrimaryKeyName, error) {
-	var primaryKey struct {
-		ColumnName common.PrimaryKeyName `db:"COLUMN_NAME"`
-	}
-
-	row := db.QueryRowx(`
-		SELECT COLUMN_NAME 
-		FROM information_schema.key_column_usage 
-		WHERE 
-			constraint_name = 'PRIMARY' 
-			AND table_schema = ?
-			AND table_name = ?
-	`, database, table)
-
-	if err := row.StructScan(&primaryKey); err != nil {
-		return "", fmt.Errorf("failed to get primary key from table %s: %w", table, err)
-	}
-	if err := row.Err(); err != nil {
-		return "", fmt.Errorf("failed to scan primary key from table %s: %w", table, err)
-	}
-
-	return primaryKey.ColumnName, nil
-}
-
-func getTableKeys(db *sqlx.DB, database string, tables []string) (common.TableKeys, error) {
-	tableKeys := make(common.TableKeys)
-
-	for _, table := range tables {
-		primaryKey, err := getPrimaryKey(db, database, table)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get primary key for table %q: %w", table, err)
-		}
-
-		tableKeys[common.TableName(table)] = primaryKey
-	}
-
-	return tableKeys, nil
 }

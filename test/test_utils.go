@@ -16,32 +16,48 @@ package testutils
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"reflect"
 	"testing"
+	"time"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	"github.com/conduitio/conduit-commons/opencdc"
-	"github.com/gookit/goutil/dump"
+	"github.com/go-mysql-org/go-mysql/canal"
+	"github.com/go-sql-driver/mysql"
+	"github.com/google/go-cmp/cmp"
 	"github.com/jmoiron/sqlx"
 	"github.com/matryer/is"
 	"github.com/rs/zerolog"
 )
 
-var cachedConnection *sqlx.DB
+const DSN = "root:meroxaadmin@tcp(127.0.0.1:3306)/meroxadb?parseTime=true"
 
-func Connection(is *is.I) *sqlx.DB {
-	if cachedConnection != nil {
-		return cachedConnection
+var ServerID = getTestServerID()
+
+func getTestServerID() common.ServerID {
+	db, err := sqlx.Open("mysql", DSN)
+	if err != nil {
+		panic(err)
 	}
 
-	db, err := sqlx.Open("mysql", "root:meroxaadmin@tcp(127.0.0.1:3306)/meroxadb?parseTime=true")
+	serverID, err := common.GetServerID(context.Background(), db)
+	if err != nil {
+		panic(err)
+	}
+
+	return serverID
+}
+
+func Connection(t *testing.T) *sqlx.DB {
+	is := is.New(t)
+	db, err := sqlx.Open("mysql", DSN)
 	is.NoErr(err)
 
-	cachedConnection = db
+	t.Cleanup(func() {
+		is.NoErr(db.Close())
+	})
 
-	return cachedConnection
+	return db
 }
 
 func TestContext(t *testing.T) context.Context {
@@ -49,15 +65,21 @@ func TestContext(t *testing.T) context.Context {
 	return logger.WithContext(context.Background())
 }
 
+func TestContextNoTraceLog(t *testing.T) context.Context {
+	logger := zerolog.New(zerolog.NewTestWriter(t))
+
+	return logger.Level(zerolog.DebugLevel).WithContext(context.Background())
+}
+
 var TableKeys = map[common.TableName]common.PrimaryKeyName{
 	"users": "id",
 }
 
 type User struct {
-	ID        int    `db:"id"`
-	Username  string `db:"username"`
-	Email     string `db:"email"`
-	CreatedAt string `db:"created_at"`
+	ID        int64     `db:"id"`
+	Username  string    `db:"username"`
+	Email     string    `db:"email"`
+	CreatedAt time.Time `db:"created_at"`
 }
 
 func (u User) Update() User {
@@ -71,7 +93,7 @@ func (u User) ToStructuredData() opencdc.StructuredData {
 		"id":         u.ID,
 		"username":   u.Username,
 		"email":      u.Email,
-		"created_at": u.CreatedAt,
+		"created_at": u.CreatedAt.UTC().Format(time.RFC3339),
 	}
 }
 
@@ -83,7 +105,7 @@ func (UsersTable) Recreate(is *is.I, db *sqlx.DB) {
 
 	_, err = db.Exec(`
 	CREATE TABLE users (
-		id INT AUTO_INCREMENT PRIMARY KEY,
+		id BIGINT AUTO_INCREMENT PRIMARY KEY,
 		username VARCHAR(255) NOT NULL,
 		email VARCHAR(255) NOT NULL,
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -132,13 +154,14 @@ func ReadAndAssertInsert(
 	ctx context.Context, is *is.I,
 	iterator common.Iterator, user User,
 ) opencdc.Record {
+	is.Helper()
 	rec, err := iterator.Next(ctx)
 	is.NoErr(err)
 	is.NoErr(iterator.Ack(ctx, rec.Position))
 
 	is.Equal(rec.Operation, opencdc.OperationCreate)
 
-	assertMetadata(ctx, is, rec.Metadata)
+	assertMetadata(is, rec.Metadata)
 
 	IsDataEqual(is, rec.Key, opencdc.StructuredData{"id": user.ID})
 	IsDataEqual(is, rec.Payload.After, user.ToStructuredData())
@@ -150,13 +173,14 @@ func ReadAndAssertUpdate(
 	ctx context.Context, is *is.I,
 	iterator common.Iterator, prev, next User,
 ) {
+	is.Helper()
 	rec, err := iterator.Next(ctx)
 	is.NoErr(err)
 	is.NoErr(iterator.Ack(ctx, rec.Position))
 
 	is.Equal(rec.Operation, opencdc.OperationUpdate)
 
-	assertMetadata(ctx, is, rec.Metadata)
+	assertMetadata(is, rec.Metadata)
 
 	IsDataEqual(is, rec.Key, opencdc.StructuredData{"id": prev.ID})
 	IsDataEqual(is, rec.Key, opencdc.StructuredData{"id": next.ID})
@@ -169,57 +193,22 @@ func ReadAndAssertDelete(
 	ctx context.Context, is *is.I,
 	iterator common.Iterator, user User,
 ) {
+	is.Helper()
+
 	rec, err := iterator.Next(ctx)
 	is.NoErr(err)
 	is.NoErr(iterator.Ack(ctx, rec.Position))
 
 	is.Equal(rec.Operation, opencdc.OperationDelete)
 
-	assertMetadata(ctx, is, rec.Metadata)
+	assertMetadata(is, rec.Metadata)
 
 	IsDataEqual(is, rec.Key, opencdc.StructuredData{"id": user.ID})
 }
 
 func IsDataEqual(is *is.I, a, b opencdc.Data) {
-	if a == nil && b == nil {
-		return
-	}
-
-	if a == nil || b == nil {
-		is.Fail() // one of the data is nil
-	}
-
-	equal, err := JSONBytesEqual(a.Bytes(), b.Bytes())
-	is.NoErr(err)
-
-	// dump structured datas for easier debugging
-	if !equal {
-		if _, ok := a.(opencdc.StructuredData); ok {
-			dump.P(a)
-		} else {
-			fmt.Println(string(a.Bytes()))
-		}
-		if _, ok := b.(opencdc.StructuredData); ok {
-			dump.P(b)
-		} else {
-			fmt.Println(string(b.Bytes()))
-		}
-	}
-
-	is.True(equal) // compared datas are not equal
-}
-
-// JSONBytesEqual compares the JSON in two byte slices.
-func JSONBytesEqual(a, b []byte) (bool, error) {
-	var j, j2 interface{}
-	if err := json.Unmarshal(a, &j); err != nil {
-		return false, fmt.Errorf("failed to unmarshal first JSON: %w", err)
-	}
-	if err := json.Unmarshal(b, &j2); err != nil {
-		return false, fmt.Errorf("failed to unmarshal second JSON: %w", err)
-	}
-
-	return reflect.DeepEqual(j2, j), nil
+	is.Helper()
+	is.Equal("", cmp.Diff(a, b))
 }
 
 func ReadAndAssertSnapshot(
@@ -233,35 +222,42 @@ func ReadAndAssertSnapshot(
 
 	is.Equal(rec.Operation, opencdc.OperationSnapshot)
 
-	assertMetadata(ctx, is, rec.Metadata)
+	assertMetadata(is, rec.Metadata)
 
 	IsDataEqual(is, rec.Key, opencdc.StructuredData{"id": user.ID})
 	IsDataEqual(is, rec.Payload.After, user.ToStructuredData())
 }
 
-func AssertUserSnapshot(ctx context.Context, is *is.I, user User, rec opencdc.Record) {
+func AssertUserSnapshot(is *is.I, user User, rec opencdc.Record) {
+	is.Helper()
 	is.Equal(rec.Operation, opencdc.OperationSnapshot)
 
-	assertMetadata(ctx, is, rec.Metadata)
+	assertMetadata(is, rec.Metadata)
 
 	IsDataEqual(is, rec.Key, opencdc.StructuredData{"id": user.ID})
 	IsDataEqual(is, rec.Payload.After, user.ToStructuredData())
 }
 
-func assertMetadata(ctx context.Context, is *is.I, metadata opencdc.Metadata) {
+func assertMetadata(is *is.I, metadata opencdc.Metadata) {
 	col, err := metadata.GetCollection()
 	is.NoErr(err)
 	is.Equal(col, "users")
 
-	expectedServerID := GetServerID(ctx, is)
-
-	is.Equal(common.ServerID(metadata[common.ServerIDKey]), expectedServerID)
+	is.Equal(common.ServerID(metadata[common.ServerIDKey]), ServerID)
 }
 
-func GetServerID(ctx context.Context, is *is.I) common.ServerID {
-	db := Connection(is)
-	serverID, err := common.GetServerID(ctx, db)
+func NewCanal(ctx context.Context, is *is.I) *canal.Canal {
+	is.Helper()
+
+	config, err := mysql.ParseDSN(DSN)
 	is.NoErr(err)
 
-	return serverID
+	canal, err := common.NewCanal(ctx, common.CanalConfig{
+		Config:         config,
+		Tables:         []string{"users"},
+		DisableLogging: true,
+	})
+	is.NoErr(err)
+
+	return canal
 }

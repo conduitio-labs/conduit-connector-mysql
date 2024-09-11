@@ -18,9 +18,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	"github.com/conduitio/conduit-commons/opencdc"
+	sdk "github.com/conduitio/conduit-connector-sdk"
+	mysqldriver "github.com/go-sql-driver/mysql"
+	"github.com/jmoiron/sqlx"
 )
 
 type combinedIterator struct {
@@ -31,28 +35,91 @@ type combinedIterator struct {
 }
 
 type combinedIteratorConfig struct {
-	snapshotConfig snapshotIteratorConfig
-	cdcConfig      cdcIteratorConfig
+	db                    *sqlx.DB
+	tableKeys             common.TableKeys
+	fetchSize             int
+	startSnapshotPosition *common.SnapshotPosition
+	startCdcPosition      *common.CdcPosition
+	database              string
+	tables                []string
+	serverID              common.ServerID
+	mysqlConfig           *mysqldriver.Config
+	disableCanalLogging   bool
 }
 
 func newCombinedIterator(
 	ctx context.Context,
 	config combinedIteratorConfig,
 ) (common.Iterator, error) {
-	iterator := &combinedIterator{}
-	var err error
-
-	iterator.cdcIterator, err = newCdcIterator(ctx, config.cdcConfig)
+	cdcIterator, err := newCdcIterator(ctx, cdcIteratorConfig{
+		tables:              config.tables,
+		mysqlConfig:         config.mysqlConfig,
+		tableKeys:           config.tableKeys,
+		disableCanalLogging: config.disableCanalLogging,
+		db:                  config.db,
+		startPosition:       config.startCdcPosition,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cdc iterator: %w", err)
 	}
 
-	iterator.snapshotIterator, err = newSnapshotIterator(ctx, config.snapshotConfig)
+	snapshotIterator, err := newSnapshotIterator(snapshotIteratorConfig{
+		db:            config.db,
+		tableKeys:     config.tableKeys,
+		fetchSize:     config.fetchSize,
+		startPosition: config.startSnapshotPosition,
+		database:      config.database,
+		tables:        config.tables,
+		serverID:      config.serverID,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create snapshot iterator: %w", err)
 	}
 
-	iterator.currentIterator = iterator.snapshotIterator
+	sdk.Logger(ctx).Info().Msg("locking tables to setup fetch workers and obtain cdc start position")
+
+	unlockTables, err := lockTables(ctx, config.db, config.tables)
+	if err != nil {
+		return nil, err
+	}
+
+	sdk.Logger(ctx).Info().Msg("locked tables")
+
+	if err := snapshotIterator.setupWorkers(ctx); err != nil {
+		return nil, err
+	}
+
+	sdk.Logger(ctx).Info().Msg("setup fetch workers")
+
+	if config.startCdcPosition == nil {
+		if err := cdcIterator.obtainStartPosition(); err != nil {
+			return nil, fmt.Errorf("failed to fetch start cdc position: %w", err)
+		}
+
+		sdk.Logger(ctx).Info().Msg("fetched cdc start position")
+	}
+
+	if err := unlockTables(); err != nil {
+		return nil, err
+	}
+
+	sdk.Logger(ctx).Info().Msg("unlocked tables")
+
+	snapshotIterator.start(ctx)
+
+	sdk.Logger(ctx).Info().Msg("started snapshot iterator")
+
+	if err := cdcIterator.start(); err != nil {
+		return nil, fmt.Errorf("failed to start cdc iterator: %w", err)
+	}
+
+	sdk.Logger(ctx).Info().Msg("started cdc iterator")
+
+	iterator := &combinedIterator{
+		snapshotIterator: snapshotIterator,
+		cdcIterator:      cdcIterator,
+		currentIterator:  snapshotIterator,
+	}
 
 	return iterator, nil
 }
@@ -89,4 +156,20 @@ func (c *combinedIterator) Teardown(ctx context.Context) error {
 	}
 
 	return errors.Join(errs...)
+}
+
+func lockTables(ctx context.Context, db *sqlx.DB, tables []string) (func() error, error) {
+	tableList := strings.Join(tables, ", ")
+
+	_, err := db.ExecContext(ctx, "FLUSH TABLES "+tableList+" WITH READ LOCK")
+	if err != nil {
+		return nil, fmt.Errorf("failed to flush tables and acquire lock: %w", err)
+	}
+
+	return func() error {
+		if _, err := db.ExecContext(ctx, "UNLOCK TABLES"); err != nil {
+			return fmt.Errorf("failed to unlock tables after getting cdc position: %w", err)
+		}
+		return nil
+	}, nil
 }

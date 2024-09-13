@@ -39,7 +39,7 @@ to capture detailed changes at the individual row level.
 
 | name     | description                                                                                                                                         | required | default value |
 | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------------- |
-| `url`    | The connection URL of the MySQL, in the following format: `[username[:password]@][protocol[(address)]]/dbname[?param1=value1&...&paramN=valueN]`    | true     |               |
+| `url`    | The connection URL of the MySQL, in the [following format](https://github.com/go-sql-driver/mysql?tab=readme-ov-file#dsn-data-source-name): `[username[:password]@][protocol[(address)]]/dbname[?param1=value1&...&paramN=valueN]`    | true     |               |
 | `tables` | The list of tables to pull data from                                                                                                                | true     |               |
 
 (\*): You can find more information

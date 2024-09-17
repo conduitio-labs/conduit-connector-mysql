@@ -37,14 +37,10 @@ to capture detailed changes at the individual row level.
 
 ### Configuration
 
-| name     | description                                                                                                                                         | required | default value |
-| -------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------------- |
+| name     | description                                                                                                                                                                                                                           | required | default value |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------------- |
 | `url`    | The connection URL of the MySQL, in the [following format](https://github.com/go-sql-driver/mysql?tab=readme-ov-file#dsn-data-source-name): `[username[:password]@][protocol[(address)]]/dbname[?param1=value1&...&paramN=valueN]`    | true     |               |
-| `tables` | The list of tables to pull data from                                                                                                                | true     |               |
-
-(\*): You can find more information
-[here](https://github.com/go-sql-driver/mysql?tab=readme-ov-file#dsn-data-source-name).
-For example: `username:password@tcp(127.0.0.1:3306)/dbname`
+| `tables` | The list of tables to pull data from                                                                                                                                                                                                  | true     |               |
 
 ## Requirements and compatibility
 

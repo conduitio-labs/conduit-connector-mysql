@@ -40,6 +40,8 @@ func FormatValue(val any) any {
 			return parsed.UTC().Format(time.RFC3339)
 		}
 		return s
+	case uint64:
+		return int64(val)
 	default:
 		return val
 	}

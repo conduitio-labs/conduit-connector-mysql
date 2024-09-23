@@ -77,6 +77,7 @@ var TableKeys = map[common.TableName]common.PrimaryKeyName{
 
 type User struct {
 	ID        int64     `db:"id"`
+	Age       int64     `db:"age"`
 	Username  string    `db:"username"`
 	Email     string    `db:"email"`
 	CreatedAt time.Time `db:"created_at"`
@@ -91,6 +92,7 @@ func (u User) Update() User {
 func (u User) ToStructuredData() opencdc.StructuredData {
 	return opencdc.StructuredData{
 		"id":         u.ID,
+		"age":        u.Age,
 		"username":   u.Username,
 		"email":      u.Email,
 		"created_at": u.CreatedAt.UTC().Format(time.RFC3339),
@@ -106,6 +108,7 @@ func (UsersTable) Recreate(is *is.I, db *sqlx.DB) {
 	_, err = db.Exec(`
 	CREATE TABLE users (
 		id BIGINT AUTO_INCREMENT PRIMARY KEY,
+		age BIGINT(20) UNSIGNED NOT NULL,
 		username VARCHAR(255) NOT NULL,
 		email VARCHAR(255) NOT NULL,
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -115,9 +118,9 @@ func (UsersTable) Recreate(is *is.I, db *sqlx.DB) {
 
 func (UsersTable) Insert(is *is.I, db *sqlx.DB, username string) User {
 	_, err := db.Exec(`
-		INSERT INTO users (username, email) 
-		VALUES (?, ?);
-	`, username, fmt.Sprint(username, "@example.com"))
+		INSERT INTO users (age, username, email)
+		VALUES (?, ?, ?);
+	`, 30, username, fmt.Sprint(username, "@example.com"))
 	is.NoErr(err)
 
 	var user User

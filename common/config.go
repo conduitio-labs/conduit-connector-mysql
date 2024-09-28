@@ -34,4 +34,8 @@ type SourceConfig struct {
 	FetchSize int `json:"fetchSize" default:"50000"`
 }
 
-const DefaultFetchSize = 50000
+const (
+	DefaultFetchSize = 50000
+	// AllTablesWildcard can be used if you'd like to listen to all tables.
+	AllTablesWildcard = "*"
+)

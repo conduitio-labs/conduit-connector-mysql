@@ -178,7 +178,7 @@ func (s *Source) getAndFilterTables(ctx context.Context, db *sqlx.DB, database s
 			return nil, err
 		}
 
-		if regexPattern == "*" {
+		if regexPattern == common.AllTablesWildcard {
 			for _, table := range tables {
 				includedTables[table] = true
 			}

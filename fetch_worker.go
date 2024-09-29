@@ -50,6 +50,9 @@ func newFetchWorker(db *sqlx.DB, data chan fetchData, config fetchWorkerConfig) 
 
 func (w *fetchWorker) fetchStartEnd(ctx context.Context) (err error) {
 	w.start = w.config.lastPosition.Snapshots[w.config.table].LastRead
+	if w.start == 0 {
+		w.start, err = w.getMinValue(ctx)
+	}
 	w.end, err = w.getMaxValue(ctx)
 	return err
 }
@@ -102,6 +105,33 @@ func (w *fetchWorker) run(ctx context.Context) (err error) {
 	}
 
 	return nil
+}
+
+// getMaxValue fetches the maximum value of the primary key from the table.
+func (w *fetchWorker) getMinValue(ctx context.Context) (int64, error) {
+	var minValueRow struct {
+		MinValue *int64 `db:"min_value"`
+	}
+
+	query := fmt.Sprintf(
+		"SELECT MIN(%s) as min_value FROM %s",
+		w.config.primaryKey, w.config.table,
+	)
+	row := w.db.QueryRowxContext(ctx, query)
+	if err := row.StructScan(&minValueRow); err != nil {
+		return 0, fmt.Errorf("failed to get min value: %w", err)
+	}
+
+	if err := row.Err(); err != nil {
+		return 0, fmt.Errorf("failed to get min value: %w", err)
+	}
+
+	if minValueRow.MinValue == nil {
+		// table is empty
+		return 0, nil
+	}
+
+	return *minValueRow.MinValue - 1, nil
 }
 
 // getMaxValue fetches the maximum value of the primary key from the table.

@@ -30,11 +30,9 @@ func (SourceConfig) Parameters() map[string]config.Parameter {
 		},
 		SourceConfigTables: {
 			Default:     "",
-			Description: "Tables represents the tables to read from.",
+			Description: "Regex patterns to match table names. Set Action to \"include\" to include or \"exclude\" to exclude. Defaults to all tables if nothing specified.",
 			Type:        config.ParameterTypeString,
-			Validations: []config.Validation{
-				config.ValidationRequired{},
-			},
+			Validations: []config.Validation{},
 		},
 		SourceConfigUrl: {
 			Default:     "",

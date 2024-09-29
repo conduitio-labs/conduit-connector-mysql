@@ -24,8 +24,8 @@ type Config struct {
 type SourceConfig struct {
 	Config
 
-	// Tables represents the tables to read from.
-	Tables []string `json:"tables" validate:"required"`
+	// Regex patterns to match table names. Set Action to "include" to include or "exclude" to exclude. Defaults to all tables if nothing specified.
+	Tables []string `json:"tables"`
 
 	// DisableCanalLogs disables verbose logs.
 	DisableCanalLogs bool `json:"disableCanalLogs"`

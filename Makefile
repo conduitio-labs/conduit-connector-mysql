@@ -4,6 +4,10 @@ VERSION=$(shell git describe --tags --dirty --always)
 build:
 	go build -ldflags "-X 'github.com/conduitio-labs/conduit-connector-mysql.version=${VERSION}'" -o conduit-connector-mysql cmd/connector/main.go
 
+.PHONY: build-debug
+build-debug:
+	go build -gcflags=all="-N -l" -ldflags="-X 'github.com/conduitio-labs/conduit-connector-mysql.version=${VERSION}'" -o conduit-connector-mysql cmd/connector/main.go
+
 .PHONY: test-integration
 test-integration: up-database
 	go test $(GOTEST_FLAGS) -v -race ./...; ret=$$?; \

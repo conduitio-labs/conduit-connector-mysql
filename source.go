@@ -73,7 +73,7 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 	sdk.Logger(ctx).Info().Msg("Detecting all tables...")
 	s.config.Tables, err = s.getAndFilterTables(ctx, s.db, s.configFromDsn.DBName)
 	if err != nil {
-		return fmt.Errorf("failed to connect to get all tables: %w", err)
+		return err
 	}
 
 	sdk.Logger(ctx).Info().
@@ -154,7 +154,6 @@ func (s *Source) getAndFilterTables(ctx context.Context, db *sqlx.DB, database s
 	rows, err := db.Queryx(query)
 
 	if err != nil {
-		sdk.Logger(ctx).Error().Err(err).Msg("failed to query tables")
 		return nil, fmt.Errorf("failed to query tables: %w", err)
 	}
 
@@ -171,9 +170,7 @@ func (s *Source) getAndFilterTables(ctx context.Context, db *sqlx.DB, database s
 	}
 
 	includedTables := make(map[string]bool)
-	for _, table := range tables {
-		includedTables[table] = true
-	}
+
 	// Iterate through all the rules
 	for _, rule := range s.config.Tables {
 		action, regexPattern, err := parseRule(rule)
@@ -181,24 +178,30 @@ func (s *Source) getAndFilterTables(ctx context.Context, db *sqlx.DB, database s
 			return nil, err
 		}
 
-		// Compile the regex
-		re, err := regexp.Compile(regexPattern)
-		if err != nil {
-			return nil, fmt.Errorf("invalid regex pattern: %w", err)
-		}
+		if regexPattern == "*" {
+			for _, table := range tables {
+				includedTables[table] = true
+			}
+		} else {
 
-		// Apply the rule to all tables
-		for _, table := range tables {
-			if re.MatchString(table) {
-				if action == Include {
-					includedTables[table] = true // Include this table
-				} else if action == Exclude {
-					includedTables[table] = false // Exclude this table
+			// Compile the regex
+			re, err := regexp.Compile(regexPattern)
+			if err != nil {
+				return nil, fmt.Errorf("invalid regex pattern: %w", err)
+			}
+
+			// Apply the rule to all tables
+			for _, table := range tables {
+				if re.MatchString(table) {
+					if action == Include {
+						includedTables[table] = true // Include this table
+					} else if action == Exclude {
+						includedTables[table] = false // Exclude this table
+					}
 				}
 			}
 		}
 	}
-
 	var result []string
 	// Collect all the tables that were included (true in map)
 	for table, included := range includedTables {

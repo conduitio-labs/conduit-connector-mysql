@@ -30,7 +30,7 @@ func (SourceConfig) Parameters() map[string]config.Parameter {
 		},
 		SourceConfigTables: {
 			Default:     "",
-			Description: "Regex patterns to match table names. Set Action to \"include\" to include or \"exclude\" to exclude. Defaults to all tables if nothing specified.",
+			Description: "Tables to be snapshotted. By default, all tables are included, but can be modified by adding a comma-separated string of regex patterns. They are applied in the order that they are provided, so the final regex supersedes all previous ones. To set an \"include\" regex, add \"+\" or nothing in front of the regex. To set an \"exclude\" regex, add \"-\" in front of the regex. e.g. \"-.*meta$, wp_postmeta\" will include all tables (by default), but exclude all tables ending with \"meta\" but include the table \"wp_postmeta\"",
 			Type:        config.ParameterTypeString,
 			Validations: []config.Validation{},
 		},

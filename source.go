@@ -173,16 +173,15 @@ func (s *Source) getAndFilterTables(ctx context.Context, db *sqlx.DB, database s
 
 	// Iterate through all the rules
 	for _, rule := range s.config.Tables {
-		action, regexPattern, err := parseRule(rule)
-		if err != nil {
-			return nil, err
-		}
-
-		if regexPattern == common.AllTablesWildcard {
+		if rule == common.AllTablesWildcard {
 			for _, table := range tables {
 				includedTables[table] = true
 			}
 		} else {
+			action, regexPattern, err := parseRule(rule)
+			if err != nil {
+				return nil, err
+			}
 
 			// Compile the regex
 			re, err := regexp.Compile(regexPattern)

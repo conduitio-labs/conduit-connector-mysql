@@ -85,7 +85,7 @@ func (w *fetchWorker) run(ctx context.Context) (err error) {
 
 		for _, row := range rows {
 			position := common.TablePosition{
-				LastRead:    start,
+				LastRead:    row[string(w.config.primaryKey)].(int64),
 				SnapshotEnd: end,
 			}
 			data, err := w.buildFetchData(row, position)
@@ -101,7 +101,7 @@ func (w *fetchWorker) run(ctx context.Context) (err error) {
 				)
 			}
 		}
-		start = rows[len(rows)-1][string(w.config.primaryKey)].(int64)
+		start = rows[len(rows)-1][string(w.config.primaryKey)].(int64) + 1
 	}
 
 	return nil

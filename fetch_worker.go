@@ -84,7 +84,6 @@ func (w *fetchWorker) run(ctx context.Context) (err error) {
 		}
 
 		for _, row := range rows {
-			start++
 			position := common.TablePosition{
 				LastRead:    start,
 				SnapshotEnd: end,
@@ -102,6 +101,7 @@ func (w *fetchWorker) run(ctx context.Context) (err error) {
 				)
 			}
 		}
+		start = rows[len(rows)-1][string(w.config.primaryKey)].(int64)
 	}
 
 	return nil
@@ -146,7 +146,7 @@ func (w *fetchWorker) getMaxValue(ctx context.Context) (int64, error) {
 	)
 	row := w.db.QueryRowxContext(ctx, query)
 	if err := row.StructScan(&maxValueRow); err != nil {
-		return 0, fmt.Errorf("failed to get max value: %w", err)
+		return 0, fmt.Errorf("failed to get max value from primary key %s in %s: %w", w.config.primaryKey, w.config.table, err)
 	}
 
 	if err := row.Err(); err != nil {
@@ -171,6 +171,7 @@ func (w *fetchWorker) selectRowsChunk(
 		WHERE `, w.config.primaryKey, ` > ? AND `, w.config.primaryKey, ` <= ?
 		ORDER BY `, w.config.primaryKey, ` LIMIT ?
 	`)
+
 	logDataEvt := sdk.Logger(ctx).Debug().
 		Any("data", opencdc.StructuredData{
 			"query":     query,

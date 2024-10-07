@@ -50,9 +50,21 @@ func newFetchWorker(db *sqlx.DB, data chan fetchData, config fetchWorkerConfig) 
 }
 
 func (w *fetchWorker) fetchStartEnd(ctx context.Context) (err error) {
-	w.start = w.config.lastPosition.Snapshots[w.config.table].LastRead
-	w.end, err = w.getMaxValue(ctx)
-	return err
+	lastRead := w.config.lastPosition.Snapshots[w.config.table].LastRead
+	minVal, maxVal, err := w.getMinMaxValue(ctx)
+	if err != nil {
+		return err
+	}
+
+	if lastRead > minVal {
+		// last read takes preference, as previous records where already fetched
+		w.start = lastRead
+	} else {
+		w.start = minVal
+	}
+	w.end = maxVal
+
+	return nil
 }
 
 func (w *fetchWorker) run(ctx context.Context) (err error) {
@@ -71,21 +83,32 @@ func (w *fetchWorker) run(ctx context.Context) (err error) {
 
 	defer func() { err = errors.Join(err, tx.Commit()) }()
 
-	start, end := w.start, w.end
-	for {
-		rows, err := w.selectRowsChunk(ctx, tx, start, end)
+	sdk.Logger(ctx).Info().
+		Int64("start", w.start).
+		Int64("end", w.end).
+		Int64("fetchSize", w.config.fetchSize).
+		Msg("fetching rows")
+
+	for chunkStart := w.start; chunkStart <= w.end; chunkStart += w.config.fetchSize {
+		chunkEnd := chunkStart + w.config.fetchSize
+		sdk.Logger(ctx).Info().
+			Int64("start", chunkStart).
+			// the where clause is exclusive on the end
+			Int64("end", chunkEnd-1).
+			Msg("fetching new rows chunk")
+		rows, err := w.selectRowsChunk(ctx, tx, chunkStart, chunkEnd)
 		if err != nil {
 			return fmt.Errorf("failed to select rows chunk: %w", err)
 		}
 		if len(rows) == 0 {
-			break
+			continue
 		}
 
 		for _, row := range rows {
-			start++
+			sdk.Logger(ctx).Trace().Msgf("fetched row: %+v", row)
 			position := common.TablePosition{
-				LastRead:    start,
-				SnapshotEnd: end,
+				LastRead:    chunkStart,
+				SnapshotEnd: w.end,
 			}
 			data, err := w.buildFetchData(row, position)
 			if err != nil {
@@ -105,31 +128,53 @@ func (w *fetchWorker) run(ctx context.Context) (err error) {
 	return nil
 }
 
-// getMaxValue fetches the maximum value of the primary key from the table.
-func (w *fetchWorker) getMaxValue(ctx context.Context) (int64, error) {
+// getMinMaxValue fetches the maximum value of the primary key from the table.
+func (w *fetchWorker) getMinMaxValue(ctx context.Context) (minVal, maxVal int64, err error) {
+	var minValueRow struct {
+		MinValue *int64 `db:"min_value"`
+	}
+
+	query := fmt.Sprintf(
+		"SELECT MIN(%s) as min_value FROM %s",
+		w.config.primaryKey, w.config.table,
+	)
+	row := w.db.QueryRowxContext(ctx, query)
+	if err := row.StructScan(&minValueRow); err != nil {
+		return 0, 0, fmt.Errorf("failed to get min value: %w", err)
+	}
+
+	if err := row.Err(); err != nil {
+		return 0, 0, fmt.Errorf("failed to get min value: %w", err)
+	}
+
+	if minValueRow.MinValue == nil {
+		// table is empty
+		return 0, 0, nil
+	}
+
 	var maxValueRow struct {
 		MaxValue *int64 `db:"max_value"`
 	}
 
-	query := fmt.Sprintf(
+	query = fmt.Sprintf(
 		"SELECT MAX(%s) as max_value FROM %s",
 		w.config.primaryKey, w.config.table,
 	)
-	row := w.db.QueryRowxContext(ctx, query)
+	row = w.db.QueryRowxContext(ctx, query)
 	if err := row.StructScan(&maxValueRow); err != nil {
-		return 0, fmt.Errorf("failed to get max value: %w", err)
+		return 0, 0, fmt.Errorf("failed to get max value: %w", err)
 	}
 
 	if err := row.Err(); err != nil {
-		return 0, fmt.Errorf("failed to get max value: %w", err)
+		return 0, 0, fmt.Errorf("failed to get max value: %w", err)
 	}
 
 	if maxValueRow.MaxValue == nil {
 		// table is empty
-		return 0, nil
+		return 0, 0, nil
 	}
 
-	return *maxValueRow.MaxValue, nil
+	return *minValueRow.MinValue, *maxValueRow.MaxValue, nil
 }
 
 func (w *fetchWorker) selectRowsChunk(

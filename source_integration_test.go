@@ -16,6 +16,7 @@ package mysql
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
@@ -88,4 +89,93 @@ func TestSource_ConsistentSnapshot(t *testing.T) {
 	testutils.ReadAndAssertCreate(ctx, is, source, user5)
 	testutils.ReadAndAssertCreate(ctx, is, source, user6)
 	testutils.ReadAndAssertDelete(ctx, is, source, user4)
+}
+
+func TestSource_MultipleSnapshotFetches(t *testing.T) {
+	ctx := testutils.TestContext(t)
+	is := is.New(t)
+
+	db := testutils.Connection(t)
+
+	userTable.Recreate(is, db)
+
+	// insert 100 users, delete first 20 so that the min primary key code path
+	// is hit
+
+	var inserted []testutils.User
+	for i := 0; i < 100; i++ {
+		user := userTable.Insert(is, db, fmt.Sprint("user", i+1))
+		inserted = append(inserted, user)
+	}
+	toDelete := inserted[:20]
+	inserted = inserted[20:]
+
+	for _, user := range toDelete {
+		userTable.Delete(is, db, user)
+	}
+
+	source := &Source{}
+	err := source.Configure(ctx, config.Config{
+		common.SourceConfigUrl:              testutils.DSN,
+		common.SourceConfigTables:           "users",
+		common.SourceConfigDisableCanalLogs: "true",
+		common.SourceConfigFetchSize:        "10",
+	})
+	is.NoErr(err)
+
+	is.NoErr(source.Open(ctx, nil))
+
+	defer func() { is.NoErr(source.Teardown(ctx)) }()
+
+	sourceIterator := sourceIterator{source}
+
+	for _, user := range inserted {
+		testutils.ReadAndAssertSnapshot(ctx, is, sourceIterator, user)
+	}
+}
+
+func TestSource_EmptyChunkRead(t *testing.T) {
+	ctx := testutils.TestContext(t)
+	is := is.New(t)
+
+	db := testutils.Connection(t)
+
+	userTable.Recreate(is, db)
+
+	var inserted []testutils.User
+	for i := 0; i < 100; i++ {
+		user := userTable.Insert(is, db, fmt.Sprint("user", i+1))
+		inserted = append(inserted, user)
+	}
+
+	firstPart := inserted[:20]
+	secondPart := inserted[40:]
+	toDelete := inserted[20:40]
+
+	var expected []testutils.User
+	expected = append(expected, firstPart...)
+	expected = append(expected, secondPart...)
+
+	for _, user := range toDelete {
+		userTable.Delete(is, db, user)
+	}
+
+	source := &Source{}
+	err := source.Configure(ctx, config.Config{
+		common.SourceConfigUrl:              testutils.DSN,
+		common.SourceConfigTables:           "users",
+		common.SourceConfigDisableCanalLogs: "true",
+		common.SourceConfigFetchSize:        "10",
+	})
+	is.NoErr(err)
+
+	is.NoErr(source.Open(ctx, nil))
+
+	defer func() { is.NoErr(source.Teardown(ctx)) }()
+
+	sourceIterator := sourceIterator{source}
+
+	for _, user := range expected {
+		testutils.ReadAndAssertSnapshot(ctx, is, sourceIterator, user)
+	}
 }

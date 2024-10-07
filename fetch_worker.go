@@ -64,6 +64,11 @@ func (w *fetchWorker) fetchStartEnd(ctx context.Context) (err error) {
 	}
 	w.end = maxVal
 
+	sdk.Logger(ctx).Info().
+		Int64("start", w.start).
+		Int64("end", w.end).
+		Msg("fetched start and end")
+
 	return nil
 }
 
@@ -92,10 +97,10 @@ func (w *fetchWorker) run(ctx context.Context) (err error) {
 	for chunkStart := w.start; chunkStart <= w.end; chunkStart += w.config.fetchSize {
 		chunkEnd := chunkStart + w.config.fetchSize
 		sdk.Logger(ctx).Info().
-			Int64("start", chunkStart).
+			Int64("chunk start", chunkStart).
 			// the where clause is exclusive on the end
-			Int64("end", chunkEnd-1).
-			Msg("fetching new rows chunk")
+			Int64("chunk end", chunkEnd-1).
+			Msg("fetching chunk")
 		rows, err := w.selectRowsChunk(ctx, tx, chunkStart, chunkEnd)
 		if err != nil {
 			return fmt.Errorf("failed to select rows chunk: %w", err)
@@ -104,10 +109,10 @@ func (w *fetchWorker) run(ctx context.Context) (err error) {
 			continue
 		}
 
-		for _, row := range rows {
+		for i, row := range rows {
 			sdk.Logger(ctx).Trace().Msgf("fetched row: %+v", row)
 			position := common.TablePosition{
-				LastRead:    chunkStart,
+				LastRead:    chunkStart + int64(i) + 1,
 				SnapshotEnd: w.end,
 			}
 			data, err := w.buildFetchData(row, position)

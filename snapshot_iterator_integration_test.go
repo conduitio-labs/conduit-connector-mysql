@@ -185,8 +185,8 @@ func TestSnapshotIterator_RestartOnPosition(t *testing.T) {
 	var breakPosition opencdc.Position
 	{
 		it, cleanup := testSnapshotIterator(ctx, t, is)
-		defer cleanup()
 
+		var last opencdc.Record
 		for i := 0; i < 10; i++ {
 			rec, err := it.Next(ctx)
 			if errors.Is(err, ErrSnapshotIteratorDone) {
@@ -200,9 +200,13 @@ func TestSnapshotIterator_RestartOnPosition(t *testing.T) {
 
 			err = it.Ack(ctx, rec.Position)
 			is.NoErr(err)
+			last = rec
 		}
 
-		breakPosition = recs[len(recs)-1].Position
+		breakPosition = last.Position
+
+		// not deferring the call so that logs are easier to understand
+		cleanup()
 	}
 
 	// read the remaining 90 records

@@ -18,6 +18,8 @@ import (
 	"context"
 	"fmt"
 
+	"regexp"
+
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	"github.com/conduitio/conduit-commons/config"
 	"github.com/conduitio/conduit-commons/opencdc"
@@ -67,6 +69,17 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 	if err != nil {
 		return fmt.Errorf("failed to connect to mysql: %w", err)
 	}
+
+	sdk.Logger(ctx).Info().Msg("Detecting all tables...")
+	s.config.Tables, err = s.getAndFilterTables(ctx, s.db, s.configFromDsn.DBName)
+	if err != nil {
+		return err
+	}
+
+	sdk.Logger(ctx).Info().
+		Strs("tables", s.config.Tables).
+		Int("count", len(s.config.Tables)).
+		Msgf("Successfully detected tables")
 
 	tableKeys, err := getTableKeys(s.db, s.configFromDsn.DBName, s.config.Tables)
 	if err != nil {
@@ -135,6 +148,100 @@ func (s *Source) Teardown(ctx context.Context) error {
 	return nil
 }
 
+func (s *Source) getAndFilterTables(ctx context.Context, db *sqlx.DB, database string) ([]string, error) {
+	query := fmt.Sprintf("SELECT table_name	FROM information_schema.tables	WHERE table_schema = '%s'", database)
+
+	rows, err := db.Queryx(query)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to query tables: %w", err)
+	}
+
+	var tables []string
+	for rows.Next() {
+		var tableName string
+		if err := rows.Scan(&tableName); err != nil {
+			return nil, fmt.Errorf("failed to scan table name: %w", err)
+		}
+		tables = append(tables, tableName)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows error: %w", err)
+	}
+
+	includedTables := make(map[string]bool)
+
+	// Iterate through all the rules
+	for _, rule := range s.config.Tables {
+		if rule == common.AllTablesWildcard {
+			for _, table := range tables {
+				includedTables[table] = true
+			}
+		} else {
+			action, regexPattern, err := parseRule(rule)
+			if err != nil {
+				return nil, err
+			}
+
+			// Compile the regex
+			re, err := regexp.Compile(regexPattern)
+			if err != nil {
+				return nil, fmt.Errorf("invalid regex pattern: %w", err)
+			}
+
+			// Apply the rule to all tables
+			for _, table := range tables {
+				if re.MatchString(table) {
+					if action == Include {
+						includedTables[table] = true // Include this table
+					} else if action == Exclude {
+						includedTables[table] = false // Exclude this table
+					}
+				}
+			}
+		}
+	}
+	var result []string
+	// Collect all the tables that were included (true in map)
+	for table, included := range includedTables {
+		if included {
+			result = append(result, table)
+		}
+	}
+
+	return result, nil
+}
+
+type Action int
+
+const (
+	Include Action = iota
+	Exclude
+)
+
+// Helper function to parse the rule and return the action and the regex pattern
+func parseRule(rule string) (Action, string, error) {
+	if len(rule) < 2 {
+		return Include, "", fmt.Errorf("invalid rule format: %s", rule)
+	}
+
+	var action Action
+	switch rule[0] {
+	case '+':
+		action = Include
+		rule = rule[1:] // Strip the prefix
+	case '-':
+		action = Exclude
+		rule = rule[1:] // Strip the prefix
+	default:
+		// No prefix means default to Include
+		action = Include
+	}
+
+	return action, rule, nil // Return action and regex (without the action prefix)
+}
+
+// function to get the primary key of a table
 func getPrimaryKey(db *sqlx.DB, database, table string) (common.PrimaryKeyName, error) {
 	var primaryKey struct {
 		ColumnName common.PrimaryKeyName `db:"COLUMN_NAME"`

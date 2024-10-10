@@ -24,8 +24,8 @@ type Config struct {
 type SourceConfig struct {
 	Config
 
-	// Tables represents the tables to read from.
-	Tables []string `json:"tables" validate:"required"`
+	// Tables to be snapshotted. By default, all tables are included, but can be modified by adding a comma-separated string of regex patterns. They are applied in the order that they are provided, so the final regex supersedes all previous ones. To set an "include" regex, add "+" or nothing in front of the regex. To set an "exclude" regex, add "-" in front of the regex. e.g. "-.*meta$, wp_postmeta" will include all tables (by default), but exclude all tables ending with "meta" but include the table "wp_postmeta"
+	Tables []string `json:"tables"`
 
 	// DisableCanalLogs disables verbose logs.
 	DisableCanalLogs bool `json:"disableCanalLogs"`
@@ -34,4 +34,8 @@ type SourceConfig struct {
 	FetchSize int `json:"fetchSize" default:"50000"`
 }
 
-const DefaultFetchSize = 50000
+const (
+	DefaultFetchSize = 50000
+	// AllTablesWildcard can be used if you'd like to listen to all tables.
+	AllTablesWildcard = "*"
+)

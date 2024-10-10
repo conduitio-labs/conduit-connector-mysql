@@ -90,9 +90,9 @@ func TestCDCIterator_InsertAction(t *testing.T) {
 	user2 := userTable.Insert(is, db, "user2")
 	user3 := userTable.Insert(is, db, "user3")
 
-	testutils.ReadAndAssertInsert(ctx, is, iterator, user1)
-	testutils.ReadAndAssertInsert(ctx, is, iterator, user2)
-	testutils.ReadAndAssertInsert(ctx, is, iterator, user3)
+	testutils.ReadAndAssertCreate(ctx, is, iterator, user1)
+	testutils.ReadAndAssertCreate(ctx, is, iterator, user2)
+	testutils.ReadAndAssertCreate(ctx, is, iterator, user3)
 }
 
 func TestCDCIterator_DeleteAction(t *testing.T) {
@@ -165,8 +165,8 @@ func TestCDCIterator_RestartOnPosition(t *testing.T) {
 	var latestPosition opencdc.Position
 
 	{ // read and ack 2 records
-		testutils.ReadAndAssertInsert(ctx, is, iterator, user1)
-		rec := testutils.ReadAndAssertInsert(ctx, is, iterator, user2)
+		testutils.ReadAndAssertCreate(ctx, is, iterator, user1)
+		rec := testutils.ReadAndAssertCreate(ctx, is, iterator, user2)
 		teardown()
 
 		latestPosition = rec.Position
@@ -179,7 +179,7 @@ func TestCDCIterator_RestartOnPosition(t *testing.T) {
 
 	user5 := userTable.Insert(is, db, "user5")
 
-	testutils.ReadAndAssertInsert(ctx, is, iterator, user3)
-	testutils.ReadAndAssertInsert(ctx, is, iterator, user4)
-	testutils.ReadAndAssertInsert(ctx, is, iterator, user5)
+	testutils.ReadAndAssertCreate(ctx, is, iterator, user3)
+	testutils.ReadAndAssertCreate(ctx, is, iterator, user4)
+	testutils.ReadAndAssertCreate(ctx, is, iterator, user5)
 }

@@ -147,6 +147,7 @@ func getPrimaryKey(db *sqlx.DB, database, table string) (string, error) {
 			constraint_name = 'PRIMARY'
 			AND table_schema = ?
 			AND table_name = ?
+			ORDER BY ORDINAL_POSITION DESC
 	`, database, table)
 
 	if err := row.StructScan(&primaryKey); err != nil {

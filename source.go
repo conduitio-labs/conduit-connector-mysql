@@ -68,6 +68,18 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 		return fmt.Errorf("failed to connect to mysql: %w", err)
 	}
 
+	if s.readingAllTables() {
+		sdk.Logger(ctx).Info().Msg("Detecting all tables...")
+		s.config.Tables, err = s.getAllTables(ctx, s.db, s.configFromDsn.DBName)
+		if err != nil {
+			return fmt.Errorf("failed to connect to get all tables: %w", err)
+		}
+		sdk.Logger(ctx).Info().
+			Strs("tables", s.config.Tables).
+			Int("count", len(s.config.Tables)).
+			Msgf("Successfully detected tables")
+	}
+
 	tableKeys, err := getTableKeys(s.db, s.configFromDsn.DBName, s.config.Tables)
 	if err != nil {
 		return fmt.Errorf("failed to get table keys: %w", err)
@@ -133,6 +145,34 @@ func (s *Source) Teardown(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func (s *Source) readingAllTables() bool {
+	return len(s.config.Tables) == 1 && s.config.Tables[0] == common.AllTablesWildcard
+}
+
+func (s *Source) getAllTables(ctx context.Context, db *sqlx.DB, database string) ([]string, error) {
+	query := fmt.Sprintf("SELECT table_name	FROM information_schema.tables	WHERE table_schema = '%s'", database)
+
+	rows, err := db.Queryx(query)
+
+	if err != nil {
+		sdk.Logger(ctx).Error().Err(err).Msg("failed to query tables")
+		return nil, fmt.Errorf("failed to query tables: %w", err)
+	}
+
+	var tables []string
+	for rows.Next() {
+		var tableName string
+		if err := rows.Scan(&tableName); err != nil {
+			return nil, fmt.Errorf("failed to scan table name: %w", err)
+		}
+		tables = append(tables, tableName)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows error: %w", err)
+	}
+	return tables, nil
 }
 
 func getPrimaryKey(db *sqlx.DB, database, table string) (common.PrimaryKeyName, error) {

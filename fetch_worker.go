@@ -50,6 +50,9 @@ func newFetchWorker(db *sqlx.DB, data chan fetchData, config fetchWorkerConfig) 
 
 func (w *fetchWorker) fetchStartEnd(ctx context.Context) (err error) {
 	w.start = w.config.lastPosition.Snapshots[w.config.table].LastRead
+	if w.start == 0 {
+		w.start, err = w.getMinValue(ctx)
+	}
 	w.end, err = w.getMaxValue(ctx)
 	return err
 }
@@ -81,9 +84,8 @@ func (w *fetchWorker) run(ctx context.Context) (err error) {
 		}
 
 		for _, row := range rows {
-			start++
 			position := common.TablePosition{
-				LastRead:    start,
+				LastRead:    row[string(w.config.primaryKey)].(int64),
 				SnapshotEnd: end,
 			}
 			data, err := w.buildFetchData(row, position)
@@ -99,9 +101,37 @@ func (w *fetchWorker) run(ctx context.Context) (err error) {
 				)
 			}
 		}
+		start = rows[len(rows)-1][string(w.config.primaryKey)].(int64) + 1
 	}
 
 	return nil
+}
+
+// getMaxValue fetches the maximum value of the primary key from the table.
+func (w *fetchWorker) getMinValue(ctx context.Context) (int64, error) {
+	var minValueRow struct {
+		MinValue *int64 `db:"min_value"`
+	}
+
+	query := fmt.Sprintf(
+		"SELECT MIN(%s) as min_value FROM %s",
+		w.config.primaryKey, w.config.table,
+	)
+	row := w.db.QueryRowxContext(ctx, query)
+	if err := row.StructScan(&minValueRow); err != nil {
+		return 0, fmt.Errorf("failed to get min value: %w", err)
+	}
+
+	if err := row.Err(); err != nil {
+		return 0, fmt.Errorf("failed to get min value: %w", err)
+	}
+
+	if minValueRow.MinValue == nil {
+		// table is empty
+		return 0, nil
+	}
+
+	return *minValueRow.MinValue - 1, nil
 }
 
 // getMaxValue fetches the maximum value of the primary key from the table.
@@ -116,7 +146,7 @@ func (w *fetchWorker) getMaxValue(ctx context.Context) (int64, error) {
 	)
 	row := w.db.QueryRowxContext(ctx, query)
 	if err := row.StructScan(&maxValueRow); err != nil {
-		return 0, fmt.Errorf("failed to get max value: %w", err)
+		return 0, fmt.Errorf("failed to get max value from primary key %s in %s: %w", w.config.primaryKey, w.config.table, err)
 	}
 
 	if err := row.Err(); err != nil {
@@ -141,6 +171,7 @@ func (w *fetchWorker) selectRowsChunk(
 		WHERE `, w.config.primaryKey, ` > ? AND `, w.config.primaryKey, ` <= ?
 		ORDER BY `, w.config.primaryKey, ` LIMIT ?
 	`)
+
 	logDataEvt := sdk.Logger(ctx).Debug().
 		Any("data", opencdc.StructuredData{
 			"query":     query,

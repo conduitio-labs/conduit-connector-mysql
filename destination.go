@@ -61,23 +61,23 @@ func (d *Destination) Open(_ context.Context) (err error) {
 }
 
 func (d *Destination) Write(ctx context.Context, recs []opencdc.Record) (int, error) {
-	for _, rec := range recs {
+	for i, rec := range recs {
 		switch rec.Operation {
 		case opencdc.OperationSnapshot:
 			if err := d.upsertRecord(ctx, rec); err != nil {
-				return 0, err
+				return i, err
 			}
 		case opencdc.OperationCreate:
 			if err := d.upsertRecord(ctx, rec); err != nil {
-				return 0, err
+				return i, err
 			}
 		case opencdc.OperationUpdate:
 			if err := d.upsertRecord(ctx, rec); err != nil {
-				return 0, err
+				return i, err
 			}
 		case opencdc.OperationDelete:
 			if err := d.deleteRecord(ctx, rec); err != nil {
-				return 0, err
+				return i, err
 			}
 		}
 	}

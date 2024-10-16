@@ -17,6 +17,7 @@ package common
 import (
 	"context"
 	"fmt"
+	"math"
 	"strconv"
 	"time"
 
@@ -40,6 +41,13 @@ func FormatValue(val any) any {
 			return parsed.UTC().Format(time.RFC3339)
 		}
 		return s
+	case uint64:
+		if val <= math.MaxInt64 {
+			return int64(val)
+		}
+
+		// this will make avro encoding fail, as it doesn't support uint64.
+		return val
 	default:
 		return val
 	}

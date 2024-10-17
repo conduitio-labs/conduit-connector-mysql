@@ -32,21 +32,7 @@ import (
 
 const DSN = "root:meroxaadmin@tcp(127.0.0.1:3306)/meroxadb?parseTime=true"
 
-var ServerID = getTestServerID()
-
-func getTestServerID() common.ServerID {
-	db, err := sqlx.Open("mysql", DSN)
-	if err != nil {
-		panic(err)
-	}
-
-	serverID, err := common.GetServerID(context.Background(), db)
-	if err != nil {
-		panic(err)
-	}
-
-	return serverID
-}
+var ServerID common.ServerID = "1"
 
 func Connection(t *testing.T) *sqlx.DB {
 	is := is.New(t)

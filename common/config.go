@@ -35,3 +35,15 @@ type SourceConfig struct {
 }
 
 const DefaultFetchSize = 50000
+
+//go:generate paramgen -output=paramgen_dest.go DestinationConfig
+
+type DestinationConfig struct {
+	Config
+
+	// Table is used as the target table into which records are inserted.
+	Table string `json:"table" validate:"required"`
+
+	// Key is the primary key of the specified table.
+	Key string `json:"key" validate:"required"`
+}

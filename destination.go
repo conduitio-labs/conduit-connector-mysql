@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Masterminds/squirrel"
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	"github.com/conduitio/conduit-commons/config"
 	"github.com/conduitio/conduit-commons/opencdc"
@@ -107,32 +108,37 @@ func (d *Destination) upsertRecord(ctx context.Context, rec opencdc.Record) erro
 	}
 
 	columns := make([]string, 0, len(payload))
-	placeholders := make([]string, 0, len(payload))
 	values := make([]any, 0, len(payload))
-	upsertList := make([]string, 0, len(payload))
 
 	for col, val := range payload {
 		columns = append(columns, col)
-		placeholders = append(placeholders, "?")
 		values = append(values, val)
-
-		upsertList = append(upsertList, fmt.Sprint(col, " = VALUES(", col, ")"))
 	}
 
-	query := fmt.Sprintf(`
-		INSERT INTO %s (%s)
-		VALUES (%s)
-		ON DUPLICATE KEY UPDATE %s;`,
-		d.config.Table, strings.Join(columns, ", "),
-		strings.Join(placeholders, ", "),
-		strings.Join(upsertList, ", "),
-	)
-	_, err := d.db.ExecContext(ctx, query, values...)
+	query := squirrel.Insert(d.config.Table).
+		Columns(columns...).
+		Values(values...).
+		Suffix("ON DUPLICATE KEY UPDATE " + buildUpsertSuffix(payload))
+
+	sql, args, err := query.ToSql()
 	if err != nil {
-		return fmt.Errorf("failed to insert record: %w", err)
+		return fmt.Errorf("failed to build query: %w", err)
+	}
+
+	_, err = d.db.ExecContext(ctx, sql, args...)
+	if err != nil {
+		return fmt.Errorf("failed to upsert record: %w", err)
 	}
 
 	return nil
+}
+
+func buildUpsertSuffix(upsertList map[string]interface{}) string {
+	parts := make([]string, 0, len(upsertList))
+	for col := range upsertList {
+		parts = append(parts, fmt.Sprintf("%s = VALUES(%s)", col, col))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func (d *Destination) deleteRecord(ctx context.Context, rec opencdc.Record) error {
@@ -141,14 +147,18 @@ func (d *Destination) deleteRecord(ctx context.Context, rec opencdc.Record) erro
 		return err
 	}
 
-	query := fmt.Sprintf(`
-		DELETE FROM %s
-		WHERE %s = ?;`,
-		d.config.Table, d.config.Key,
-	)
-	_, err = d.db.ExecContext(ctx, query, val)
+	query := squirrel.
+		Delete(d.config.Table).
+		Where(squirrel.Eq{d.config.Key: val})
+
+	sql, args, err := query.ToSql()
 	if err != nil {
-		return fmt.Errorf("failed to insert record: %w", err)
+		return fmt.Errorf("failed to build query: %w", err)
+	}
+
+	_, err = d.db.ExecContext(ctx, sql, args...)
+	if err != nil {
+		return fmt.Errorf("failed to delete record: %w", err)
 	}
 
 	return nil

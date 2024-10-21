@@ -136,7 +136,8 @@ func (w *fetchWorker) selectRowsChunk(
 	ctx context.Context, tx *sqlx.Tx,
 	start, end int64,
 ) (scannedRows []opencdc.StructuredData, err error) {
-	query, args, err := squirrel.Select("*").
+	query, args, err := squirrel.
+		Select("*").
 		From(string(w.config.table)).
 		Where(squirrel.Gt{(string(w.config.primaryKey)): start}).
 		Where(squirrel.LtOrEq{string(w.config.primaryKey): end}).

@@ -31,7 +31,19 @@ type SourceConfig struct {
 	DisableCanalLogs bool `json:"disableCanalLogs"`
 
 	// FetchSize limits how many rows should be retrieved on each database fetch.
-	FetchSize int `json:"fetchSize" default:"50000"`
+	FetchSize uint64 `json:"fetchSize" default:"50000"`
 }
 
 const DefaultFetchSize = 50000
+
+//go:generate paramgen -output=paramgen_dest.go DestinationConfig
+
+type DestinationConfig struct {
+	Config
+
+	// Table is used as the target table into which records are inserted.
+	Table string `json:"table" validate:"required"`
+
+	// Key is the primary key of the specified table.
+	Key string `json:"key" validate:"required"`
+}

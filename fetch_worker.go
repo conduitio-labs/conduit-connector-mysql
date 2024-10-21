@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/Masterminds/squirrel"
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	"github.com/conduitio/conduit-commons/opencdc"
 	sdk "github.com/conduitio/conduit-connector-sdk"
@@ -36,7 +37,7 @@ type fetchWorker struct {
 type fetchWorkerConfig struct {
 	lastPosition common.SnapshotPosition
 	table        common.TableName
-	fetchSize    int
+	fetchSize    uint64
 	primaryKey   common.PrimaryKeyName
 }
 
@@ -135,12 +136,18 @@ func (w *fetchWorker) selectRowsChunk(
 	ctx context.Context, tx *sqlx.Tx,
 	start, end int64,
 ) (scannedRows []opencdc.StructuredData, err error) {
-	query := fmt.Sprint(`
-		SELECT *
-		FROM `, w.config.table, `
-		WHERE `, w.config.primaryKey, ` > ? AND `, w.config.primaryKey, ` <= ?
-		ORDER BY `, w.config.primaryKey, ` LIMIT ?
-	`)
+	query, args, err := squirrel.
+		Select("*").
+		From(string(w.config.table)).
+		Where(squirrel.Gt{(string(w.config.primaryKey)): start}).
+		Where(squirrel.LtOrEq{string(w.config.primaryKey): end}).
+		OrderBy(string(w.config.primaryKey)).
+		Limit(w.config.fetchSize).
+		ToSql()
+	if err != nil {
+		return nil, fmt.Errorf("failed to build query: %w", err)
+	}
+
 	logDataEvt := sdk.Logger(ctx).Debug().
 		Any("data", opencdc.StructuredData{
 			"query":     query,
@@ -149,7 +156,7 @@ func (w *fetchWorker) selectRowsChunk(
 			"fetchSize": w.config.fetchSize,
 		})
 
-	rows, err := tx.QueryxContext(ctx, query, start, end, w.config.fetchSize)
+	rows, err := tx.QueryxContext(ctx, query, args...)
 	if err != nil {
 		logDataEvt.Msg("failed to query rows")
 		return nil, fmt.Errorf("failed to query rows: %w", err)

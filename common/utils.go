@@ -32,9 +32,9 @@ import (
 func FormatValue(val any) any {
 	switch val := val.(type) {
 	case time.Time:
-		return val.UTC().Format(time.RFC3339)
+		return val.UTC()
 	case *time.Time:
-		return val.UTC().Format(time.RFC3339)
+		return val.UTC()
 	case []uint8:
 		s := string(val)
 		if parsed, err := time.Parse(time.DateTime, s); err == nil {

@@ -61,7 +61,7 @@ type (
 	snapshotIteratorConfig struct {
 		db            *sqlx.DB
 		tableKeys     common.TableKeys
-		fetchSize     int
+		fetchSize     uint64
 		startPosition *common.SnapshotPosition
 		database      string
 		tables        []string

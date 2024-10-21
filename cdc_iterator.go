@@ -178,8 +178,7 @@ func (c *cdcIterator) buildRecord(e rowEvent) (opencdc.Record, error) {
 		position := pos.ToSDKPosition()
 		payload := buildPayload(e.Table.Columns, e.Rows[0])
 
-		table := common.TableName(e.Table.Name)
-		primaryKey := c.config.tableKeys[table]
+		primaryKey := c.config.tableKeys[e.Table.Name]
 
 		key, err := buildRecordKey(primaryKey, payload)
 		if err != nil {
@@ -192,8 +191,7 @@ func (c *cdcIterator) buildRecord(e rowEvent) (opencdc.Record, error) {
 
 		payload := buildPayload(e.Table.Columns, e.Rows[0])
 
-		table := common.TableName(e.Table.Name)
-		primaryKey := c.config.tableKeys[table]
+		primaryKey := c.config.tableKeys[e.Table.Name]
 
 		key, err := buildRecordKey(primaryKey, payload)
 		if err != nil {
@@ -206,8 +204,7 @@ func (c *cdcIterator) buildRecord(e rowEvent) (opencdc.Record, error) {
 		before := buildPayload(e.Table.Columns, e.Rows[0])
 		after := buildPayload(e.Table.Columns, e.Rows[1])
 
-		table := common.TableName(e.Table.Name)
-		primaryKey := c.config.tableKeys[table]
+		primaryKey := c.config.tableKeys[e.Table.Name]
 
 		key, err := buildRecordKey(primaryKey, before)
 		if err != nil {
@@ -221,15 +218,15 @@ func (c *cdcIterator) buildRecord(e rowEvent) (opencdc.Record, error) {
 }
 
 func buildRecordKey(
-	primaryKey common.PrimaryKeyName,
+	primaryKey string,
 	payload opencdc.StructuredData,
 ) (opencdc.StructuredData, error) {
-	val, ok := payload[string(primaryKey)]
+	val, ok := payload[primaryKey]
 	if !ok {
 		return nil, fmt.Errorf("key %s not found in payload", primaryKey)
 	}
 
-	return opencdc.StructuredData{string(primaryKey): val}, nil
+	return opencdc.StructuredData{primaryKey: val}, nil
 }
 
 type rowEvent struct {

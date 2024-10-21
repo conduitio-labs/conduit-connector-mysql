@@ -37,12 +37,12 @@ type combinedIterator struct {
 type combinedIteratorConfig struct {
 	db                    *sqlx.DB
 	tableKeys             common.TableKeys
-	fetchSize             int
+	fetchSize             uint64
 	startSnapshotPosition *common.SnapshotPosition
 	startCdcPosition      *common.CdcPosition
 	database              string
 	tables                []string
-	serverID              common.ServerID
+	serverID              string
 	mysqlConfig           *mysqldriver.Config
 	disableCanalLogging   bool
 }

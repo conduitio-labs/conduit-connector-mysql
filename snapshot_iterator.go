@@ -30,12 +30,12 @@ import (
 var ErrSnapshotIteratorDone = errors.New("snapshot complete")
 
 type snapshotKey struct {
-	Key   common.PrimaryKeyName `json:"key"`
-	Value any                   `json:"value"`
+	Key   string `json:"key"`
+	Value any    `json:"value"`
 }
 
 func (key snapshotKey) ToSDKData() opencdc.Data {
-	return opencdc.StructuredData{string(key.Key): key.Value}
+	return opencdc.StructuredData{key.Key: key.Value}
 }
 
 type (
@@ -46,7 +46,7 @@ type (
 	// iterator itself.
 	fetchData struct {
 		key      snapshotKey
-		table    common.TableName
+		table    string
 		payload  opencdc.StructuredData
 		position common.TablePosition
 	}
@@ -61,18 +61,18 @@ type (
 	snapshotIteratorConfig struct {
 		db            *sqlx.DB
 		tableKeys     common.TableKeys
-		fetchSize     int
+		fetchSize     uint64
 		startPosition *common.SnapshotPosition
 		database      string
 		tables        []string
-		serverID      common.ServerID
+		serverID      string
 	}
 )
 
 func (config *snapshotIteratorConfig) validate() error {
 	if config.startPosition == nil {
 		config.startPosition = &common.SnapshotPosition{
-			Snapshots: map[common.TableName]common.TablePosition{},
+			Snapshots: common.SnapshotPositions{},
 		}
 	}
 
@@ -194,8 +194,8 @@ func (s *snapshotIterator) buildRecord(d fetchData) opencdc.Record {
 
 	pos := s.lastPosition.ToSDKPosition()
 	metadata := make(opencdc.Metadata)
-	metadata.SetCollection(string(d.table))
-	metadata[common.ServerIDKey] = string(s.config.serverID)
+	metadata.SetCollection(d.table)
+	metadata[common.ServerIDKey] = s.config.serverID
 
 	key := d.key.ToSDKData()
 

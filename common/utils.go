@@ -32,9 +32,9 @@ import (
 func FormatValue(val any) any {
 	switch val := val.(type) {
 	case time.Time:
-		return val.UTC().Format(time.RFC3339)
+		return val.UTC()
 	case *time.Time:
-		return val.UTC().Format(time.RFC3339)
+		return val.UTC()
 	case []uint8:
 		s := string(val)
 		if parsed, err := time.Parse(time.DateTime, s); err == nil {
@@ -172,13 +172,9 @@ func (z zerologCanalLogger) Warnln(args ...any) {
 	z.logger.Warn().Msg(fmt.Sprintln(args...))
 }
 
-// ServerID will go to the record metadata, so it is easier to handle it as a
-// string.
-type ServerID string
-
 const ServerIDKey = "mysql.serverID"
 
-func GetServerID(ctx context.Context, db *sqlx.DB) (ServerID, error) {
+func GetServerID(ctx context.Context, db *sqlx.DB) (string, error) {
 	var serverIDRow struct {
 		ServerID uint64 `db:"server_id"`
 	}
@@ -190,5 +186,5 @@ func GetServerID(ctx context.Context, db *sqlx.DB) (ServerID, error) {
 
 	serverID := strconv.FormatUint(serverIDRow.ServerID, 10)
 
-	return ServerID(serverID), nil
+	return serverID, nil
 }

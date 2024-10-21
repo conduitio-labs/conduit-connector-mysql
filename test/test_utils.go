@@ -32,21 +32,7 @@ import (
 
 const DSN = "root:meroxaadmin@tcp(127.0.0.1:3306)/meroxadb?parseTime=true"
 
-var ServerID = getTestServerID()
-
-func getTestServerID() common.ServerID {
-	db, err := sqlx.Open("mysql", DSN)
-	if err != nil {
-		panic(err)
-	}
-
-	serverID, err := common.GetServerID(context.Background(), db)
-	if err != nil {
-		panic(err)
-	}
-
-	return serverID
-}
+var ServerID = "1"
 
 func Connection(t *testing.T) *sqlx.DB {
 	is := is.New(t)
@@ -71,7 +57,7 @@ func TestContextNoTraceLog(t *testing.T) context.Context {
 	return logger.Level(zerolog.DebugLevel).WithContext(context.Background())
 }
 
-var TableKeys = map[common.TableName]common.PrimaryKeyName{
+var TableKeys = common.TableKeys{
 	"users": "id",
 }
 
@@ -93,7 +79,7 @@ func (u User) ToStructuredData() opencdc.StructuredData {
 		"id":         u.ID,
 		"username":   u.Username,
 		"email":      u.Email,
-		"created_at": u.CreatedAt.UTC().Format(time.RFC3339),
+		"created_at": u.CreatedAt.UTC(),
 	}
 }
 
@@ -131,6 +117,18 @@ func (UsersTable) Insert(is *is.I, db *sqlx.DB, username string) User {
 	return user
 }
 
+func (UsersTable) Get(is *is.I, db *sqlx.DB, userID int64) User {
+	var user User
+	err := db.QueryRowx(`
+		SELECT *
+		FROM users
+		WHERE id = ?;
+	`, userID).StructScan(&user)
+	is.NoErr(err)
+
+	return user
+}
+
 func (UsersTable) Update(is *is.I, db *sqlx.DB, user User) User {
 	_, err := db.Exec(`
 		UPDATE users
@@ -150,7 +148,18 @@ func (UsersTable) Delete(is *is.I, db *sqlx.DB, user User) {
 	is.NoErr(err)
 }
 
-func ReadAndAssertInsert(
+func (UsersTable) CountUsers(is *is.I, db *sqlx.DB) int {
+	var count struct {
+		Total int `db:"total"`
+	}
+
+	err := db.QueryRowx("SELECT count(*) as total FROM users").StructScan(&count)
+	is.NoErr(err)
+
+	return count.Total
+}
+
+func ReadAndAssertCreate(
 	ctx context.Context, is *is.I,
 	iterator common.Iterator, user User,
 ) opencdc.Record {
@@ -172,7 +181,7 @@ func ReadAndAssertInsert(
 func ReadAndAssertUpdate(
 	ctx context.Context, is *is.I,
 	iterator common.Iterator, prev, next User,
-) {
+) opencdc.Record {
 	is.Helper()
 	rec, err := iterator.Next(ctx)
 	is.NoErr(err)
@@ -187,12 +196,14 @@ func ReadAndAssertUpdate(
 
 	IsDataEqual(is, rec.Payload.Before, prev.ToStructuredData())
 	IsDataEqual(is, rec.Payload.After, next.ToStructuredData())
+
+	return rec
 }
 
 func ReadAndAssertDelete(
 	ctx context.Context, is *is.I,
 	iterator common.Iterator, user User,
-) {
+) opencdc.Record {
 	is.Helper()
 
 	rec, err := iterator.Next(ctx)
@@ -204,6 +215,8 @@ func ReadAndAssertDelete(
 	assertMetadata(is, rec.Metadata)
 
 	IsDataEqual(is, rec.Key, opencdc.StructuredData{"id": user.ID})
+
+	return rec
 }
 
 func IsDataEqual(is *is.I, a, b opencdc.Data) {
@@ -214,7 +227,7 @@ func IsDataEqual(is *is.I, a, b opencdc.Data) {
 func ReadAndAssertSnapshot(
 	ctx context.Context, is *is.I,
 	iterator common.Iterator, user User,
-) {
+) opencdc.Record {
 	is.Helper()
 	rec, err := iterator.Next(ctx)
 	is.NoErr(err)
@@ -226,6 +239,8 @@ func ReadAndAssertSnapshot(
 
 	IsDataEqual(is, rec.Key, opencdc.StructuredData{"id": user.ID})
 	IsDataEqual(is, rec.Payload.After, user.ToStructuredData())
+
+	return rec
 }
 
 func AssertUserSnapshot(is *is.I, user User, rec opencdc.Record) {
@@ -243,7 +258,7 @@ func assertMetadata(is *is.I, metadata opencdc.Metadata) {
 	is.NoErr(err)
 	is.Equal(col, "users")
 
-	is.Equal(common.ServerID(metadata[common.ServerIDKey]), ServerID)
+	is.Equal(metadata[common.ServerIDKey], ServerID)
 }
 
 func NewCanal(ctx context.Context, is *is.I) *canal.Canal {

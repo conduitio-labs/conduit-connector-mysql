@@ -53,7 +53,7 @@ func (p SnapshotPosition) ToSDKPosition() opencdc.Position {
 
 func (p SnapshotPosition) Clone() SnapshotPosition {
 	var newPosition SnapshotPosition
-	newPosition.Snapshots = make(map[TableName]TablePosition)
+	newPosition.Snapshots = make(SnapshotPositions)
 	for k, v := range p.Snapshots {
 		newPosition.Snapshots[k] = v
 	}
@@ -68,7 +68,9 @@ func ParseSDKPosition(p opencdc.Position) (Position, error) {
 	return pos, nil
 }
 
-type SnapshotPositions map[TableName]TablePosition
+// SnapshotPositions represents the current snapshot status of every table
+// that has been snapshotted.
+type SnapshotPositions map[string]TablePosition
 
 type TablePosition struct {
 	LastRead    int64 `json:"last_read"`
@@ -76,6 +78,7 @@ type TablePosition struct {
 }
 
 type CdcPosition struct {
+	// Name represents the mysql binlog filename.
 	Name string `json:"name"`
 	Pos  uint32 `json:"pos"`
 }
@@ -98,3 +101,7 @@ func (p CdcPosition) ToSDKPosition() opencdc.Position {
 	}
 	return v
 }
+
+// TableKeys is a collection of associations between table names and primary key
+// names. Useful for retrieving primary key values from rows.
+type TableKeys map[string]string

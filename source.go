@@ -135,9 +135,9 @@ func (s *Source) Teardown(ctx context.Context) error {
 	return nil
 }
 
-func getPrimaryKey(db *sqlx.DB, database, table string) (common.PrimaryKeyName, error) {
+func getPrimaryKey(db *sqlx.DB, database, table string) (string, error) {
 	var primaryKey struct {
-		ColumnName common.PrimaryKeyName `db:"COLUMN_NAME"`
+		ColumnName string `db:"COLUMN_NAME"`
 	}
 
 	row := db.QueryRowx(`
@@ -168,7 +168,7 @@ func getTableKeys(db *sqlx.DB, database string, tables []string) (common.TableKe
 			return nil, fmt.Errorf("failed to get primary key for table %q: %w", table, err)
 		}
 
-		tableKeys[common.TableName(table)] = primaryKey
+		tableKeys[table] = primaryKey
 	}
 
 	return tableKeys, nil

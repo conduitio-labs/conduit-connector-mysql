@@ -3,6 +3,7 @@ module github.com/conduitio-labs/conduit-connector-mysql
 go 1.23.2
 
 require (
+	github.com/Masterminds/squirrel v1.5.4
 	github.com/conduitio/conduit-commons v0.4.0
 	github.com/conduitio/conduit-connector-sdk v0.11.0
 	github.com/go-sql-driver/mysql v1.8.1
@@ -17,7 +18,6 @@ require (
 require (
 	dario.cat/mergo v1.0.1 // indirect
 	github.com/Masterminds/semver v1.5.0 // indirect
-	github.com/Masterminds/squirrel v1.5.4 // indirect
 	github.com/cznic/mathutil v0.0.0-20181122101859-297441e03548 // indirect
 	github.com/hamba/avro/v2 v2.26.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect

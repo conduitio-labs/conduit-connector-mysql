@@ -37,7 +37,7 @@ type fetchWorker struct {
 type fetchWorkerConfig struct {
 	lastPosition common.SnapshotPosition
 	table        common.TableName
-	fetchSize    int
+	fetchSize    uint64
 	primaryKey   common.PrimaryKeyName
 }
 
@@ -142,7 +142,7 @@ func (w *fetchWorker) selectRowsChunk(
 		Where(squirrel.Gt{(string(w.config.primaryKey)): start}).
 		Where(squirrel.LtOrEq{string(w.config.primaryKey): end}).
 		OrderBy(string(w.config.primaryKey)).
-		Limit(uint64(w.config.fetchSize)).
+		Limit(w.config.fetchSize).
 		ToSql()
 	if err != nil {
 		return nil, fmt.Errorf("failed to build query: %w", err)

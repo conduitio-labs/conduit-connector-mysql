@@ -31,7 +31,7 @@ type SourceConfig struct {
 	DisableCanalLogs bool `json:"disableCanalLogs"`
 
 	// FetchSize limits how many rows should be retrieved on each database fetch.
-	FetchSize int `json:"fetchSize" default:"50000"`
+	FetchSize uint64 `json:"fetchSize" default:"50000"`
 }
 
 const DefaultFetchSize = 50000

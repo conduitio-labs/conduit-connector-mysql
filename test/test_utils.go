@@ -32,7 +32,7 @@ import (
 
 const DSN = "root:meroxaadmin@tcp(127.0.0.1:3306)/meroxadb?parseTime=true"
 
-var ServerID common.ServerID = "1"
+var ServerID = "1"
 
 func Connection(t *testing.T) *sqlx.DB {
 	is := is.New(t)
@@ -57,7 +57,7 @@ func TestContextNoTraceLog(t *testing.T) context.Context {
 	return logger.Level(zerolog.DebugLevel).WithContext(context.Background())
 }
 
-var TableKeys = map[common.TableName]common.PrimaryKeyName{
+var TableKeys = common.TableKeys{
 	"users": "id",
 }
 
@@ -258,7 +258,7 @@ func assertMetadata(is *is.I, metadata opencdc.Metadata) {
 	is.NoErr(err)
 	is.Equal(col, "users")
 
-	is.Equal(common.ServerID(metadata[common.ServerIDKey]), ServerID)
+	is.Equal(metadata[common.ServerIDKey], ServerID)
 }
 
 func NewCanal(ctx context.Context, is *is.I) *canal.Canal {

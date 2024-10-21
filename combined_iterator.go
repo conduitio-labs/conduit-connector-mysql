@@ -42,7 +42,7 @@ type combinedIteratorConfig struct {
 	startCdcPosition      *common.CdcPosition
 	database              string
 	tables                []string
-	serverID              common.ServerID
+	serverID              string
 	mysqlConfig           *mysqldriver.Config
 	disableCanalLogging   bool
 }

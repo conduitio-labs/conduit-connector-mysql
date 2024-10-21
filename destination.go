@@ -133,7 +133,7 @@ func (d *Destination) upsertRecord(ctx context.Context, rec opencdc.Record) erro
 	return nil
 }
 
-func buildUpsertSuffix(upsertList map[string]interface{}) string {
+func buildUpsertSuffix(upsertList opencdc.StructuredData) string {
 	parts := make([]string, 0, len(upsertList))
 	for col := range upsertList {
 		parts = append(parts, fmt.Sprintf("%s = VALUES(%s)", col, col))

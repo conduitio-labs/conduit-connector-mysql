@@ -172,13 +172,9 @@ func (z zerologCanalLogger) Warnln(args ...any) {
 	z.logger.Warn().Msg(fmt.Sprintln(args...))
 }
 
-// ServerID will go to the record metadata, so it is easier to handle it as a
-// string.
-type ServerID string
-
 const ServerIDKey = "mysql.serverID"
 
-func GetServerID(ctx context.Context, db *sqlx.DB) (ServerID, error) {
+func GetServerID(ctx context.Context, db *sqlx.DB) (string, error) {
 	var serverIDRow struct {
 		ServerID uint64 `db:"server_id"`
 	}
@@ -190,5 +186,5 @@ func GetServerID(ctx context.Context, db *sqlx.DB) (ServerID, error) {
 
 	serverID := strconv.FormatUint(serverIDRow.ServerID, 10)
 
-	return ServerID(serverID), nil
+	return serverID, nil
 }

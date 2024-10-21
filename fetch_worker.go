@@ -36,9 +36,9 @@ type fetchWorker struct {
 
 type fetchWorkerConfig struct {
 	lastPosition common.SnapshotPosition
-	table        common.TableName
+	table        string
 	fetchSize    uint64
-	primaryKey   common.PrimaryKeyName
+	primaryKey   string
 }
 
 func newFetchWorker(db *sqlx.DB, data chan fetchData, config fetchWorkerConfig) *fetchWorker {
@@ -138,10 +138,10 @@ func (w *fetchWorker) selectRowsChunk(
 ) (scannedRows []opencdc.StructuredData, err error) {
 	query, args, err := squirrel.
 		Select("*").
-		From(string(w.config.table)).
-		Where(squirrel.Gt{(string(w.config.primaryKey)): start}).
-		Where(squirrel.LtOrEq{string(w.config.primaryKey): end}).
-		OrderBy(string(w.config.primaryKey)).
+		From(w.config.table).
+		Where(squirrel.Gt{w.config.primaryKey: start}).
+		Where(squirrel.LtOrEq{w.config.primaryKey: end}).
+		OrderBy(w.config.primaryKey).
 		Limit(w.config.fetchSize).
 		ToSql()
 	if err != nil {
@@ -197,7 +197,7 @@ func (w *fetchWorker) buildFetchData(
 	payload opencdc.StructuredData,
 	position common.TablePosition,
 ) (fetchData, error) {
-	keyVal, ok := payload[string(w.config.primaryKey)]
+	keyVal, ok := payload[w.config.primaryKey]
 	if !ok {
 		return fetchData{}, fmt.Errorf("key %s not found in payload", w.config.primaryKey)
 	}

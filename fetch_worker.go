@@ -31,7 +31,7 @@ type fetchWorker struct {
 	db         *sqlx.DB
 	data       chan fetchData
 	config     fetchWorkerConfig
-	start, end int64
+	start, end uint64
 }
 
 type fetchWorkerConfig struct {
@@ -65,8 +65,8 @@ func (w *fetchWorker) fetchStartEnd(ctx context.Context) (err error) {
 	w.end = maxVal
 
 	sdk.Logger(ctx).Info().
-		Int64("start", w.start).
-		Int64("end", w.end).
+		Uint64("start", w.start).
+		Uint64("end", w.end).
 		Msg("fetched start and end")
 
 	return nil
@@ -89,17 +89,17 @@ func (w *fetchWorker) run(ctx context.Context) (err error) {
 	defer func() { err = errors.Join(err, tx.Commit()) }()
 
 	sdk.Logger(ctx).Info().
-		Int64("start", w.start).
-		Int64("end", w.end).
-		Int64("fetchSize", w.config.fetchSize).
+		Uint64("start", w.start).
+		Uint64("end", w.end).
+		Uint64("fetchSize", w.config.fetchSize).
 		Msg("fetching rows")
 
 	for chunkStart := w.start; chunkStart <= w.end; chunkStart += w.config.fetchSize {
 		chunkEnd := chunkStart + w.config.fetchSize
 		sdk.Logger(ctx).Info().
-			Int64("chunk start", chunkStart).
+			Uint64("chunk start", chunkStart).
 			// the where clause is exclusive on the end
-			Int64("chunk end", chunkEnd-1).
+			Uint64("chunk end", chunkEnd-1).
 			Msg("fetching chunk")
 		rows, err := w.selectRowsChunk(ctx, tx, chunkStart, chunkEnd)
 		if err != nil {
@@ -112,7 +112,8 @@ func (w *fetchWorker) run(ctx context.Context) (err error) {
 		for i, row := range rows {
 			sdk.Logger(ctx).Trace().Msgf("fetched row: %+v", row)
 			position := common.TablePosition{
-				LastRead:    chunkStart + int64(i) + 1,
+				//nolint:gosec // i will always be positive
+				LastRead:    chunkStart + uint64(i) + 1,
 				SnapshotEnd: w.end,
 			}
 			data, err := w.buildFetchData(row, position)
@@ -134,9 +135,9 @@ func (w *fetchWorker) run(ctx context.Context) (err error) {
 }
 
 // getMinMaxValue fetches the maximum value of the primary key from the table.
-func (w *fetchWorker) getMinMaxValue(ctx context.Context) (minVal, maxVal int64, err error) {
+func (w *fetchWorker) getMinMaxValue(ctx context.Context) (minVal, maxVal uint64, err error) {
 	var minValueRow struct {
-		MinValue *int64 `db:"min_value"`
+		MinValue *uint64 `db:"min_value"`
 	}
 
 	query := fmt.Sprintf(
@@ -158,7 +159,7 @@ func (w *fetchWorker) getMinMaxValue(ctx context.Context) (minVal, maxVal int64,
 	}
 
 	var maxValueRow struct {
-		MaxValue *int64 `db:"max_value"`
+		MaxValue *uint64 `db:"max_value"`
 	}
 
 	query = fmt.Sprintf(
@@ -184,13 +185,13 @@ func (w *fetchWorker) getMinMaxValue(ctx context.Context) (minVal, maxVal int64,
 
 func (w *fetchWorker) selectRowsChunk(
 	ctx context.Context, tx *sqlx.Tx,
-	start, end int64,
+	start, end uint64,
 ) (scannedRows []opencdc.StructuredData, err error) {
 	query, args, err := squirrel.
 		Select("*").
 		From(w.config.table).
-		Where(squirrel.Gt{w.config.primaryKey: start}).
-		Where(squirrel.LtOrEq{w.config.primaryKey: end}).
+		Where(squirrel.GtOrEq{w.config.primaryKey: start}).
+		Where(squirrel.Lt{w.config.primaryKey: end}).
 		OrderBy(w.config.primaryKey).
 		Limit(w.config.fetchSize).
 		ToSql()

@@ -102,7 +102,7 @@ func TestSource_ConsistentSnapshot(t *testing.T) {
 	testutils.ReadAndAssertDelete(ctx, is, source, user4)
 }
 
-func TestSource_MultipleSnapshotFetches(t *testing.T) {
+func TestSource_NonZeroSnapshotStart(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 
@@ -110,19 +110,14 @@ func TestSource_MultipleSnapshotFetches(t *testing.T) {
 
 	userTable.Recreate(is, db)
 
-	// insert 100 users, delete first 20 so that the min primary key code path
-	// is hit
+	// Insert 80 users starting from the 20th so that the starting gotten row is
+	// more than 0. This way we ensure a more realistic dataset, where first
+	// rows don't start from 0.
 
 	var inserted []testutils.User
-	for i := 0; i < 100; i++ {
+	for i := 20; i < 100; i++ {
 		user := userTable.Insert(is, db, fmt.Sprint("user", i+1))
 		inserted = append(inserted, user)
-	}
-	toDelete := inserted[:20]
-	inserted = inserted[20:]
-
-	for _, user := range toDelete {
-		userTable.Delete(is, db, user)
 	}
 
 	source, teardown := testSourceWithFetchSize(ctx, is, "10")

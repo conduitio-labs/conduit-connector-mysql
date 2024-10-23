@@ -27,18 +27,29 @@ import (
 	"github.com/matryer/is"
 )
 
-func testSource(ctx context.Context, is *is.I) (sourceIterator, func()) {
+func testSourceWithFetchSize(
+	ctx context.Context,
+	is *is.I, fetchSize string,
+) (sourceIterator, func()) {
 	source := &Source{}
-	err := source.Configure(ctx, config.Config{
+	cfg := config.Config{
 		common.SourceConfigUrl:              testutils.DSN,
 		common.SourceConfigTables:           "users",
 		common.SourceConfigDisableCanalLogs: "true",
-	})
+	}
+	if fetchSize != "" {
+		cfg[common.SourceConfigFetchSize] = fetchSize
+	}
+	err := source.Configure(ctx, cfg)
 	is.NoErr(err)
 
 	is.NoErr(source.Open(ctx, nil))
 
 	return sourceIterator{source}, func() { is.NoErr(source.Teardown(ctx)) }
+}
+
+func testSource(ctx context.Context, is *is.I) (sourceIterator, func()) {
+	return testSourceWithFetchSize(ctx, is, "")
 }
 
 type sourceIterator struct{ sdk.Source }
@@ -114,23 +125,11 @@ func TestSource_MultipleSnapshotFetches(t *testing.T) {
 		userTable.Delete(is, db, user)
 	}
 
-	source := &Source{}
-	err := source.Configure(ctx, config.Config{
-		common.SourceConfigUrl:              testutils.DSN,
-		common.SourceConfigTables:           "users",
-		common.SourceConfigDisableCanalLogs: "true",
-		common.SourceConfigFetchSize:        "10",
-	})
-	is.NoErr(err)
-
-	is.NoErr(source.Open(ctx, nil))
-
-	defer func() { is.NoErr(source.Teardown(ctx)) }()
-
-	sourceIterator := sourceIterator{source}
+	source, teardown := testSourceWithFetchSize(ctx, is, "10")
+	defer teardown()
 
 	for _, user := range inserted {
-		testutils.ReadAndAssertSnapshot(ctx, is, sourceIterator, user)
+		testutils.ReadAndAssertSnapshot(ctx, is, source, user)
 	}
 }
 
@@ -160,22 +159,10 @@ func TestSource_EmptyChunkRead(t *testing.T) {
 		userTable.Delete(is, db, user)
 	}
 
-	source := &Source{}
-	err := source.Configure(ctx, config.Config{
-		common.SourceConfigUrl:              testutils.DSN,
-		common.SourceConfigTables:           "users",
-		common.SourceConfigDisableCanalLogs: "true",
-		common.SourceConfigFetchSize:        "10",
-	})
-	is.NoErr(err)
-
-	is.NoErr(source.Open(ctx, nil))
-
-	defer func() { is.NoErr(source.Teardown(ctx)) }()
-
-	sourceIterator := sourceIterator{source}
+	source, teardown := testSourceWithFetchSize(ctx, is, "10")
+	defer teardown()
 
 	for _, user := range expected {
-		testutils.ReadAndAssertSnapshot(ctx, is, sourceIterator, user)
+		testutils.ReadAndAssertSnapshot(ctx, is, source, user)
 	}
 }

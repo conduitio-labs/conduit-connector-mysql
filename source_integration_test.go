@@ -16,6 +16,7 @@ package mysql
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
@@ -26,18 +27,29 @@ import (
 	"github.com/matryer/is"
 )
 
-func testSource(ctx context.Context, is *is.I) (sourceIterator, func()) {
+func testSourceWithFetchSize(
+	ctx context.Context,
+	is *is.I, fetchSize string,
+) (sourceIterator, func()) {
 	source := &Source{}
-	err := source.Configure(ctx, config.Config{
+	cfg := config.Config{
 		common.SourceConfigUrl:              testutils.DSN,
 		common.SourceConfigTables:           "users",
 		common.SourceConfigDisableCanalLogs: "true",
-	})
+	}
+	if fetchSize != "" {
+		cfg[common.SourceConfigFetchSize] = fetchSize
+	}
+	err := source.Configure(ctx, cfg)
 	is.NoErr(err)
 
 	is.NoErr(source.Open(ctx, nil))
 
 	return sourceIterator{source}, func() { is.NoErr(source.Teardown(ctx)) }
+}
+
+func testSource(ctx context.Context, is *is.I) (sourceIterator, func()) {
+	return testSourceWithFetchSize(ctx, is, "")
 }
 
 type sourceIterator struct{ sdk.Source }
@@ -88,4 +100,64 @@ func TestSource_ConsistentSnapshot(t *testing.T) {
 	testutils.ReadAndAssertCreate(ctx, is, source, user5)
 	testutils.ReadAndAssertCreate(ctx, is, source, user6)
 	testutils.ReadAndAssertDelete(ctx, is, source, user4)
+}
+
+func TestSource_NonZeroSnapshotStart(t *testing.T) {
+	ctx := testutils.TestContext(t)
+	is := is.New(t)
+
+	db := testutils.Connection(t)
+
+	userTable.Recreate(is, db)
+
+	// Insert 80 users starting from the 20th so that the starting row's primary key
+	// is greater than 0. This ensures a more realistic dataset where
+	// the first rows don't start at 0.
+
+	var inserted []testutils.User
+	for i := 20; i < 100; i++ {
+		user := userTable.Insert(is, db, fmt.Sprint("user", i+1))
+		inserted = append(inserted, user)
+	}
+
+	source, teardown := testSourceWithFetchSize(ctx, is, "10")
+	defer teardown()
+
+	for _, user := range inserted {
+		testutils.ReadAndAssertSnapshot(ctx, is, source, user)
+	}
+}
+
+func TestSource_EmptyChunkRead(t *testing.T) {
+	ctx := testutils.TestContext(t)
+	is := is.New(t)
+
+	db := testutils.Connection(t)
+
+	userTable.Recreate(is, db)
+
+	var inserted []testutils.User
+	for i := 0; i < 100; i++ {
+		user := userTable.Insert(is, db, fmt.Sprint("user", i+1))
+		inserted = append(inserted, user)
+	}
+
+	firstPart := inserted[:20]
+	secondPart := inserted[40:]
+	toDelete := inserted[20:40]
+
+	var expected []testutils.User
+	expected = append(expected, firstPart...)
+	expected = append(expected, secondPart...)
+
+	for _, user := range toDelete {
+		userTable.Delete(is, db, user)
+	}
+
+	source, teardown := testSourceWithFetchSize(ctx, is, "10")
+	defer teardown()
+
+	for _, user := range expected {
+		testutils.ReadAndAssertSnapshot(ctx, is, source, user)
+	}
 }

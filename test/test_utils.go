@@ -47,14 +47,9 @@ func Connection(t *testing.T) *sqlx.DB {
 }
 
 func TestContext(t *testing.T) context.Context {
-	logger := zerolog.New(zerolog.NewTestWriter(t))
+	writer := zerolog.NewTestWriter(t)
+	logger := zerolog.New(writer).Level(zerolog.InfoLevel)
 	return logger.WithContext(context.Background())
-}
-
-func TestContextNoTraceLog(t *testing.T) context.Context {
-	logger := zerolog.New(zerolog.NewTestWriter(t))
-
-	return logger.Level(zerolog.DebugLevel).WithContext(context.Background())
 }
 
 var TableKeys = common.TableKeys{

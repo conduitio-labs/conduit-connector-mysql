@@ -52,12 +52,6 @@ func TestContext(t *testing.T) context.Context {
 	return logger.WithContext(context.Background())
 }
 
-func TestContextNoTraceLog(t *testing.T) context.Context {
-	logger := zerolog.New(zerolog.NewTestWriter(t))
-
-	return logger.Level(zerolog.DebugLevel).WithContext(context.Background())
-}
-
 var TableKeys = common.TableKeys{
 	"users": "id",
 }

@@ -59,7 +59,7 @@ func (w *fetchWorker) fetchStartEnd(ctx context.Context) (err error) {
 	}
 
 	if lastRead > minVal {
-		// last read takes preference, as previous records where already fetched
+		// last read takes preference, as previous records where already fetched.
 		w.start = lastRead
 	} else {
 		w.start = minVal
@@ -125,7 +125,9 @@ func (w *fetchWorker) run(ctx context.Context) (err error) {
 			}
 
 			position := common.TablePosition{
-				LastRead:    lastRead,
+				// plus 1 so that we start reading from the correct place, otherwise
+				// we would read the same record twice on multiple snapshots
+				LastRead:    lastRead + 1,
 				SnapshotEnd: w.end,
 			}
 			data, err := w.buildFetchData(row, position)

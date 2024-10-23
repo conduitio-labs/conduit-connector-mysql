@@ -110,9 +110,9 @@ func TestSource_NonZeroSnapshotStart(t *testing.T) {
 
 	userTable.Recreate(is, db)
 
-	// Insert 80 users starting from the 20th so that the starting gotten row is
-	// more than 0. This way we ensure a more realistic dataset, where first
-	// rows don't start from 0.
+	// Insert 80 users starting from the 20th so that the starting row's primary key
+	// is greater than 0. This ensures a more realistic dataset where
+	// the first rows don't start at 0.
 
 	var inserted []testutils.User
 	for i := 20; i < 100; i++ {

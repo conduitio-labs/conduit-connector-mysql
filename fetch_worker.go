@@ -27,6 +27,8 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
+var ErrPrimaryKeyNotFoundInRow = errors.New("primary key not found in row")
+
 type fetchWorker struct {
 	db         *sqlx.DB
 	data       chan fetchData
@@ -109,11 +111,21 @@ func (w *fetchWorker) run(ctx context.Context) (err error) {
 			continue
 		}
 
-		for i, row := range rows {
+		for _, row := range rows {
 			sdk.Logger(ctx).Trace().Msgf("fetched row: %+v", row)
+
+			primaryKeyVal := row[w.config.primaryKey]
+			if primaryKeyVal == nil {
+				return ErrPrimaryKeyNotFoundInRow
+			}
+
+			lastRead, err := common.ConvertPrimaryKey(primaryKeyVal)
+			if err != nil {
+				return fmt.Errorf("failed to convert primary key: %w", err)
+			}
+
 			position := common.TablePosition{
-				//nolint:gosec // "i" will always be positive (no pun intended)
-				LastRead:    chunkStart + uint64(i) + 1,
+				LastRead:    lastRead,
 				SnapshotEnd: w.end,
 			}
 			data, err := w.buildFetchData(row, position)

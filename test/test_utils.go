@@ -48,8 +48,7 @@ func Connection(t *testing.T) *sqlx.DB {
 
 func TestContext(t *testing.T) context.Context {
 	writer := zerolog.NewTestWriter(t)
-	// logger := zerolog.New(writer).Level(zerolog.InfoLevel)
-	logger := zerolog.New(writer).Level(zerolog.TraceLevel)
+	logger := zerolog.New(writer).Level(zerolog.InfoLevel)
 	return logger.WithContext(context.Background())
 }
 

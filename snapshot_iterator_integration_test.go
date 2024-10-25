@@ -118,7 +118,7 @@ func TestSnapshotIterator_WithData(t *testing.T) {
 	testutils.RecreateUsersTable(is, db)
 
 	var users []testutils.User
-	for i := 0; i < 100; i++ {
+	for i := 1; i <= 100; i++ {
 		user := testutils.InsertUser(is, db, i)
 		users = append(users, user)
 	}
@@ -128,8 +128,8 @@ func TestSnapshotIterator_WithData(t *testing.T) {
 	iterator, cleanup := testSnapshotIterator(ctx, t, is)
 	defer cleanup()
 
-	for i := 0; i < 100; i++ {
-		testutils.ReadAndAssertSnapshot(ctx, is, iterator, users[i])
+	for i := 1; i <= 100; i++ {
+		testutils.ReadAndAssertSnapshot(ctx, is, iterator, users[i-1])
 	}
 
 	_, err := iterator.Next(ctx)
@@ -145,7 +145,7 @@ func TestSnapshotIterator_SmallFetchSize(t *testing.T) {
 	testutils.RecreateUsersTable(is, db)
 
 	var users []testutils.User
-	for i := 0; i < 100; i++ {
+	for i := 1; i <= 100; i++ {
 		user := testutils.InsertUser(is, db, i)
 		users = append(users, user)
 	}
@@ -155,8 +155,8 @@ func TestSnapshotIterator_SmallFetchSize(t *testing.T) {
 	iterator, cleanup := testSnapshotIterator(ctx, t, is)
 	defer cleanup()
 
-	for i := 0; i < 100; i++ {
-		testutils.ReadAndAssertSnapshot(ctx, is, iterator, users[i])
+	for i := 1; i <= 100; i++ {
+		testutils.ReadAndAssertSnapshot(ctx, is, iterator, users[i-1])
 	}
 
 	_, err := iterator.Next(ctx)

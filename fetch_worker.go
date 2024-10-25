@@ -124,9 +124,7 @@ func (w *fetchWorker) run(ctx context.Context) (err error) {
 			}
 
 			position := common.TablePosition{
-				// plus 1 so that we start reading from the correct place, otherwise
-				// we would read the same record twice on multiple snapshots
-				LastRead:    lastRead + 1,
+				LastRead:    lastRead,
 				SnapshotEnd: w.end,
 			}
 			data, err := w.buildFetchData(row, position)
@@ -150,12 +148,21 @@ func (w *fetchWorker) run(ctx context.Context) (err error) {
 // getMinMaxValue fetches the maximum value of the primary key from the table.
 func (w *fetchWorker) getMinMaxValue(ctx context.Context) (minVal, maxVal uint64, err error) {
 	var minmax struct {
-		MaxValue *uint64 `db:"max_value"`
 		MinValue *uint64 `db:"min_value"`
+		MaxValue *uint64 `db:"max_value"`
 	}
 
+	// We obtain the minimum value this way so that we can fetch rows exclusive
+	// (>) to inclusive (<=). This way, when we fetch rows we discard the last
+	// previous fetched row. The only way that this is invalid is if the id
+	// value is <= 0, which is highly unusual.
+	//
+	// We could also start from 0 every time, but then we might do a few more
+	// initial fetches than necessary for each snapshot in some edge cases. in
+	// some edge cases. in some edge cases. in some edge cases.
+
 	query := fmt.Sprintf(
-		"SELECT MIN(%s) as min_value, MAX(%s) as max_value FROM %s",
+		"SELECT GREATEST(MIN(%s) - 1, 0) as min_value, MAX(%s) as max_value FROM %s",
 		w.config.primaryKey, w.config.primaryKey, w.config.table,
 	)
 	row := w.db.QueryRowxContext(ctx, query)
@@ -182,8 +189,8 @@ func (w *fetchWorker) selectRowsChunk(
 	query, args, err := squirrel.
 		Select("*").
 		From(w.config.table).
-		Where(squirrel.GtOrEq{w.config.primaryKey: start}).
-		Where(squirrel.Lt{w.config.primaryKey: end}).
+		Where(squirrel.Gt{w.config.primaryKey: start}).
+		Where(squirrel.LtOrEq{w.config.primaryKey: end}).
 		OrderBy(w.config.primaryKey).
 		Limit(w.config.fetchSize).
 		ToSql()

@@ -53,7 +53,7 @@ func newFetchWorker(db *sqlx.DB, data chan fetchData, config fetchWorkerConfig) 
 
 func (w *fetchWorker) fetchStartEnd(ctx context.Context) (err error) {
 	lastRead := w.config.lastPosition.Snapshots[w.config.table].LastRead
-	minVal, maxVal, err := w.getMinMaxValue(ctx)
+	minVal, maxVal, err := w.getMinMaxValues(ctx)
 	if err != nil {
 		return err
 	}
@@ -145,8 +145,8 @@ func (w *fetchWorker) run(ctx context.Context) (err error) {
 	return nil
 }
 
-// getMinMaxValue fetches the maximum value of the primary key from the table.
-func (w *fetchWorker) getMinMaxValue(ctx context.Context) (minVal, maxVal uint64, err error) {
+// getMinMaxValues fetches the maximum value of the primary key from the table.
+func (w *fetchWorker) getMinMaxValues(ctx context.Context) (minVal, maxVal uint64, err error) {
 	var minmax struct {
 		MinValue *uint64 `db:"min_value"`
 		MaxValue *uint64 `db:"max_value"`

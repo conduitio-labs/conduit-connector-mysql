@@ -17,7 +17,6 @@ package mysql
 import (
 	"context"
 	"errors"
-	"fmt"
 	"testing"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
@@ -26,8 +25,6 @@ import (
 	"github.com/matryer/is"
 	"go.uber.org/goleak"
 )
-
-var userTable testutils.UsersTable
 
 func testSnapshotIterator(ctx context.Context, t *testing.T, is *is.I) (common.Iterator, func()) {
 	db := testutils.Connection(t)
@@ -98,7 +95,7 @@ func TestSnapshotIterator_EmptyTable(t *testing.T) {
 
 	db := testutils.Connection(t)
 
-	userTable.Recreate(is, db)
+	testutils.RecreateUsersTable(is, db)
 
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 
@@ -118,11 +115,11 @@ func TestSnapshotIterator_WithData(t *testing.T) {
 
 	db := testutils.Connection(t)
 
-	userTable.Recreate(is, db)
+	testutils.RecreateUsersTable(is, db)
 
 	var users []testutils.User
 	for i := 0; i < 100; i++ {
-		user := userTable.Insert(is, db, fmt.Sprintf("user-%v", i))
+		user := testutils.InsertUser(is, db, i)
 		users = append(users, user)
 	}
 
@@ -145,11 +142,11 @@ func TestSnapshotIterator_SmallFetchSize(t *testing.T) {
 
 	db := testutils.Connection(t)
 
-	userTable.Recreate(is, db)
+	testutils.RecreateUsersTable(is, db)
 
 	var users []testutils.User
 	for i := 0; i < 100; i++ {
-		user := userTable.Insert(is, db, fmt.Sprintf("user-%v", i))
+		user := testutils.InsertUser(is, db, i)
 		users = append(users, user)
 	}
 
@@ -172,10 +169,10 @@ func TestSnapshotIterator_RestartOnPosition(t *testing.T) {
 
 	db := testutils.Connection(t)
 
-	userTable.Recreate(is, db)
+	testutils.RecreateUsersTable(is, db)
 	var users []testutils.User
 	for i := 1; i <= 100; i++ {
-		user := userTable.Insert(is, db, fmt.Sprintf("user-%v", i))
+		user := testutils.InsertUser(is, db, i)
 		users = append(users, user)
 	}
 

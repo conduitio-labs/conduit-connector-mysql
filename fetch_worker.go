@@ -100,8 +100,7 @@ func (w *fetchWorker) run(ctx context.Context) (err error) {
 		chunkEnd := chunkStart + w.config.fetchSize
 		sdk.Logger(ctx).Info().
 			Uint64("chunk start", chunkStart).
-			// the where clause is exclusive at the end
-			Uint64("chunk end", chunkEnd-1).
+			Uint64("chunk end", chunkEnd).
 			Msg("fetching chunk")
 		rows, err := w.selectRowsChunk(ctx, tx, chunkStart, chunkEnd)
 		if err != nil {

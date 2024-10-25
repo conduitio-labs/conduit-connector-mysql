@@ -16,7 +16,6 @@ package mysql
 
 import (
 	"context"
-	"fmt"
 	"testing"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
@@ -65,14 +64,14 @@ func TestSource_ConsistentSnapshot(t *testing.T) {
 
 	db := testutils.Connection(t)
 
-	userTable.Recreate(is, db)
+	testutils.RecreateUsersTable(is, db)
 
 	// insert 4 rows, the whole snapshot
 
-	user1 := userTable.Insert(is, db, "user1")
-	user2 := userTable.Insert(is, db, "user2")
-	user3 := userTable.Insert(is, db, "user3")
-	user4 := userTable.Insert(is, db, "user4")
+	user1 := testutils.InsertUser(is, db, 1)
+	user2 := testutils.InsertUser(is, db, 2)
+	user3 := testutils.InsertUser(is, db, 3)
+	user4 := testutils.InsertUser(is, db, 4)
 
 	// start source connector
 
@@ -86,9 +85,9 @@ func TestSource_ConsistentSnapshot(t *testing.T) {
 
 	// insert 2 rows, delete the 4th inserted row
 
-	user5 := userTable.Insert(is, db, "user5")
-	user6 := userTable.Insert(is, db, "user6")
-	userTable.Delete(is, db, user4)
+	user5 := testutils.InsertUser(is, db, 5)
+	user6 := testutils.InsertUser(is, db, 6)
+	testutils.DeleteUser(is, db, user4)
 
 	// read 2 more records -> they shall be snapshots
 	// snapshot completed, so previous 2 inserts and delete done while
@@ -108,7 +107,7 @@ func TestSource_NonZeroSnapshotStart(t *testing.T) {
 
 	db := testutils.Connection(t)
 
-	userTable.Recreate(is, db)
+	testutils.RecreateUsersTable(is, db)
 
 	// Insert 80 users starting from the 20th so that the starting row's primary key
 	// is greater than 0. This ensures a more realistic dataset where
@@ -116,7 +115,7 @@ func TestSource_NonZeroSnapshotStart(t *testing.T) {
 
 	var inserted []testutils.User
 	for i := 20; i < 100; i++ {
-		user := userTable.Insert(is, db, fmt.Sprint("user", i+1))
+		user := testutils.InsertUser(is, db, i)
 		inserted = append(inserted, user)
 	}
 
@@ -134,11 +133,11 @@ func TestSource_EmptyChunkRead(t *testing.T) {
 
 	db := testutils.Connection(t)
 
-	userTable.Recreate(is, db)
+	testutils.RecreateUsersTable(is, db)
 
 	var inserted []testutils.User
-	for i := 0; i < 100; i++ {
-		user := userTable.Insert(is, db, fmt.Sprint("user", i+1))
+	for i := range 100 {
+		user := testutils.InsertUser(is, db, i+1)
 		inserted = append(inserted, user)
 	}
 
@@ -151,7 +150,7 @@ func TestSource_EmptyChunkRead(t *testing.T) {
 	expected = append(expected, secondPart...)
 
 	for _, user := range toDelete {
-		userTable.Delete(is, db, user)
+		testutils.DeleteUser(is, db, user)
 	}
 
 	source, teardown := testSourceWithFetchSize(ctx, is, "10")

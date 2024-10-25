@@ -48,7 +48,8 @@ func Connection(t *testing.T) *sqlx.DB {
 
 func TestContext(t *testing.T) context.Context {
 	writer := zerolog.NewTestWriter(t)
-	logger := zerolog.New(writer).Level(zerolog.InfoLevel)
+	// logger := zerolog.New(writer).Level(zerolog.InfoLevel)
+	logger := zerolog.New(writer).Level(zerolog.TraceLevel)
 	return logger.WithContext(context.Background())
 }
 
@@ -78,15 +79,13 @@ func (u User) ToStructuredData() opencdc.StructuredData {
 	}
 }
 
-type UsersTable struct{}
-
-func (UsersTable) Recreate(is *is.I, db *sqlx.DB) {
+func RecreateUsersTable(is *is.I, db *sqlx.DB) {
 	_, err := db.Exec(`DROP TABLE IF EXISTS users`)
 	is.NoErr(err)
 
 	_, err = db.Exec(`
 	CREATE TABLE users (
-		id BIGINT AUTO_INCREMENT PRIMARY KEY,
+		id BIGINT PRIMARY KEY,
 		username VARCHAR(255) NOT NULL,
 		email VARCHAR(255) NOT NULL,
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -94,25 +93,28 @@ func (UsersTable) Recreate(is *is.I, db *sqlx.DB) {
 	is.NoErr(err)
 }
 
-func (UsersTable) Insert(is *is.I, db *sqlx.DB, username string) User {
+func InsertUser(is *is.I, db *sqlx.DB, userID int) User {
+	username := fmt.Sprint("user-", userID)
+	email := fmt.Sprint(username, "@example.com")
+
 	_, err := db.Exec(`
-		INSERT INTO users (username, email) 
-		VALUES (?, ?);
-	`, username, fmt.Sprint(username, "@example.com"))
+		INSERT INTO users (id, username, email) 
+		VALUES (?, ?, ?);
+	`, userID, username, email)
 	is.NoErr(err)
 
 	var user User
 	err = db.QueryRowx(`
 		SELECT *
 		FROM users
-		WHERE id = LAST_INSERT_ID();
-	`).StructScan(&user)
+		WHERE id = ?;
+	`, userID).StructScan(&user)
 	is.NoErr(err)
 
 	return user
 }
 
-func (UsersTable) Get(is *is.I, db *sqlx.DB, userID int64) User {
+func GetUser(is *is.I, db *sqlx.DB, userID int64) User {
 	var user User
 	err := db.QueryRowx(`
 		SELECT *
@@ -124,7 +126,7 @@ func (UsersTable) Get(is *is.I, db *sqlx.DB, userID int64) User {
 	return user
 }
 
-func (UsersTable) Update(is *is.I, db *sqlx.DB, user User) User {
+func UpdateUser(is *is.I, db *sqlx.DB, user User) User {
 	_, err := db.Exec(`
 		UPDATE users
 		SET username = ?, email = ?
@@ -135,7 +137,7 @@ func (UsersTable) Update(is *is.I, db *sqlx.DB, user User) User {
 	return user
 }
 
-func (UsersTable) Delete(is *is.I, db *sqlx.DB, user User) {
+func DeleteUser(is *is.I, db *sqlx.DB, user User) {
 	_, err := db.Exec(`
 		DELETE FROM users
 		WHERE id = ?;
@@ -143,7 +145,7 @@ func (UsersTable) Delete(is *is.I, db *sqlx.DB, user User) {
 	is.NoErr(err)
 }
 
-func (UsersTable) CountUsers(is *is.I, db *sqlx.DB) int {
+func CountUsers(is *is.I, db *sqlx.DB) int {
 	var count struct {
 		Total int `db:"total"`
 	}

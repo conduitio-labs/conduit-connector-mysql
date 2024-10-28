@@ -17,7 +17,6 @@ package mysql
 import (
 	"context"
 	"errors"
-	"fmt"
 	"testing"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
@@ -26,8 +25,6 @@ import (
 	"github.com/matryer/is"
 	"go.uber.org/goleak"
 )
-
-var userTable testutils.UsersTable
 
 func testSnapshotIterator(ctx context.Context, t *testing.T, is *is.I) (common.Iterator, func()) {
 	db := testutils.Connection(t)
@@ -98,7 +95,7 @@ func TestSnapshotIterator_EmptyTable(t *testing.T) {
 
 	db := testutils.Connection(t)
 
-	userTable.Recreate(is, db)
+	testutils.RecreateUsersTable(is, db)
 
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 
@@ -112,17 +109,17 @@ func TestSnapshotIterator_EmptyTable(t *testing.T) {
 }
 
 func TestSnapshotIterator_WithData(t *testing.T) {
-	ctx := testutils.TestContextNoTraceLog(t)
+	ctx := testutils.TestContext(t)
 
 	is := is.New(t)
 
 	db := testutils.Connection(t)
 
-	userTable.Recreate(is, db)
+	testutils.RecreateUsersTable(is, db)
 
 	var users []testutils.User
-	for i := 0; i < 100; i++ {
-		user := userTable.Insert(is, db, fmt.Sprintf("user-%v", i))
+	for i := 1; i <= 100; i++ {
+		user := testutils.InsertUser(is, db, i)
 		users = append(users, user)
 	}
 
@@ -131,8 +128,8 @@ func TestSnapshotIterator_WithData(t *testing.T) {
 	iterator, cleanup := testSnapshotIterator(ctx, t, is)
 	defer cleanup()
 
-	for i := 0; i < 100; i++ {
-		testutils.ReadAndAssertSnapshot(ctx, is, iterator, users[i])
+	for i := 1; i <= 100; i++ {
+		testutils.ReadAndAssertSnapshot(ctx, is, iterator, users[i-1])
 	}
 
 	_, err := iterator.Next(ctx)
@@ -140,16 +137,16 @@ func TestSnapshotIterator_WithData(t *testing.T) {
 }
 
 func TestSnapshotIterator_SmallFetchSize(t *testing.T) {
-	ctx := testutils.TestContextNoTraceLog(t)
+	ctx := testutils.TestContext(t)
 	is := is.New(t)
 
 	db := testutils.Connection(t)
 
-	userTable.Recreate(is, db)
+	testutils.RecreateUsersTable(is, db)
 
 	var users []testutils.User
-	for i := 0; i < 100; i++ {
-		user := userTable.Insert(is, db, fmt.Sprintf("user-%v", i))
+	for i := 1; i <= 100; i++ {
+		user := testutils.InsertUser(is, db, i)
 		users = append(users, user)
 	}
 
@@ -158,8 +155,8 @@ func TestSnapshotIterator_SmallFetchSize(t *testing.T) {
 	iterator, cleanup := testSnapshotIterator(ctx, t, is)
 	defer cleanup()
 
-	for i := 0; i < 100; i++ {
-		testutils.ReadAndAssertSnapshot(ctx, is, iterator, users[i])
+	for i := 1; i <= 100; i++ {
+		testutils.ReadAndAssertSnapshot(ctx, is, iterator, users[i-1])
 	}
 
 	_, err := iterator.Next(ctx)
@@ -167,15 +164,15 @@ func TestSnapshotIterator_SmallFetchSize(t *testing.T) {
 }
 
 func TestSnapshotIterator_RestartOnPosition(t *testing.T) {
-	ctx := testutils.TestContextNoTraceLog(t)
+	ctx := testutils.TestContext(t)
 	is := is.New(t)
 
 	db := testutils.Connection(t)
 
-	userTable.Recreate(is, db)
+	testutils.RecreateUsersTable(is, db)
 	var users []testutils.User
-	for i := 0; i < 100; i++ {
-		user := userTable.Insert(is, db, fmt.Sprintf("user-%v", i))
+	for i := 1; i <= 100; i++ {
+		user := testutils.InsertUser(is, db, i)
 		users = append(users, user)
 	}
 
@@ -185,9 +182,8 @@ func TestSnapshotIterator_RestartOnPosition(t *testing.T) {
 	var breakPosition opencdc.Position
 	{
 		it, cleanup := testSnapshotIterator(ctx, t, is)
-		defer cleanup()
 
-		for i := 0; i < 10; i++ {
+		for i := 1; i <= 10; i++ {
 			rec, err := it.Next(ctx)
 			if errors.Is(err, ErrSnapshotIteratorDone) {
 				err = it.Ack(ctx, rec.Position)
@@ -200,9 +196,11 @@ func TestSnapshotIterator_RestartOnPosition(t *testing.T) {
 
 			err = it.Ack(ctx, rec.Position)
 			is.NoErr(err)
+			breakPosition = rec.Position
 		}
 
-		breakPosition = recs[len(recs)-1].Position
+		// not deferring the call so that logs are easier to understand
+		cleanup()
 	}
 
 	// read the remaining 90 records

@@ -27,11 +27,13 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
+var ErrPrimaryKeyNotFoundInRow = errors.New("primary key not found in row")
+
 type fetchWorker struct {
 	db         *sqlx.DB
 	data       chan fetchData
 	config     fetchWorkerConfig
-	start, end int64
+	start, end uint64
 }
 
 type fetchWorkerConfig struct {
@@ -50,9 +52,26 @@ func newFetchWorker(db *sqlx.DB, data chan fetchData, config fetchWorkerConfig) 
 }
 
 func (w *fetchWorker) fetchStartEnd(ctx context.Context) (err error) {
-	w.start = w.config.lastPosition.Snapshots[w.config.table].LastRead
-	w.end, err = w.getMaxValue(ctx)
-	return err
+	lastRead := w.config.lastPosition.Snapshots[w.config.table].LastRead
+	minVal, maxVal, err := w.getMinMaxValues(ctx)
+	if err != nil {
+		return err
+	}
+
+	if lastRead > minVal {
+		// last read takes preference, as previous records where already fetched.
+		w.start = lastRead
+	} else {
+		w.start = minVal
+	}
+	w.end = maxVal
+
+	sdk.Logger(ctx).Info().
+		Uint64("start", w.start).
+		Uint64("end", w.end).
+		Msg("fetched start and end")
+
+	return nil
 }
 
 func (w *fetchWorker) run(ctx context.Context) (err error) {
@@ -71,21 +90,42 @@ func (w *fetchWorker) run(ctx context.Context) (err error) {
 
 	defer func() { err = errors.Join(err, tx.Commit()) }()
 
-	start, end := w.start, w.end
-	for {
-		rows, err := w.selectRowsChunk(ctx, tx, start, end)
+	sdk.Logger(ctx).Info().
+		Uint64("start", w.start).
+		Uint64("end", w.end).
+		Uint64("fetchSize", w.config.fetchSize).
+		Msg("fetching rows")
+
+	for chunkStart := w.start; chunkStart <= w.end; chunkStart += w.config.fetchSize {
+		chunkEnd := chunkStart + w.config.fetchSize
+		sdk.Logger(ctx).Info().
+			Uint64("chunk start", chunkStart).
+			Uint64("chunk end", chunkEnd).
+			Msg("fetching chunk")
+		rows, err := w.selectRowsChunk(ctx, tx, chunkStart, chunkEnd)
 		if err != nil {
 			return fmt.Errorf("failed to select rows chunk: %w", err)
 		}
 		if len(rows) == 0 {
-			break
+			continue
 		}
 
 		for _, row := range rows {
-			start++
+			sdk.Logger(ctx).Trace().Msgf("fetched row: %+v", row)
+
+			primaryKeyVal := row[w.config.primaryKey]
+			if primaryKeyVal == nil {
+				return ErrPrimaryKeyNotFoundInRow
+			}
+
+			lastRead, err := common.ConvertPrimaryKey(primaryKeyVal)
+			if err != nil {
+				return fmt.Errorf("failed to convert primary key: %w", err)
+			}
+
 			position := common.TablePosition{
-				LastRead:    start,
-				SnapshotEnd: end,
+				LastRead:    lastRead,
+				SnapshotEnd: w.end,
 			}
 			data, err := w.buildFetchData(row, position)
 			if err != nil {
@@ -105,36 +145,46 @@ func (w *fetchWorker) run(ctx context.Context) (err error) {
 	return nil
 }
 
-// getMaxValue fetches the maximum value of the primary key from the table.
-func (w *fetchWorker) getMaxValue(ctx context.Context) (int64, error) {
-	var maxValueRow struct {
-		MaxValue *int64 `db:"max_value"`
+// getMinMaxValues fetches the maximum value of the primary key from the table.
+func (w *fetchWorker) getMinMaxValues(ctx context.Context) (minVal, maxVal uint64, err error) {
+	var minmax struct {
+		MinValue *uint64 `db:"min_value"`
+		MaxValue *uint64 `db:"max_value"`
 	}
 
+	// We obtain the minimum value this way so that we can fetch rows exclusive
+	// (>) to inclusive (<=). This way, when we fetch rows we discard the last
+	// previous fetched row. The only way that this is invalid is if the id
+	// value is <= 0, which is highly unusual.
+	//
+	// We could also start from 0 every time, but then we might do a few more
+	// initial fetches than necessary for each snapshot in some edge cases. in
+	// some edge cases. in some edge cases. in some edge cases.
+
 	query := fmt.Sprintf(
-		"SELECT MAX(%s) as max_value FROM %s",
-		w.config.primaryKey, w.config.table,
+		"SELECT GREATEST(MIN(%s) - 1, 0) as min_value, MAX(%s) as max_value FROM %s",
+		w.config.primaryKey, w.config.primaryKey, w.config.table,
 	)
 	row := w.db.QueryRowxContext(ctx, query)
-	if err := row.StructScan(&maxValueRow); err != nil {
-		return 0, fmt.Errorf("failed to get max value: %w", err)
+	if err := row.StructScan(&minmax); err != nil {
+		return 0, 0, fmt.Errorf("failed to get min value: %w", err)
 	}
 
 	if err := row.Err(); err != nil {
-		return 0, fmt.Errorf("failed to get max value: %w", err)
+		return 0, 0, fmt.Errorf("failed to get min value: %w", err)
 	}
 
-	if maxValueRow.MaxValue == nil {
+	if minmax.MinValue == nil || minmax.MaxValue == nil {
 		// table is empty
-		return 0, nil
+		return 0, 0, nil
 	}
 
-	return *maxValueRow.MaxValue, nil
+	return *minmax.MinValue, *minmax.MaxValue, nil
 }
 
 func (w *fetchWorker) selectRowsChunk(
 	ctx context.Context, tx *sqlx.Tx,
-	start, end int64,
+	start, end uint64,
 ) (scannedRows []opencdc.StructuredData, err error) {
 	query, args, err := squirrel.
 		Select("*").

@@ -46,11 +46,11 @@ func TestDestination_OperationSnapshot(t *testing.T) {
 	is := is.New(t)
 	db := testutils.Connection(t)
 
-	userTable.Recreate(is, db)
+	testutils.RecreateUsersTable(is, db)
 
-	user1 := userTable.Insert(is, db, "user1")
-	user2 := userTable.Insert(is, db, "user2")
-	user3 := userTable.Insert(is, db, "user3")
+	user1 := testutils.InsertUser(is, db, 1)
+	user2 := testutils.InsertUser(is, db, 2)
+	user3 := testutils.InsertUser(is, db, 3)
 
 	dest, cleanDest := testDestination(ctx, is)
 	defer cleanDest()
@@ -63,15 +63,15 @@ func TestDestination_OperationSnapshot(t *testing.T) {
 	rec3 := testutils.ReadAndAssertSnapshot(ctx, is, src, user3)
 
 	// clean table to assert snapshots were written
-	userTable.Recreate(is, db)
+	testutils.RecreateUsersTable(is, db)
 
 	written, err := dest.Write(ctx, []opencdc.Record{rec1, rec2, rec3})
 	is.NoErr(err)
 	is.Equal(written, 3)
 
-	insertedUser1 := userTable.Get(is, db, user1.ID)
-	insertedUser2 := userTable.Get(is, db, user2.ID)
-	insertedUser3 := userTable.Get(is, db, user3.ID)
+	insertedUser1 := testutils.GetUser(is, db, user1.ID)
+	insertedUser2 := testutils.GetUser(is, db, user2.ID)
+	insertedUser3 := testutils.GetUser(is, db, user3.ID)
 
 	is.Equal("", cmp.Diff(user1, insertedUser1))
 	is.Equal("", cmp.Diff(user2, insertedUser2))
@@ -83,31 +83,31 @@ func TestDestination_OperationCreate(t *testing.T) {
 	is := is.New(t)
 	db := testutils.Connection(t)
 
-	userTable.Recreate(is, db)
+	testutils.RecreateUsersTable(is, db)
 	dest, cleanDest := testDestination(ctx, is)
 	defer cleanDest()
 
 	src, cleanSrc := testSource(ctx, is)
 	defer cleanSrc()
 
-	user1 := userTable.Insert(is, db, "user1")
-	user2 := userTable.Insert(is, db, "user2")
-	user3 := userTable.Insert(is, db, "user3")
+	user1 := testutils.InsertUser(is, db, 1)
+	user2 := testutils.InsertUser(is, db, 2)
+	user3 := testutils.InsertUser(is, db, 3)
 
 	rec1 := testutils.ReadAndAssertCreate(ctx, is, src, user1)
 	rec2 := testutils.ReadAndAssertCreate(ctx, is, src, user2)
 	rec3 := testutils.ReadAndAssertCreate(ctx, is, src, user3)
 
 	// clean table to assert snapshots were written
-	userTable.Recreate(is, db)
+	testutils.RecreateUsersTable(is, db)
 
 	written, err := dest.Write(ctx, []opencdc.Record{rec1, rec2, rec3})
 	is.NoErr(err)
 	is.Equal(written, 3)
 
-	insertedUser1 := userTable.Get(is, db, user1.ID)
-	insertedUser2 := userTable.Get(is, db, user2.ID)
-	insertedUser3 := userTable.Get(is, db, user3.ID)
+	insertedUser1 := testutils.GetUser(is, db, user1.ID)
+	insertedUser2 := testutils.GetUser(is, db, user2.ID)
+	insertedUser3 := testutils.GetUser(is, db, user3.ID)
 
 	is.Equal("", cmp.Diff(user1, insertedUser1))
 	is.Equal("", cmp.Diff(user2, insertedUser2))
@@ -119,11 +119,11 @@ func TestDestination_OperationUpdate(t *testing.T) {
 	is := is.New(t)
 	db := testutils.Connection(t)
 
-	userTable.Recreate(is, db)
+	testutils.RecreateUsersTable(is, db)
 
-	user1 := userTable.Insert(is, db, "user1")
-	user2 := userTable.Insert(is, db, "user2")
-	user3 := userTable.Insert(is, db, "user3")
+	user1 := testutils.InsertUser(is, db, 1)
+	user2 := testutils.InsertUser(is, db, 2)
+	user3 := testutils.InsertUser(is, db, 3)
 
 	dest, cleanDest := testDestination(ctx, is)
 	defer cleanDest()
@@ -131,9 +131,9 @@ func TestDestination_OperationUpdate(t *testing.T) {
 	src, cleanSrc := testSource(ctx, is)
 	defer cleanSrc()
 
-	user1Updated := userTable.Update(is, db, user1.Update())
-	user2Updated := userTable.Update(is, db, user2.Update())
-	user3Updated := userTable.Update(is, db, user3.Update())
+	user1Updated := testutils.UpdateUser(is, db, user1.Update())
+	user2Updated := testutils.UpdateUser(is, db, user2.Update())
+	user3Updated := testutils.UpdateUser(is, db, user3.Update())
 
 	// discard snapshots, we want the updates only
 	testutils.ReadAndAssertSnapshot(ctx, is, src, user1)
@@ -145,15 +145,15 @@ func TestDestination_OperationUpdate(t *testing.T) {
 	rec3 := testutils.ReadAndAssertUpdate(ctx, is, src, user3, user3Updated)
 
 	// clean table to assert snapshots were written
-	userTable.Recreate(is, db)
+	testutils.RecreateUsersTable(is, db)
 
 	written, err := dest.Write(ctx, []opencdc.Record{rec1, rec2, rec3})
 	is.NoErr(err)
 	is.Equal(written, 3)
 
-	insertedUser1 := userTable.Get(is, db, user1.ID)
-	insertedUser2 := userTable.Get(is, db, user2.ID)
-	insertedUser3 := userTable.Get(is, db, user3.ID)
+	insertedUser1 := testutils.GetUser(is, db, user1.ID)
+	insertedUser2 := testutils.GetUser(is, db, user2.ID)
+	insertedUser3 := testutils.GetUser(is, db, user3.ID)
 
 	is.Equal("", cmp.Diff(user1Updated, insertedUser1))
 	is.Equal("", cmp.Diff(user2Updated, insertedUser2))
@@ -165,11 +165,11 @@ func TestDestination_OperationDelete(t *testing.T) {
 	is := is.New(t)
 	db := testutils.Connection(t)
 
-	userTable.Recreate(is, db)
+	testutils.RecreateUsersTable(is, db)
 
-	user1 := userTable.Insert(is, db, "user1")
-	user2 := userTable.Insert(is, db, "user2")
-	user3 := userTable.Insert(is, db, "user3")
+	user1 := testutils.InsertUser(is, db, 1)
+	user2 := testutils.InsertUser(is, db, 2)
+	user3 := testutils.InsertUser(is, db, 3)
 
 	dest, cleanDest := testDestination(ctx, is)
 	defer cleanDest()
@@ -177,9 +177,9 @@ func TestDestination_OperationDelete(t *testing.T) {
 	src, cleanSrc := testSource(ctx, is)
 	defer cleanSrc()
 
-	userTable.Delete(is, db, user1)
-	userTable.Delete(is, db, user2)
-	userTable.Delete(is, db, user3)
+	testutils.DeleteUser(is, db, user1)
+	testutils.DeleteUser(is, db, user2)
+	testutils.DeleteUser(is, db, user3)
 
 	// discard snapshots, we want the deletes only
 	testutils.ReadAndAssertSnapshot(ctx, is, src, user1)
@@ -191,17 +191,17 @@ func TestDestination_OperationDelete(t *testing.T) {
 	rec3 := testutils.ReadAndAssertDelete(ctx, is, src, user3)
 
 	// reset autoincrement primary key
-	userTable.Recreate(is, db)
+	testutils.RecreateUsersTable(is, db)
 
 	// insert users back to assert deletes where done
-	userTable.Insert(is, db, "user1")
-	userTable.Insert(is, db, "user2")
-	userTable.Insert(is, db, "user3")
+	testutils.InsertUser(is, db, 1)
+	testutils.InsertUser(is, db, 2)
+	testutils.InsertUser(is, db, 3)
 
 	written, err := dest.Write(ctx, []opencdc.Record{rec1, rec2, rec3})
 	is.NoErr(err)
 	is.Equal(written, 3)
 
-	total := userTable.CountUsers(is, db)
+	total := testutils.CountUsers(is, db)
 	is.Equal(total, 0)
 }

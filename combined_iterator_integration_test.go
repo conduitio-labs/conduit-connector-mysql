@@ -50,11 +50,11 @@ func TestCombinedIterator_SnapshotAndCDC(t *testing.T) {
 	is := is.New(t)
 	db := testutils.Connection(t)
 
-	userTable.Recreate(is, db)
+	testutils.RecreateUsersTable(is, db)
 
-	user1 := userTable.Insert(is, db, "user1")
-	user2 := userTable.Insert(is, db, "user2")
-	user3 := userTable.Insert(is, db, "user3")
+	user1 := testutils.InsertUser(is, db, 1)
+	user2 := testutils.InsertUser(is, db, 2)
+	user3 := testutils.InsertUser(is, db, 3)
 
 	iterator, cleanup := testCombinedIterator(ctx, t, is)
 	defer cleanup()
@@ -63,9 +63,9 @@ func TestCombinedIterator_SnapshotAndCDC(t *testing.T) {
 	// Theoretically it should not matter, as we get the position at the start.
 	time.Sleep(time.Second)
 
-	user1Updated := userTable.Update(is, db, user1.Update())
-	user2Updated := userTable.Update(is, db, user2.Update())
-	user3Updated := userTable.Update(is, db, user3.Update())
+	user1Updated := testutils.UpdateUser(is, db, user1.Update())
+	user2Updated := testutils.UpdateUser(is, db, user2.Update())
+	user3Updated := testutils.UpdateUser(is, db, user3.Update())
 
 	testutils.ReadAndAssertSnapshot(ctx, is, iterator, user1)
 	testutils.ReadAndAssertSnapshot(ctx, is, iterator, user2)

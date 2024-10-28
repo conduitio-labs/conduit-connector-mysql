@@ -17,9 +17,8 @@ services:
       - main
     healthcheck:
       test: ['CMD', 'mysqladmin', 'ping', '-h', 'localhost']
-      interval: 1s
       timeout: 20s
-      retries: 30
+      retries: 10
 
   # Adminer is a web-based SQL management tool. Useful on development
   adminer:

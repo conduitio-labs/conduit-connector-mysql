@@ -8,10 +8,11 @@ import (
 )
 
 const (
-	SourceConfigDisableCanalLogs = "disableCanalLogs"
-	SourceConfigDsn              = "dsn"
-	SourceConfigFetchSize        = "fetchSize"
-	SourceConfigTables           = "tables"
+	SourceConfigDisableCanalLogs       = "disableCanalLogs"
+	SourceConfigDsn                    = "dsn"
+	SourceConfigFetchSize              = "fetchSize"
+	SourceConfigTableKeysSortingColumn = "tableKeys.*.sortingColumn"
+	SourceConfigTables                 = "tables"
 )
 
 func (SourceConfig) Parameters() map[string]config.Parameter {
@@ -34,6 +35,12 @@ func (SourceConfig) Parameters() map[string]config.Parameter {
 			Default:     "50000",
 			Description: "FetchSize limits how many rows should be retrieved on each database fetch.",
 			Type:        config.ParameterTypeInt,
+			Validations: []config.Validation{},
+		},
+		SourceConfigTableKeysSortingColumn: {
+			Default:     "",
+			Description: "SortingColumng represents the alternative columnt of the table to use to sort\nthe snapshot.",
+			Type:        config.ParameterTypeString,
 			Validations: []config.Validation{},
 		},
 		SourceConfigTables: {

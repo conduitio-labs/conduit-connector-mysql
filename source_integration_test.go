@@ -169,23 +169,34 @@ func TestCustomTableKeys(t *testing.T) {
 
 	db := testutils.Connection(t)
 
-	_, err := db.ExecContext(ctx, `
-		DROP TABLE IF EXISTS composite_with_auto_inc;
-		DROP TABLE IF EXISTS ulid_pk;
-		DROP TABLE IF EXISTS timestamp_ordered;
+	var err error
 
+	_, err = db.ExecContext(ctx, "DROP TABLE IF EXISTS composite_with_auto_inc;")
+	is.NoErr(err)
+	_, err = db.ExecContext(ctx, "DROP TABLE IF EXISTS ulid_pk;")
+	is.NoErr(err)
+	_, err = db.ExecContext(ctx, "DROP TABLE IF EXISTS timestamp_ordered;")
+	is.NoErr(err)
+
+	_, err = db.ExecContext(ctx, `
 		CREATE TABLE composite_with_auto_inc (
+			id INT AUTO_INCREMENT PRIMARY KEY,
 			tenant_id VARCHAR(50),
-			id INT AUTO_INCREMENT,
 			data VARCHAR(100),
-			PRIMARY KEY (tenant_id, id)
+			UNIQUE KEY unique_tenant_id (tenant_id, id)
 		);
+	`)
+	is.NoErr(err)
 
+	_, err = db.ExecContext(ctx, `
 		CREATE TABLE ulid_pk (
-			id CHAR(26) PRIMARY KEY DEFAULT (UUID_TO_BIN(UUID(), TRUE)),
+		    id BINARY(16) PRIMARY KEY DEFAULT (UUID_TO_BIN(UUID(), TRUE)),
 			data VARCHAR(100)
 		);
+	`)
+	is.NoErr(err)
 
+	_, err = db.ExecContext(ctx, `
 		CREATE TABLE timestamp_ordered (
 			created_at TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP(6),
 			id VARCHAR(50),
@@ -202,28 +213,33 @@ func TestCustomTableKeys(t *testing.T) {
 
 	_, err = db.ExecContext(ctx, fmt.Sprint(`
 		INSERT INTO composite_with_auto_inc (tenant_id, data) VALUES 
-			('tenant1', `, compositeWithAutoIncData[0], `),
-			('tenant1', `, compositeWithAutoIncData[1], `),
-			('tenant2', `, compositeWithAutoIncData[2], `);
+			('tenant1', '`, compositeWithAutoIncData[0], `'),
+			('tenant1', '`, compositeWithAutoIncData[1], `'),
+			('tenant2', '`, compositeWithAutoIncData[2], `');
+	`))
+	is.NoErr(err)
 
+	fmt.Println(fmt.Sprint(`
 		INSERT INTO ulid_pk (data) VALUES 
-			(`, ulidPkData[0], `),
-			(`, ulidPkData[1], `);
+			('`, ulidPkData[0], `'),
+			('`, ulidPkData[1], `');
+	`))
 
+	_, err = db.ExecContext(ctx, fmt.Sprint(`
 		INSERT INTO timestamp_ordered (id, data) VALUES 
-			('rec1', `, timestampOrderedData[0], `),
-			('rec2', `, timestampOrderedData[1], `);
+			('rec1', '`, timestampOrderedData[0], `'),
+			('rec2', '`, timestampOrderedData[1], `');
 	`))
 	is.NoErr(err)
 
 	source := &Source{}
 	cfg := config.Config{
-		common.SourceConfigUrl:                   testutils.DSN,
-		common.SourceConfigTables:                "users,composite_with_auto_inc,ulid_pk,timestamp_ordered",
-		common.SourceConfigDisableCanalLogs:      "true",
-		"tables.composite_with_auto_inc.sorting": "id",
-		"tables.ulid_pk.sorting":                 "id",
-		"tables.timestamp_ordered.sorting":       "created_at",
+		common.SourceConfigDsn:                            testutils.DSN,
+		common.SourceConfigTables:                         "composite_with_auto_inc,ulid_pk,timestamp_ordered",
+		common.SourceConfigDisableCanalLogs:               "true",
+		"tableKeys.composite_with_auto_inc.sortingColumn": "id",
+		"tableKeys.ulid_pk.sortingColumn":                 "id",
+		"tableKeys.timestamp_ordered.sortingColumn":       "created_at",
 	}
 	err = source.Configure(ctx, cfg)
 	is.NoErr(err)

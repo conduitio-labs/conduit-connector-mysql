@@ -68,7 +68,7 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 		return fmt.Errorf("failed to connect to mysql: %w", err)
 	}
 
-	tableKeys, err := getTableKeys(s.db, s.configFromDsn.DBName, s.config.Tables)
+	tableKeys, err := s.getTableKeys()
 	if err != nil {
 		return fmt.Errorf("failed to get table keys: %w", err)
 	}
@@ -160,11 +160,17 @@ func getPrimaryKey(db *sqlx.DB, database, table string) (string, error) {
 	return primaryKey.ColumnName, nil
 }
 
-func getTableKeys(db *sqlx.DB, database string, tables []string) (common.TableKeys, error) {
+func (s *Source) getTableKeys() (common.TableKeys, error) {
 	tableKeys := make(common.TableKeys)
 
-	for _, table := range tables {
-		primaryKey, err := getPrimaryKey(db, database, table)
+	for _, table := range s.config.Tables {
+		preconfiguredTableKey, ok := s.config.TableKeys[table]
+		if ok {
+			tableKeys[table] = preconfiguredTableKey.SortingColumn
+			continue
+		}
+
+		primaryKey, err := getPrimaryKey(s.db, s.configFromDsn.DBName, table)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get primary key for table %q: %w", table, err)
 		}

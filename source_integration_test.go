@@ -16,6 +16,8 @@ package mysql
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
@@ -158,5 +160,130 @@ func TestSource_EmptyChunkRead(t *testing.T) {
 
 	for _, user := range expected {
 		testutils.ReadAndAssertSnapshot(ctx, is, source, user)
+	}
+}
+
+func TestCustomTableKeys(t *testing.T) {
+	is := is.New(t)
+	ctx := testutils.TestContext(t)
+
+	db := testutils.Connection(t)
+
+	_, err := db.ExecContext(ctx, `
+		DROP TABLE IF EXISTS composite_with_auto_inc;
+		DROP TABLE IF EXISTS ulid_pk;
+		DROP TABLE IF EXISTS timestamp_ordered;
+
+		CREATE TABLE composite_with_auto_inc (
+			tenant_id VARCHAR(50),
+			id INT AUTO_INCREMENT,
+			data VARCHAR(100),
+			PRIMARY KEY (tenant_id, id)
+		);
+
+		CREATE TABLE ulid_pk (
+			id CHAR(26) PRIMARY KEY DEFAULT (UUID_TO_BIN(UUID(), TRUE)),
+			data VARCHAR(100)
+		);
+
+		CREATE TABLE timestamp_ordered (
+			created_at TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP(6),
+			id VARCHAR(50),
+			data VARCHAR(100),
+			UNIQUE KEY unique_record (id),
+			KEY idx_created_at (created_at)
+		);
+	`)
+	is.NoErr(err)
+
+	compositeWithAutoIncData := []string{"First tenant1 record", "Second tenant1 record", "First tenant2 record"}
+	ulidPkData := []string{"ULID record 1", "ULID record 2"}
+	timestampOrderedData := []string{"Timestamp record 1", "Timestamp record 2"}
+
+	_, err = db.ExecContext(ctx, fmt.Sprint(`
+		INSERT INTO composite_with_auto_inc (tenant_id, data) VALUES 
+			('tenant1', `, compositeWithAutoIncData[0], `),
+			('tenant1', `, compositeWithAutoIncData[1], `),
+			('tenant2', `, compositeWithAutoIncData[2], `);
+
+		INSERT INTO ulid_pk (data) VALUES 
+			(`, ulidPkData[0], `),
+			(`, ulidPkData[1], `);
+
+		INSERT INTO timestamp_ordered (id, data) VALUES 
+			('rec1', `, timestampOrderedData[0], `),
+			('rec2', `, timestampOrderedData[1], `);
+	`))
+	is.NoErr(err)
+
+	source := &Source{}
+	cfg := config.Config{
+		common.SourceConfigUrl:                   testutils.DSN,
+		common.SourceConfigTables:                "users,composite_with_auto_inc,ulid_pk,timestamp_ordered",
+		common.SourceConfigDisableCanalLogs:      "true",
+		"tables.composite_with_auto_inc.sorting": "id",
+		"tables.ulid_pk.sorting":                 "id",
+		"tables.timestamp_ordered.sorting":       "created_at",
+	}
+	err = source.Configure(ctx, cfg)
+	is.NoErr(err)
+
+	is.NoErr(source.Open(ctx, nil))
+
+	defer func() { is.NoErr(source.Teardown(ctx)) }()
+
+	var recs []opencdc.Record
+	for {
+		rec, err := source.Read(ctx)
+		if errors.Is(err, ErrSnapshotIteratorDone) {
+			break
+		}
+		is.NoErr(err)
+
+		err = source.Ack(ctx, rec.Position)
+		is.NoErr(err)
+
+		recs = append(recs, rec)
+	}
+
+	var compositeWithAutoIncRecs []opencdc.Record
+	var ulidPkRecs []opencdc.Record
+	var timestampOrderedRecs []opencdc.Record
+	for _, rec := range recs {
+		col, err := rec.Metadata.GetCollection()
+		is.NoErr(err)
+
+		switch col {
+		case "composite_with_auto_inc":
+			compositeWithAutoIncRecs = append(compositeWithAutoIncRecs, rec)
+		case "ulid_pk":
+			ulidPkRecs = append(ulidPkRecs, rec)
+		case "timestamp_ordered":
+			timestampOrderedRecs = append(timestampOrderedRecs, rec)
+		default:
+			t.Logf("unknown collection %s found", col)
+			is.Fail()
+		}
+	}
+
+	for i, expectedData := range compositeWithAutoIncData {
+		actual := compositeWithAutoIncRecs[i]
+		is.Equal(actual.Operation, opencdc.OperationSnapshot)
+
+		is.Equal(actual.Payload.After.(opencdc.StructuredData)["data"].(string), expectedData)
+	}
+
+	for i, expectedData := range ulidPkData {
+		actual := ulidPkRecs[i]
+		is.Equal(actual.Operation, opencdc.OperationSnapshot)
+
+		is.Equal(actual.Payload.After.(opencdc.StructuredData)["data"].(string), expectedData)
+	}
+
+	for i, expectedData := range timestampOrderedData {
+		actual := timestampOrderedRecs[i]
+		is.Equal(actual.Operation, opencdc.OperationSnapshot)
+
+		is.Equal(actual.Payload.After.(opencdc.StructuredData)["data"].(string), expectedData)
 	}
 }

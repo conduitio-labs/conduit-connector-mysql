@@ -24,6 +24,8 @@ type Config struct {
 type SourceConfig struct {
 	Config
 
+	TableKeys map[string]TableConfig `json:"tableKeys"`
+
 	// Tables represents the tables to read from.
 	Tables []string `json:"tables" validate:"required"`
 
@@ -32,6 +34,12 @@ type SourceConfig struct {
 
 	// FetchSize limits how many rows should be retrieved on each database fetch.
 	FetchSize uint64 `json:"fetchSize" default:"50000"`
+}
+
+type TableConfig struct {
+	// SortingColumng represents the alternative columnt of the table to use to sort
+	// the snapshot.
+	SortingColumn string `json:"sortingColumn"`
 }
 
 const DefaultFetchSize = 50000

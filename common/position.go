@@ -73,8 +73,8 @@ func ParseSDKPosition(p opencdc.Position) (Position, error) {
 type SnapshotPositions map[string]TablePosition
 
 type TablePosition struct {
-	LastRead    uint64 `json:"last_read"`
-	SnapshotEnd uint64 `json:"snapshot_end"`
+	LastRead    Comparable `json:"last_read"`
+	SnapshotEnd Comparable `json:"snapshot_end"`
 }
 
 type CdcPosition struct {

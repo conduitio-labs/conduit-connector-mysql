@@ -52,12 +52,12 @@ func newFetchWorker(db *sqlx.DB, data chan fetchData, config fetchWorkerConfig) 
 }
 
 func (w *fetchWorker) fetchStartEnd(ctx context.Context) (err error) {
-	lastRead := w.config.lastPosition.Snapshots[w.config.table].LastRead
 	minVal, maxVal, err := w.getMinMaxValues(ctx)
 	if err != nil {
 		return err
 	}
 
+	lastRead := w.config.lastPosition.Snapshots[w.config.table].LastRead
 	if minVal.Less(lastRead) {
 		// last read takes preference, as previous records where already fetched.
 		w.start = lastRead
@@ -96,7 +96,7 @@ func (w *fetchWorker) run(ctx context.Context) (err error) {
 		Uint64("fetchSize", w.config.fetchSize).
 		Msg("fetching rows")
 
-	for chunkStart := w.start; chunkStart.Less(w.end) || chunkStart.Equal(w.end); {
+	for chunkStart := w.start; chunkStart.Less(w.end) || !chunkStart.Equal(w.end); {
 		sdk.Logger(ctx).Info().
 			Str("chunk start", chunkStart.String()).
 			Msg("fetching chunk")

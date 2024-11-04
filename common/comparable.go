@@ -23,17 +23,28 @@ type (
 	FloatComparable  struct{ Value float64 }
 )
 
+func panicTypeMismatch(a, b any) {
+	msg := fmt.Sprintf("type mismatch: %T != %T", a, b)
+	panic(msg)
+}
+
 func (c *IntComparable) Less(other Comparable) bool {
 	if o, ok := other.(*IntComparable); ok {
 		return c.Value < o.Value
+	} else if other == nil {
+		return false
 	}
+	panicTypeMismatch(c, other)
 	return false
 }
 
 func (c *IntComparable) Equal(other Comparable) bool {
 	if o, ok := other.(*IntComparable); ok {
 		return c.Value == o.Value
+	} else if other == nil {
+		return false
 	}
+	panicTypeMismatch(c, other)
 	return false
 }
 func (c *IntComparable) String() string { return fmt.Sprintf("%d", c.Value) }
@@ -41,14 +52,20 @@ func (c *IntComparable) String() string { return fmt.Sprintf("%d", c.Value) }
 func (c *UintComparable) Less(other Comparable) bool {
 	if o, ok := other.(*UintComparable); ok {
 		return c.Value < o.Value
+	} else if other == nil {
+		return false
 	}
+	panicTypeMismatch(c, other)
 	return false
 }
 
 func (c *UintComparable) Equal(other Comparable) bool {
 	if o, ok := other.(*UintComparable); ok {
 		return c.Value == o.Value
+	} else if other == nil {
+		return false
 	}
+	panicTypeMismatch(c, other)
 	return false
 }
 func (c *UintComparable) String() string { return fmt.Sprintf("%d", c.Value) }
@@ -56,14 +73,20 @@ func (c *UintComparable) String() string { return fmt.Sprintf("%d", c.Value) }
 func (c *StringComparable) Less(other Comparable) bool {
 	if o, ok := other.(*StringComparable); ok {
 		return c.Value < o.Value
+	} else if other == nil {
+		return false
 	}
+	panicTypeMismatch(c, other)
 	return false
 }
 
 func (c *StringComparable) Equal(other Comparable) bool {
 	if o, ok := other.(*StringComparable); ok {
 		return c.Value == o.Value
+	} else if other == nil {
+		return false
 	}
+	panicTypeMismatch(c, other)
 	return false
 }
 func (c *StringComparable) String() string { return c.Value }
@@ -71,14 +94,20 @@ func (c *StringComparable) String() string { return c.Value }
 func (c *TimeComparable) Less(other Comparable) bool {
 	if o, ok := other.(*TimeComparable); ok {
 		return c.Value.Before(o.Value)
+	} else if other == nil {
+		return false
 	}
+	panicTypeMismatch(c, other)
 	return false
 }
 
 func (c *TimeComparable) Equal(other Comparable) bool {
 	if o, ok := other.(*TimeComparable); ok {
 		return c.Value.Equal(o.Value)
+	} else if other == nil {
+		return false
 	}
+	panicTypeMismatch(c, other)
 	return false
 }
 func (c *TimeComparable) String() string { return c.Value.Format(time.RFC3339Nano) }
@@ -86,14 +115,20 @@ func (c *TimeComparable) String() string { return c.Value.Format(time.RFC3339Nan
 func (c *FloatComparable) Less(other Comparable) bool {
 	if o, ok := other.(*FloatComparable); ok {
 		return c.Value < o.Value
+	} else if other == nil {
+		return false
 	}
+	panicTypeMismatch(c, other)
 	return false
 }
 
 func (c *FloatComparable) Equal(other Comparable) bool {
 	if o, ok := other.(*FloatComparable); ok {
 		return c.Value == o.Value
+	} else if other == nil {
+		return false
 	}
+	panicTypeMismatch(c, other)
 	return false
 }
 func (c *FloatComparable) String() string { return fmt.Sprintf("%g", c.Value) }

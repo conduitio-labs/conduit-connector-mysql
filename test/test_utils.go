@@ -48,7 +48,11 @@ func Connection(t *testing.T) *sqlx.DB {
 
 func TestContext(t *testing.T) context.Context {
 	writer := zerolog.NewTestWriter(t)
-	logger := zerolog.New(writer).Level(zerolog.InfoLevel)
+	consoleWriter := zerolog.ConsoleWriter{
+		Out:        writer,
+		PartsOrder: []string{"level", "message"},
+	}
+	logger := zerolog.New(consoleWriter).Level(zerolog.TraceLevel)
 	return logger.WithContext(context.Background())
 }
 

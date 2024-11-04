@@ -17,6 +17,7 @@ package mysql
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
@@ -32,8 +33,6 @@ func testSnapshotIterator(ctx context.Context, t *testing.T, is *is.I) (common.I
 	serverID, err := common.GetServerID(ctx, db)
 	is.NoErr(err)
 
-	canal := testutils.NewCanal(ctx, is)
-
 	iterator, err := newSnapshotIterator(snapshotIteratorConfig{
 		tableKeys: testutils.TableKeys,
 		db:        db,
@@ -48,7 +47,6 @@ func testSnapshotIterator(ctx context.Context, t *testing.T, is *is.I) (common.I
 
 	return iterator, func() {
 		is.NoErr(db.Close())
-		canal.Close()
 		is.NoErr(iterator.Teardown(ctx))
 	}
 }
@@ -61,8 +59,6 @@ func testSnapshotIteratorAtPosition(
 
 	serverID, err := common.GetServerID(ctx, db)
 	is.NoErr(err)
-
-	canal := testutils.NewCanal(ctx, is)
 
 	pos, err := common.ParseSDKPosition(sdkPos)
 	is.NoErr(err)
@@ -84,7 +80,6 @@ func testSnapshotIteratorAtPosition(
 
 	return iterator, func() {
 		is.NoErr(db.Close())
-		canal.Close()
 		is.NoErr(iterator.Teardown(ctx))
 	}
 }
@@ -224,5 +219,142 @@ func TestSnapshotIterator_RestartOnPosition(t *testing.T) {
 	is.Equal(len(recs), 100)
 	for i, rec := range recs {
 		testutils.AssertUserSnapshot(is, users[i], rec)
+	}
+}
+
+func TestSnapshotIterator_CustomTableKeys(t *testing.T) {
+	is := is.New(t)
+	ctx := testutils.TestContext(t)
+
+	db := testutils.Connection(t)
+
+	var err error
+
+	_, err = db.ExecContext(ctx, "DROP TABLE IF EXISTS composite_with_auto_inc;")
+	is.NoErr(err)
+	_, err = db.ExecContext(ctx, "DROP TABLE IF EXISTS ulid_pk;")
+	is.NoErr(err)
+	_, err = db.ExecContext(ctx, "DROP TABLE IF EXISTS timestamp_ordered;")
+	is.NoErr(err)
+
+	_, err = db.ExecContext(ctx, `
+		CREATE TABLE composite_with_auto_inc (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			tenant_id VARCHAR(50),
+			data VARCHAR(100),
+			UNIQUE KEY unique_tenant_id (tenant_id, id)
+		);
+	`)
+	is.NoErr(err)
+
+	compositeWithAutoIncData := []string{"First tenant1 record", "Second tenant1 record", "First tenant2 record"}
+	_, err = db.ExecContext(ctx, fmt.Sprint(`
+		INSERT INTO composite_with_auto_inc (tenant_id, data) VALUES 
+			('tenant1', '`, compositeWithAutoIncData[0], `'),
+			('tenant1', '`, compositeWithAutoIncData[1], `'),
+			('tenant2', '`, compositeWithAutoIncData[2], `');
+	`))
+	is.NoErr(err)
+
+	_, err = db.ExecContext(ctx, `
+		CREATE TABLE ulid_pk (
+		    id BINARY(16) PRIMARY KEY DEFAULT (UUID_TO_BIN(UUID(), TRUE)),
+			data VARCHAR(100)
+		);
+	`)
+	is.NoErr(err)
+
+	ulidPkData := []string{"ULID record 1", "ULID record 2"}
+	_, err = db.ExecContext(ctx, fmt.Sprint(`
+		INSERT INTO ulid_pk (data) VALUES 
+			('`, ulidPkData[0], `'),
+			('`, ulidPkData[1], `');
+	`))
+	is.NoErr(err)
+
+	_, err = db.ExecContext(ctx, `
+		CREATE TABLE timestamp_ordered (
+			created_at TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP(6),
+			id VARCHAR(50),
+			data VARCHAR(100),
+			UNIQUE KEY unique_record (id),
+			KEY idx_created_at (created_at)
+		);
+	`)
+	is.NoErr(err)
+
+	timestampOrderedData := []string{"Timestamp record 1", "Timestamp record 2"}
+	_, err = db.ExecContext(ctx, fmt.Sprint(`
+		INSERT INTO timestamp_ordered (id, data) VALUES 
+			('rec1', '`, timestampOrderedData[0], `'),
+			('rec2', '`, timestampOrderedData[1], `');
+	`))
+	is.NoErr(err)
+
+	type testCase struct {
+		tableName    string
+		sortingCol   string
+		expectedData []string
+	}
+
+	for _, testCase := range []testCase{
+		{
+			tableName:    "composite_with_auto_inc",
+			sortingCol:   "id",
+			expectedData: compositeWithAutoIncData,
+		},
+		{
+			tableName:    "ulid_pk",
+			sortingCol:   "id",
+			expectedData: ulidPkData,
+		},
+		{
+			tableName:    "timestamp_ordered",
+			sortingCol:   "created_at",
+			expectedData: timestampOrderedData,
+		},
+	} {
+		t.Run(fmt.Sprintf("Test table %s", testCase.tableName), func(t *testing.T) {
+			db := testutils.Connection(t)
+
+			serverID, err := common.GetServerID(ctx, db)
+			is.NoErr(err)
+
+			iterator, err := newSnapshotIterator(snapshotIteratorConfig{
+				tableKeys: common.TableKeys{
+					testCase.tableName: testCase.sortingCol,
+				},
+				db:       db,
+				database: "meroxadb",
+				tables:   []string{testCase.tableName},
+				serverID: serverID,
+			})
+			is.NoErr(err)
+
+			is.NoErr(iterator.setupWorkers(ctx))
+			iterator.start(ctx)
+
+			var recs []opencdc.Record
+			for {
+				rec, err := iterator.Next(ctx)
+				if errors.Is(err, ErrSnapshotIteratorDone) {
+					break
+				}
+				is.NoErr(err)
+
+				err = iterator.Ack(ctx, rec.Position)
+				is.NoErr(err)
+
+				recs = append(recs, rec)
+			}
+
+			for i, expectedData := range testCase.expectedData {
+				actual := recs[i]
+				is.Equal(actual.Operation, opencdc.OperationSnapshot)
+				is.Equal(actual.Payload.After.(opencdc.StructuredData)["data"].(string), expectedData)
+			}
+
+			is.NoErr(iterator.Teardown(ctx))
+		})
 	}
 }

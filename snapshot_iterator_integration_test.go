@@ -258,7 +258,7 @@ func TestSnapshotIterator_CustomTableKeys(t *testing.T) {
 
 	_, err = db.ExecContext(ctx, `
 		CREATE TABLE ulid_pk (
-		    id BINARY(16) PRIMARY KEY DEFAULT (UUID_TO_BIN(UUID(), TRUE)),
+			id CHAR(26) PRIMARY KEY,
 			data VARCHAR(100)
 		);
 	`)
@@ -266,9 +266,9 @@ func TestSnapshotIterator_CustomTableKeys(t *testing.T) {
 
 	ulidPkData := []string{"ULID record 1", "ULID record 2"}
 	_, err = db.ExecContext(ctx, fmt.Sprint(`
-		INSERT INTO ulid_pk (data) VALUES 
-			('`, ulidPkData[0], `'),
-			('`, ulidPkData[1], `');
+		INSERT INTO ulid_pk (id, data) VALUES
+			('01F8MECHZX3TBDSZ7XRADM79XE', '`, ulidPkData[0], `'),
+			('01F8MECHZX3TBDSZ7XRADM79XF', '`, ulidPkData[1], `');
 	`))
 	is.NoErr(err)
 

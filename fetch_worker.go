@@ -162,7 +162,7 @@ func (w *fetchWorker) getMinMaxValues(ctx context.Context) (minVal, maxVal commo
 	// some edge cases. in some edge cases. in some edge cases.
 
 	query := fmt.Sprintf(
-		"SELECT GREATEST(MIN(%s) - 1, 0) as min_value, MAX(%s) as max_value FROM %s",
+		"SELECT MIN(%s) as min_value, MAX(%s) as max_value FROM %s",
 		w.config.primaryKey, w.config.primaryKey, w.config.table,
 	)
 	row := w.db.QueryRowxContext(ctx, query)

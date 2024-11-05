@@ -27,7 +27,7 @@ func TestNewComparable(t *testing.T) {
 
 	tests := []struct {
 		name    string
-		input   interface{}
+		input   any
 		wantErr bool
 	}{
 		{"nil value", nil, true},
@@ -54,7 +54,7 @@ func TestNewComparable(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(tt.name, func(_ *testing.T) {
 			got, err := NewComparable(tt.input)
 			is.Equal((err != nil), tt.wantErr)
 			if !tt.wantErr {
@@ -80,7 +80,7 @@ func TestIntComparable(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(tt.name, func(_ *testing.T) {
 			c := &IntComparable{Value: tt.value}
 			other := &IntComparable{Value: tt.otherValue}
 
@@ -113,7 +113,7 @@ func TestUintComparable(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(tt.name, func(_ *testing.T) {
 			c := &UintComparable{Value: tt.value}
 			other := &UintComparable{Value: tt.otherValue}
 
@@ -147,7 +147,7 @@ func TestStringComparable(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(tt.name, func(_ *testing.T) {
 			c := &StringComparable{Value: tt.value}
 			other := &StringComparable{Value: tt.otherValue}
 
@@ -183,7 +183,7 @@ func TestTimeComparable(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(tt.name, func(_ *testing.T) {
 			c := &TimeComparable{Value: tt.value}
 			other := &TimeComparable{Value: tt.otherValue}
 
@@ -217,7 +217,7 @@ func TestFloatComparable(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(tt.name, func(_ *testing.T) {
 			c := &FloatComparable{Value: tt.value}
 			other := &FloatComparable{Value: tt.otherValue}
 
@@ -247,7 +247,7 @@ func TestTypeMismatch(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(tt.name, func(_ *testing.T) {
 			defer func() {
 				if r := recover(); r == nil {
 					t.Error("Expected panic for type mismatch")
@@ -256,7 +256,7 @@ func TestTypeMismatch(t *testing.T) {
 			tt.a.Less(tt.b)
 		})
 
-		t.Run(tt.name+"_equal", func(t *testing.T) {
+		t.Run(tt.name+"_equal", func(_ *testing.T) {
 			defer func() {
 				if r := recover(); r == nil {
 					t.Error("Expected panic for type mismatch")

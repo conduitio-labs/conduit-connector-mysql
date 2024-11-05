@@ -199,7 +199,7 @@ func (w *fetchWorker) selectRowsChunk(
 	query, args, err := squirrel.
 		Select("*").
 		From(w.config.table).
-		Where(squirrel.Gt{w.config.primaryKey: start.String()}).
+		Where(squirrel.GtOrEq{w.config.primaryKey: start.String()}).
 		OrderBy(w.config.primaryKey).
 		Limit(w.config.fetchSize).
 		ToSql()
@@ -207,16 +207,10 @@ func (w *fetchWorker) selectRowsChunk(
 		return nil, fmt.Errorf("failed to build query: %w", err)
 	}
 
-	logDataEvt := sdk.Logger(ctx).Debug().
-		Any("data", opencdc.StructuredData{
-			"query":     query,
-			"start":     start,
-			"fetchSize": w.config.fetchSize,
-		})
+	sdk.Logger(ctx).Trace().Str("query", query).Msg("created query")
 
 	rows, err := tx.QueryxContext(ctx, query, args...)
 	if err != nil {
-		logDataEvt.Msg("failed to query rows")
 		return nil, fmt.Errorf("failed to query rows: %w", err)
 	}
 	defer func() {
@@ -232,7 +226,6 @@ func (w *fetchWorker) selectRowsChunk(
 	for rows.Next() {
 		row := opencdc.StructuredData{}
 		if err := rows.MapScan(row); err != nil {
-			logDataEvt.Msg("failed to map scan row")
 			return nil, fmt.Errorf("failed to map scan row: %w", err)
 		}
 
@@ -244,7 +237,6 @@ func (w *fetchWorker) selectRowsChunk(
 		scannedRows = append(scannedRows, row)
 	}
 	if err := rows.Err(); err != nil {
-		logDataEvt.Msg("error occurred during row iteration")
 		return nil, fmt.Errorf("failed to close rows: %w", err)
 	}
 

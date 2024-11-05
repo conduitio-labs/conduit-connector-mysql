@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	testutils "github.com/conduitio-labs/conduit-connector-mysql/test"
@@ -104,34 +105,6 @@ func TestSnapshotIterator_EmptyTable(t *testing.T) {
 }
 
 func TestSnapshotIterator_WithData(t *testing.T) {
-	ctx := testutils.TestContext(t)
-
-	is := is.New(t)
-
-	db := testutils.Connection(t)
-
-	testutils.RecreateUsersTable(is, db)
-
-	var users []testutils.User
-	for i := 1; i <= 100; i++ {
-		user := testutils.InsertUser(is, db, i)
-		users = append(users, user)
-	}
-
-	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
-
-	iterator, cleanup := testSnapshotIterator(ctx, t, is)
-	defer cleanup()
-
-	for i := 1; i <= 100; i++ {
-		testutils.ReadAndAssertSnapshot(ctx, is, iterator, users[i-1])
-	}
-
-	_, err := iterator.Next(ctx)
-	is.True(errors.Is(err, ErrSnapshotIteratorDone))
-}
-
-func TestSnapshotIterator_SmallFetchSize(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 
@@ -242,52 +215,46 @@ func TestSnapshotIterator_CustomTableKeys(t *testing.T) {
 			id INT AUTO_INCREMENT PRIMARY KEY,
 			tenant_id VARCHAR(50),
 			data VARCHAR(100),
-			UNIQUE KEY unique_tenant_id (tenant_id, id)
-		);
-	`)
+			UNIQUE KEY unique_tenant_id (tenant_id, id));`)
 	is.NoErr(err)
 
-	compositeWithAutoIncData := []string{"First tenant1 record", "Second tenant1 record", "First tenant2 record"}
+	compositeWithAutoIncData := []string{"record 1", "record 2", "record 3"}
 	_, err = db.ExecContext(ctx, fmt.Sprint(`
 		INSERT INTO composite_with_auto_inc (tenant_id, data) VALUES 
 			('tenant1', '`, compositeWithAutoIncData[0], `'),
-			('tenant1', '`, compositeWithAutoIncData[1], `'),
-			('tenant2', '`, compositeWithAutoIncData[2], `');
-	`))
+			('tenant2', '`, compositeWithAutoIncData[1], `'),
+			('tenant3', '`, compositeWithAutoIncData[2], `');`))
 	is.NoErr(err)
 
 	_, err = db.ExecContext(ctx, `
 		CREATE TABLE ulid_pk (
 			id CHAR(26) PRIMARY KEY,
-			data VARCHAR(100)
-		);
-	`)
+			data VARCHAR(100));`)
 	is.NoErr(err)
 
 	ulidPkData := []string{"ULID record 1", "ULID record 2"}
 	_, err = db.ExecContext(ctx, fmt.Sprint(`
 		INSERT INTO ulid_pk (id, data) VALUES
 			('01F8MECHZX3TBDSZ7XRADM79XE', '`, ulidPkData[0], `'),
-			('01F8MECHZX3TBDSZ7XRADM79XF', '`, ulidPkData[1], `');
-	`))
+			('01F8MECHZX3TBDSZ7XRADM79XF', '`, ulidPkData[1], `');`))
 	is.NoErr(err)
 
 	_, err = db.ExecContext(ctx, `
 		CREATE TABLE timestamp_ordered (
-			created_at TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP(6),
+			created_at TIMESTAMP(6),
 			id VARCHAR(50),
 			data VARCHAR(100),
 			UNIQUE KEY unique_record (id),
-			KEY idx_created_at (created_at)
-		);
-	`)
+			KEY idx_created_at (created_at));`)
 	is.NoErr(err)
 
 	timestampOrderedData := []string{"Timestamp record 1", "Timestamp record 2"}
+	now := time.Now().Format("2006-01-02 15:04:05.999999")
+	oneSecondAgo := time.Now().Add(-1 * time.Second).Format("2006-01-02 15:04:05.999999")
 	_, err = db.ExecContext(ctx, fmt.Sprint(`
-		INSERT INTO timestamp_ordered (id, data) VALUES 
-			('rec1', '`, timestampOrderedData[0], `'),
-			('rec2', '`, timestampOrderedData[1], `');
+		INSERT INTO timestamp_ordered (created_at, id, data) VALUES 
+			('`, oneSecondAgo, `', 'rec1', '`, timestampOrderedData[0], `'),
+			('`, now, `',          'rec2', '`, timestampOrderedData[1], `');
 	`))
 	is.NoErr(err)
 
@@ -321,13 +288,11 @@ func TestSnapshotIterator_CustomTableKeys(t *testing.T) {
 			is.NoErr(err)
 
 			iterator, err := newSnapshotIterator(snapshotIteratorConfig{
-				tableKeys: common.TableKeys{
-					testCase.tableName: testCase.sortingCol,
-				},
-				db:       db,
-				database: "meroxadb",
-				tables:   []string{testCase.tableName},
-				serverID: serverID,
+				tableKeys: common.TableKeys{testCase.tableName: testCase.sortingCol},
+				db:        db,
+				database:  "meroxadb",
+				tables:    []string{testCase.tableName},
+				serverID:  serverID,
 			})
 			is.NoErr(err)
 
@@ -347,6 +312,8 @@ func TestSnapshotIterator_CustomTableKeys(t *testing.T) {
 
 				recs = append(recs, rec)
 			}
+
+			is.Equal(len(recs), len(testCase.expectedData))
 
 			for i, expectedData := range testCase.expectedData {
 				actual := recs[i]

@@ -16,6 +16,7 @@ package common
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"time"
 )
@@ -26,16 +27,38 @@ type Comparable interface {
 	String() string
 }
 
+func unmarshalComparable(data []byte) (Comparable, error) {
+	var wrapper struct {
+		Value interface{} `json:"value"`
+	}
+
+	if err := json.Unmarshal(data, &wrapper); err != nil {
+		return nil, fmt.Errorf("unmarshal comparable: %w", err)
+	}
+
+	return NewComparable(wrapper.Value)
+}
+
 type (
-	IntComparable    struct{ Value int64 }
-	UintComparable   struct{ Value uint64 }
-	StringComparable struct{ Value string }
-	TimeComparable   struct{ Value time.Time }
-	FloatComparable  struct{ Value float64 }
+	IntComparable struct {
+		Value int64 `json:"value"`
+	}
+	UintComparable struct {
+		Value uint64 `json:"value"`
+	}
+	StringComparable struct {
+		Value string `json:"value"`
+	}
+	TimeComparable struct {
+		Value time.Time `json:"value"`
+	}
+	FloatComparable struct {
+		Value float64 `json:"value"`
+	}
 )
 
 func panicTypeMismatch(a, b any) {
-	msg := fmt.Sprintf("type mismatch: %T != %T", a, b)
+	msg := fmt.Sprintf("type mismatch: %T != %T, values: %v - %v", a, b, a, b)
 	panic(msg)
 }
 

@@ -73,34 +73,8 @@ func ParseSDKPosition(p opencdc.Position) (Position, error) {
 type SnapshotPositions map[string]TablePosition
 
 type TablePosition struct {
-	LastRead    Comparable `json:"last_read"`
-	SnapshotEnd Comparable `json:"snapshot_end"`
-}
-
-func (p *TablePosition) UnmarshalJSON(data []byte) error {
-	var wrapper struct {
-		LastRead    json.RawMessage `json:"last_read"`
-		SnapshotEnd json.RawMessage `json:"snapshot_end"`
-	}
-
-	if err := json.Unmarshal(data, &wrapper); err != nil {
-		return fmt.Errorf("unmarshal table position: %w", err)
-	}
-
-	lastRead, err := unmarshalComparable(wrapper.LastRead)
-	if err != nil {
-		return fmt.Errorf("unmarshal last read: %w", err)
-	}
-
-	snapshotEnd, err := unmarshalComparable(wrapper.SnapshotEnd)
-	if err != nil {
-		return fmt.Errorf("unmarshal snapshot end: %w", err)
-	}
-
-	p.LastRead = lastRead
-	p.SnapshotEnd = snapshotEnd
-
-	return nil
+	LastRead    any `json:"last_read"`
+	SnapshotEnd any `json:"snapshot_end"`
 }
 
 type CdcPosition struct {

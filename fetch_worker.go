@@ -33,14 +33,14 @@ type fetchWorker struct {
 	db         *sqlx.DB
 	data       chan fetchData
 	config     fetchWorkerConfig
-	start, end common.Comparable
+	start, end any
 }
 
 type fetchWorkerConfig struct {
 	lastPosition common.SnapshotPosition
 	table        string
 	fetchSize    uint64
-	primaryKey   string
+	primaryKey string
 }
 
 func newFetchWorker(db *sqlx.DB, data chan fetchData, config fetchWorkerConfig) *fetchWorker {
@@ -58,8 +58,7 @@ func (w *fetchWorker) fetchStartEnd(ctx context.Context) (err error) {
 	}
 
 	lastRead := w.config.lastPosition.Snapshots[w.config.table].LastRead
-	if minVal.Less(lastRead) {
-		// last read takes preference, as previous records where already fetched.
+	if lastRead != nil {
 		w.start = lastRead
 	} else {
 		w.start = minVal
@@ -67,8 +66,8 @@ func (w *fetchWorker) fetchStartEnd(ctx context.Context) (err error) {
 	w.end = maxVal
 
 	sdk.Logger(ctx).Info().
-		Str("start", w.start.String()).
-		Str("end", w.end.String()).
+		Any("start", w.start).
+		Any("end", w.end).
 		Msg("fetched start and end")
 
 	return nil
@@ -91,15 +90,17 @@ func (w *fetchWorker) run(ctx context.Context) (err error) {
 	defer func() { err = errors.Join(err, tx.Commit()) }()
 
 	sdk.Logger(ctx).Info().
-		Str("start", w.start.String()).
-		Str("end", w.end.String()).
+		Any("start", w.start).
+		Any("end", w.end).
 		Uint64("fetchSize", w.config.fetchSize).
 		Msg("fetching rows")
 
-	for chunkStart := w.start; chunkStart.Less(w.end) || !chunkStart.Equal(w.end); {
+	for chunkStart := w.start; chunkStart != w.end; {
 		sdk.Logger(ctx).Info().
-			Str("chunk start", chunkStart.String()).
+			Any("chunk start", chunkStart).
+			Any("end", w.end).
 			Msg("fetching chunk")
+
 		rows, err := w.selectRowsChunk(ctx, tx, chunkStart)
 		if err != nil {
 			return fmt.Errorf("failed to select rows chunk: %w", err)
@@ -111,14 +112,9 @@ func (w *fetchWorker) run(ctx context.Context) (err error) {
 		for _, row := range rows {
 			sdk.Logger(ctx).Trace().Msgf("fetched row: %+v", row)
 
-			primaryKeyVal := row[w.config.primaryKey]
-			if primaryKeyVal == nil {
+			lastRead := row[w.config.primaryKey]
+			if lastRead == nil {
 				return ErrPrimaryKeyNotFoundInRow
-			}
-
-			lastRead, err := common.NewComparable(primaryKeyVal)
-			if err != nil {
-				return fmt.Errorf("failed to convert primary key: %w", err)
 			}
 
 			position := common.TablePosition{
@@ -146,11 +142,12 @@ func (w *fetchWorker) run(ctx context.Context) (err error) {
 }
 
 // getMinMaxValues fetches the maximum value of the primary key from the table.
-func (w *fetchWorker) getMinMaxValues(ctx context.Context) (minVal, maxVal common.Comparable, err error) {
+func (w *fetchWorker) getMinMaxValues(ctx context.Context) (minVal, maxVal any, err error) {
 	var minmax struct {
 		MinValue any `db:"min_value"`
 		MaxValue any `db:"max_value"`
 	}
+
 
 	// We obtain the minimum value this way so that we can fetch rows exclusive
 	// (>) to inclusive (<=). This way, when we fetch rows we discard the last
@@ -174,32 +171,25 @@ func (w *fetchWorker) getMinMaxValues(ctx context.Context) (minVal, maxVal commo
 		return nil, nil, fmt.Errorf("failed to get min value: %w", err)
 	}
 
-	if minmax.MinValue == nil || minmax.MaxValue == nil {
-		// table is empty
-		return &common.IntComparable{}, &common.IntComparable{}, nil
-	}
-
-	minVal, err = common.NewComparable(minmax.MinValue)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create min value: %w", err)
-	}
-
-	maxVal, err = common.NewComparable(minmax.MaxValue)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create max value: %w", err)
-	}
-
-	return minVal, maxVal, nil
+	return minmax.MinValue, minmax.MaxValue, nil
 }
 
 func (w *fetchWorker) selectRowsChunk(
 	ctx context.Context, tx *sqlx.Tx,
-	start common.Comparable,
+	start any,
 ) (scannedRows []opencdc.StructuredData, err error) {
+
+	var wherePred any = squirrel.GtOrEq{w.config.primaryKey: start}
+	startingFromPos := w.config.lastPosition.Snapshots[w.config.table].LastRead != nil
+	if startingFromPos {
+		// we already read the record, that's why dragon ball gt.
+		wherePred = squirrel.Gt{w.config.primaryKey: start}
+	}
+
 	query, args, err := squirrel.
 		Select("*").
 		From(w.config.table).
-		Where(squirrel.GtOrEq{w.config.primaryKey: start.String()}).
+		Where(wherePred).
 		OrderBy(w.config.primaryKey).
 		Limit(w.config.fetchSize).
 		ToSql()
@@ -207,7 +197,7 @@ func (w *fetchWorker) selectRowsChunk(
 		return nil, fmt.Errorf("failed to build query: %w", err)
 	}
 
-	sdk.Logger(ctx).Trace().Str("query", query).Msg("created query")
+	sdk.Logger(ctx).Trace().Str("query", query).Any("args", args).Msg("created query")
 
 	rows, err := tx.QueryxContext(ctx, query, args...)
 	if err != nil {

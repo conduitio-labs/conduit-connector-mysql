@@ -52,6 +52,7 @@ func TestContext(t *testing.T) context.Context {
 		Out:        writer,
 		PartsOrder: []string{"level", "message"},
 	}
+	logger := zerolog.New(consoleWriter).Level(zerolog.InfoLevel)
 	return logger.WithContext(context.Background())
 }
 

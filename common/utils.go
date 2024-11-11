@@ -188,3 +188,38 @@ func GetServerID(ctx context.Context, db *sqlx.DB) (string, error) {
 
 	return serverID, nil
 }
+
+func AreEqual(a, b any) (bool, error) {
+	if a == nil || b == nil {
+		return false, fmt.Errorf("nil values cannot be compared")
+	}
+
+	switch v1 := a.(type) {
+	case int:
+		if v2, ok := b.(int); ok {
+			return v1 == v2, nil
+		}
+	case int32:
+		if v2, ok := b.(int32); ok {
+			return v1 == v2, nil
+		}
+	case int64:
+		if v2, ok := b.(int64); ok {
+			return v1 == v2, nil
+		}
+	case float32:
+		if v2, ok := b.(float32); ok {
+			return v1 == v2, nil
+		}
+	case float64:
+		if v2, ok := b.(float64); ok {
+			return v1 == v2, nil
+		}
+	case string:
+		if v2, ok := b.(string); ok {
+			return v1 == v2, nil
+		}
+	}
+
+	return false, fmt.Errorf("unsupported or mismatched types: %T and %T", a, b)
+}

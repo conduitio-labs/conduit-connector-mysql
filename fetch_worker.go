@@ -95,7 +95,15 @@ func (w *fetchWorker) run(ctx context.Context) (err error) {
 		Uint64("fetchSize", w.config.fetchSize).
 		Msg("fetching rows")
 
-	for chunkStart := w.start; chunkStart != w.end; {
+	chunkStart := w.start
+	for {
+		equal, cantCompare := common.AreEqual(chunkStart, w.end)
+		if cantCompare {
+			return fmt.Errorf("cannot compare values %v and %v", chunkStart, w.end)
+		} else if equal {
+			break
+		}
+
 		sdk.Logger(ctx).Info().
 			Any("chunk start", chunkStart).
 			Any("end", w.end).

@@ -325,3 +325,8 @@ func TestSnapshotIterator_CustomTableKeys(t *testing.T) {
 		})
 	}
 }
+
+func TestSnapshotIterator_DeleteEndWhileSnapshotting(t *testing.T) {
+	// In the current implementation this test should cause an infinite loop,
+	// which we want to prevent.
+}

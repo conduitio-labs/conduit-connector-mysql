@@ -164,7 +164,7 @@ func (s *Source) getTableKeys() (common.TableSortColumns, error) {
 	tableKeys := make(common.TableSortColumns)
 
 	for _, table := range s.config.Tables {
-		preconfiguredTableKey, ok := s.config.TableKeys[table]
+		preconfiguredTableKey, ok := s.config.TableConfig[table]
 		if ok {
 			tableKeys[table] = preconfiguredTableKey.SortingColumn
 			continue

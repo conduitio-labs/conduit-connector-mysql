@@ -95,6 +95,9 @@ func (w *fetchWorker) run(ctx context.Context) (err error) {
 		Uint64("fetchSize", w.config.fetchSize).
 		Msg("fetching rows")
 
+	// We need to batch the iteration in chunks because mysql cursors are very
+	// slow, compared to postgres.
+
 	chunkStart := w.start
 	for {
 		equal, cantCompare := common.AreEqual(chunkStart, w.end)
@@ -156,16 +159,6 @@ func (w *fetchWorker) getMinMaxValues(ctx context.Context) (minVal, maxVal any, 
 		MaxValue any `db:"max_value"`
 	}
 
-
-	// We obtain the minimum value this way so that we can fetch rows exclusive
-	// (>) to inclusive (<=). This way, when we fetch rows we discard the last
-	// previous fetched row. The only way that this is invalid is if the id
-	// value is <= 0, which is highly unusual.
-	//
-	// We could also start from 0 every time, but then we might do a few more
-	// initial fetches than necessary for each snapshot in some edge cases. in
-	// some edge cases. in some edge cases. in some edge cases.
-
 	query := fmt.Sprintf(
 		"SELECT MIN(%s) as min_value, MAX(%s) as max_value FROM %s",
 		w.config.sortColName, w.config.sortColName, w.config.table,
@@ -190,6 +183,8 @@ func (w *fetchWorker) selectRowsChunk(
 	var wherePred any = squirrel.GtOrEq{w.config.sortColName: start}
 	startingFromPos := w.config.lastPosition.Snapshots[w.config.table].LastRead != nil
 	if startingFromPos {
+		// If the worker has been given a starting position it means that we have already
+		// read the record in that specific position, so we can just exclude it.
 		wherePred = squirrel.Gt{w.config.sortColName: start}
 	}
 

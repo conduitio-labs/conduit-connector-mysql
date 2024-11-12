@@ -24,7 +24,8 @@ type Config struct {
 type SourceConfig struct {
 	Config
 
-	TableKeys map[string]TableConfig `json:"tableKeys"`
+	// TableConfig holds the custom configuration that each table can have.
+	TableConfig map[string]TableConfig `json:"tableConfig"`
 
 	// Tables represents the tables to read from.
 	Tables []string `json:"tables" validate:"required"`
@@ -37,8 +38,7 @@ type SourceConfig struct {
 }
 
 type TableConfig struct {
-	// SortingColumng represents the alternative columnt of the table to use to sort
-	// the snapshot.
+	// SortingColumn allows to force using a custom column to sort the snapshot.
 	SortingColumn string `json:"sortingColumn"`
 }
 

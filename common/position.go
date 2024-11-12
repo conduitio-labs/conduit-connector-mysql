@@ -102,6 +102,6 @@ func (p CdcPosition) ToSDKPosition() opencdc.Position {
 	return v
 }
 
-// TableKeys is a collection of associations between table names and primary key
-// names. Useful for retrieving primary key values from rows.
-type TableKeys map[string]string
+// TableSortColumns is a map of associations between table names and sort column
+// names. Useful for retrieving sort values from rows.
+type TableSortColumns map[string]string

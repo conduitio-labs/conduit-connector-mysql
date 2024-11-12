@@ -27,7 +27,7 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
-var ErrPrimaryKeyNotFoundInRow = errors.New("primary key not found in row")
+var ErrSortingKeyNotFoundInRow = errors.New("sorting key not found in row")
 
 type fetchWorker struct {
 	db         *sqlx.DB
@@ -40,7 +40,7 @@ type fetchWorkerConfig struct {
 	lastPosition common.SnapshotPosition
 	table        string
 	fetchSize    uint64
-	primaryKey string
+	sortColName  string
 }
 
 func newFetchWorker(db *sqlx.DB, data chan fetchData, config fetchWorkerConfig) *fetchWorker {
@@ -120,9 +120,9 @@ func (w *fetchWorker) run(ctx context.Context) (err error) {
 		for _, row := range rows {
 			sdk.Logger(ctx).Trace().Msgf("fetched row: %+v", row)
 
-			lastRead := row[w.config.primaryKey]
+			lastRead := row[w.config.sortColName]
 			if lastRead == nil {
-				return ErrPrimaryKeyNotFoundInRow
+				return ErrSortingKeyNotFoundInRow
 			}
 
 			position := common.TablePosition{
@@ -168,7 +168,7 @@ func (w *fetchWorker) getMinMaxValues(ctx context.Context) (minVal, maxVal any, 
 
 	query := fmt.Sprintf(
 		"SELECT MIN(%s) as min_value, MAX(%s) as max_value FROM %s",
-		w.config.primaryKey, w.config.primaryKey, w.config.table,
+		w.config.sortColName, w.config.sortColName, w.config.table,
 	)
 	row := w.db.QueryRowxContext(ctx, query)
 	if err := row.StructScan(&minmax); err != nil {
@@ -187,18 +187,17 @@ func (w *fetchWorker) selectRowsChunk(
 	start any,
 ) (scannedRows []opencdc.StructuredData, err error) {
 
-	var wherePred any = squirrel.GtOrEq{w.config.primaryKey: start}
+	var wherePred any = squirrel.GtOrEq{w.config.sortColName: start}
 	startingFromPos := w.config.lastPosition.Snapshots[w.config.table].LastRead != nil
 	if startingFromPos {
-		// we already read the record, that's why dragon ball gt.
-		wherePred = squirrel.Gt{w.config.primaryKey: start}
+		wherePred = squirrel.Gt{w.config.sortColName: start}
 	}
 
 	query, args, err := squirrel.
 		Select("*").
 		From(w.config.table).
 		Where(wherePred).
-		OrderBy(w.config.primaryKey).
+		OrderBy(w.config.sortColName).
 		Limit(w.config.fetchSize).
 		ToSql()
 	if err != nil {
@@ -245,14 +244,14 @@ func (w *fetchWorker) buildFetchData(
 	payload opencdc.StructuredData,
 	position common.TablePosition,
 ) (fetchData, error) {
-	keyVal, ok := payload[w.config.primaryKey]
+	keyVal, ok := payload[w.config.sortColName]
 	if !ok {
-		return fetchData{}, fmt.Errorf("key %s not found in payload", w.config.primaryKey)
+		return fetchData{}, fmt.Errorf("key %s not found in payload", w.config.sortColName)
 	}
 
 	return fetchData{
 		key: snapshotKey{
-			Key:   w.config.primaryKey,
+			Key:   w.config.sortColName,
 			Value: keyVal,
 		},
 		table:    w.config.table,

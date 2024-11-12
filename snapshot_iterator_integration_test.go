@@ -35,11 +35,11 @@ func testSnapshotIterator(ctx context.Context, t *testing.T, is *is.I) (common.I
 	is.NoErr(err)
 
 	iterator, err := newSnapshotIterator(snapshotIteratorConfig{
-		tableKeys: testutils.TableKeys,
-		db:        db,
-		database:  "meroxadb",
-		tables:    []string{"users"},
-		serverID:  serverID,
+		tableSortColumns: testutils.TableSortCols,
+		db:               db,
+		database:         "meroxadb",
+		tables:           []string{"users"},
+		serverID:         serverID,
 	})
 	is.NoErr(err)
 
@@ -67,12 +67,12 @@ func testSnapshotIteratorAtPosition(
 	is.Equal(pos.Kind, common.PositionTypeSnapshot)
 
 	iterator, err := newSnapshotIterator(snapshotIteratorConfig{
-		tableKeys:     testutils.TableKeys,
-		db:            db,
-		startPosition: pos.SnapshotPosition,
-		database:      "meroxadb",
-		tables:        []string{"users"},
-		serverID:      serverID,
+		tableSortColumns: testutils.TableSortCols,
+		db:               db,
+		startPosition:    pos.SnapshotPosition,
+		database:         "meroxadb",
+		tables:           []string{"users"},
+		serverID:         serverID,
 	})
 	is.NoErr(err)
 
@@ -288,11 +288,11 @@ func TestSnapshotIterator_CustomTableKeys(t *testing.T) {
 			is.NoErr(err)
 
 			iterator, err := newSnapshotIterator(snapshotIteratorConfig{
-				tableKeys: common.TableKeys{testCase.tableName: testCase.sortingCol},
-				db:        db,
-				database:  "meroxadb",
-				tables:    []string{testCase.tableName},
-				serverID:  serverID,
+				tableSortColumns: common.TableSortColumns{testCase.tableName: testCase.sortingCol},
+				db:               db,
+				database:         "meroxadb",
+				tables:           []string{testCase.tableName},
+				serverID:         serverID,
 			})
 			is.NoErr(err)
 

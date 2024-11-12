@@ -43,7 +43,7 @@ type cdcIteratorConfig struct {
 	db                  *sqlx.DB
 	tables              []string
 	mysqlConfig         *mysqldriver.Config
-	tableKeys           common.TableKeys
+	tableSortCols       common.TableSortColumns
 	disableCanalLogging bool
 	startPosition       *common.CdcPosition
 }
@@ -178,9 +178,9 @@ func (c *cdcIterator) buildRecord(e rowEvent) (opencdc.Record, error) {
 		position := pos.ToSDKPosition()
 		payload := buildPayload(e.Table.Columns, e.Rows[0])
 
-		primaryKey := c.config.tableKeys[e.Table.Name]
+		sortCol := c.config.tableSortCols[e.Table.Name]
 
-		key, err := buildRecordKey(primaryKey, payload)
+		key, err := buildRecordKey(sortCol, payload)
 		if err != nil {
 			return opencdc.Record{}, fmt.Errorf("failed to build record key: %w", err)
 		}
@@ -191,9 +191,9 @@ func (c *cdcIterator) buildRecord(e rowEvent) (opencdc.Record, error) {
 
 		payload := buildPayload(e.Table.Columns, e.Rows[0])
 
-		primaryKey := c.config.tableKeys[e.Table.Name]
+		sortCol := c.config.tableSortCols[e.Table.Name]
 
-		key, err := buildRecordKey(primaryKey, payload)
+		key, err := buildRecordKey(sortCol, payload)
 		if err != nil {
 			return opencdc.Record{}, fmt.Errorf("failed to build record key: %w", err)
 		}
@@ -204,9 +204,9 @@ func (c *cdcIterator) buildRecord(e rowEvent) (opencdc.Record, error) {
 		before := buildPayload(e.Table.Columns, e.Rows[0])
 		after := buildPayload(e.Table.Columns, e.Rows[1])
 
-		primaryKey := c.config.tableKeys[e.Table.Name]
+		sortCol := c.config.tableSortCols[e.Table.Name]
 
-		key, err := buildRecordKey(primaryKey, before)
+		key, err := buildRecordKey(sortCol, before)
 		if err != nil {
 			return opencdc.Record{}, fmt.Errorf("failed to build record key: %w", err)
 		}

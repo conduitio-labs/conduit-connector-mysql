@@ -90,7 +90,7 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 
 	s.iterator, err = newCombinedIterator(ctx, combinedIteratorConfig{
 		db:                    s.db,
-		tableKeys:             tableKeys,
+		tableSortCols:         tableKeys,
 		startSnapshotPosition: pos.SnapshotPosition,
 		startCdcPosition:      pos.CdcPosition,
 		database:              s.configFromDsn.DBName,
@@ -160,8 +160,8 @@ func getPrimaryKey(db *sqlx.DB, database, table string) (string, error) {
 	return primaryKey.ColumnName, nil
 }
 
-func (s *Source) getTableKeys() (common.TableKeys, error) {
-	tableKeys := make(common.TableKeys)
+func (s *Source) getTableKeys() (common.TableSortColumns, error) {
+	tableKeys := make(common.TableSortColumns)
 
 	for _, table := range s.config.Tables {
 		preconfiguredTableKey, ok := s.config.TableKeys[table]

@@ -56,7 +56,7 @@ func TestContext(t *testing.T) context.Context {
 	return logger.WithContext(context.Background())
 }
 
-var TableKeys = common.TableKeys{
+var TableSortCols = common.TableSortColumns{
 	"users": "id",
 }
 

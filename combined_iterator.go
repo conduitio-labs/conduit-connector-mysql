@@ -36,7 +36,7 @@ type combinedIterator struct {
 
 type combinedIteratorConfig struct {
 	db                    *sqlx.DB
-	tableKeys             common.TableKeys
+	tableSortCols         common.TableSortColumns
 	fetchSize             uint64
 	startSnapshotPosition *common.SnapshotPosition
 	startCdcPosition      *common.CdcPosition
@@ -54,7 +54,7 @@ func newCombinedIterator(
 	cdcIterator, err := newCdcIterator(ctx, cdcIteratorConfig{
 		tables:              config.tables,
 		mysqlConfig:         config.mysqlConfig,
-		tableKeys:           config.tableKeys,
+		tableSortCols:       config.tableSortCols,
 		disableCanalLogging: config.disableCanalLogging,
 		db:                  config.db,
 		startPosition:       config.startCdcPosition,
@@ -64,13 +64,13 @@ func newCombinedIterator(
 	}
 
 	snapshotIterator, err := newSnapshotIterator(snapshotIteratorConfig{
-		db:            config.db,
-		tableKeys:     config.tableKeys,
-		fetchSize:     config.fetchSize,
-		startPosition: config.startSnapshotPosition,
-		database:      config.database,
-		tables:        config.tables,
-		serverID:      config.serverID,
+		db:               config.db,
+		tableSortColumns: config.tableSortCols,
+		fetchSize:        config.fetchSize,
+		startPosition:    config.startSnapshotPosition,
+		database:         config.database,
+		tables:           config.tables,
+		serverID:         config.serverID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create snapshot iterator: %w", err)

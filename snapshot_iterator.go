@@ -116,7 +116,9 @@ func newSnapshotIterator(config snapshotIteratorConfig) (*snapshotIterator, erro
 func (s *snapshotIterator) setupWorkers(ctx context.Context) error {
 	for table, sortCol := range s.config.tableSortColumns {
 		worker := newFetchWorker(s.config.db, s.data, fetchWorkerConfig{
-			lastPosition: s.lastPosition,
+			// the snapshot worker will update the last position, so we need to
+			// clone it to avoid dataraces
+			lastPosition: s.lastPosition.Clone(),
 			table:        table,
 			fetchSize:    s.config.fetchSize,
 			sortColName:  sortCol,

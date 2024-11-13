@@ -137,22 +137,17 @@ func TestSource_EmptyChunkRead(t *testing.T) {
 
 	testutils.RecreateUsersTable(is, db)
 
-	var inserted []testutils.User
-	for i := range 100 {
-		user := testutils.InsertUser(is, db, i+1)
-		inserted = append(inserted, user)
-	}
-
-	firstPart := inserted[:20]
-	secondPart := inserted[40:]
-	toDelete := inserted[20:40]
-
 	var expected []testutils.User
-	expected = append(expected, firstPart...)
-	expected = append(expected, secondPart...)
+	for i := range 100 {
+		userID := i + 1
+		if userID > 20 && userID < 40 {
+			continue
+		} else if userID > 60 && userID < 80 {
+			continue
+		}
 
-	for _, user := range toDelete {
-		testutils.DeleteUser(is, db, user)
+		user := testutils.InsertUser(is, db, userID)
+		expected = append(expected, user)
 	}
 
 	source, teardown := testSourceWithFetchSize(ctx, is, "10")

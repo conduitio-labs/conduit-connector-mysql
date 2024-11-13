@@ -98,6 +98,10 @@ func (w *fetchWorker) run(ctx context.Context) (err error) {
 	// We need to batch the iteration in chunks because mysql cursors are very
 	// slow, compared to postgres.
 
+	// If the worker has been given a starting position it means that we have already
+	// read the record in that specific position, so we can just exclude it.
+
+	discardFirst := w.config.lastPosition.Snapshots[w.config.table].LastRead != nil
 	chunkStart := w.start
 	for {
 		equal, cantCompare := common.AreEqual(chunkStart, w.end)
@@ -112,10 +116,12 @@ func (w *fetchWorker) run(ctx context.Context) (err error) {
 			Any("end", w.end).
 			Msg("fetching chunk")
 
-		rows, err := w.selectRowsChunk(ctx, tx, chunkStart)
+		rows, err := w.selectRowsChunk(ctx, tx, chunkStart, discardFirst)
 		if err != nil {
 			return fmt.Errorf("failed to select rows chunk: %w", err)
 		}
+		discardFirst = true
+
 		if len(rows) == 0 {
 			continue
 		}
@@ -177,14 +183,11 @@ func (w *fetchWorker) getMinMaxValues(ctx context.Context) (minVal, maxVal any, 
 
 func (w *fetchWorker) selectRowsChunk(
 	ctx context.Context, tx *sqlx.Tx,
-	start any,
+	start any, discardFirst bool,
 ) (scannedRows []opencdc.StructuredData, err error) {
 
 	var wherePred any = squirrel.GtOrEq{w.config.sortColName: start}
-	startingFromPos := w.config.lastPosition.Snapshots[w.config.table].LastRead != nil
-	if startingFromPos {
-		// If the worker has been given a starting position it means that we have already
-		// read the record in that specific position, so we can just exclude it.
+	if discardFirst {
 		wherePred = squirrel.Gt{w.config.sortColName: start}
 	}
 

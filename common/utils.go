@@ -37,11 +37,7 @@ func FormatValue(val any) any {
 	case *time.Time:
 		return val.UTC()
 	case []uint8:
-		s := string(val)
-		if parsed, err := time.Parse(time.DateTime, s); err == nil {
-			return parsed.UTC().Format(time.RFC3339)
-		}
-		return s
+		return string(val)
 	case uint64:
 		if val <= math.MaxInt64 {
 			return int64(val)

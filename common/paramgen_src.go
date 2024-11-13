@@ -8,11 +8,11 @@ import (
 )
 
 const (
-	SourceConfigDisableCanalLogs       = "disableCanalLogs"
-	SourceConfigDsn                    = "dsn"
-	SourceConfigFetchSize              = "fetchSize"
-	SourceConfigTableKeysSortingColumn = "tableKeys.*.sortingColumn"
-	SourceConfigTables                 = "tables"
+	SourceConfigDisableCanalLogs         = "disableCanalLogs"
+	SourceConfigDsn                      = "dsn"
+	SourceConfigFetchSize                = "fetchSize"
+	SourceConfigTableConfigSortingColumn = "tableConfig.*.sortingColumn"
+	SourceConfigTables                   = "tables"
 )
 
 func (SourceConfig) Parameters() map[string]config.Parameter {
@@ -37,9 +37,9 @@ func (SourceConfig) Parameters() map[string]config.Parameter {
 			Type:        config.ParameterTypeInt,
 			Validations: []config.Validation{},
 		},
-		SourceConfigTableKeysSortingColumn: {
+		SourceConfigTableConfigSortingColumn: {
 			Default:     "",
-			Description: "SortingColumng represents the alternative columnt of the table to use to sort\nthe snapshot.",
+			Description: "SortingColumn allows to force using a custom column to sort the snapshot.",
 			Type:        config.ParameterTypeString,
 			Validations: []config.Validation{},
 		},

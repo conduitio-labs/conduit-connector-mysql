@@ -327,6 +327,55 @@ func TestSnapshotIterator_CustomTableKeys(t *testing.T) {
 }
 
 func TestSnapshotIterator_DeleteEndWhileSnapshotting(t *testing.T) {
-	// In the current implementation this test should cause an infinite loop,
-	// which we want to prevent.
+	ctx := testutils.TestContext(t)
+	is := is.New(t)
+
+	db := testutils.Connection(t)
+
+	testutils.RecreateUsersTable(is, db)
+
+	var users []testutils.User
+	for i := 1; i <= 100; i++ {
+		user := testutils.InsertUser(is, db, i)
+		users = append(users, user)
+	}
+
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+
+	serverID, err := common.GetServerID(ctx, db)
+	is.NoErr(err)
+
+	iterator, err := newSnapshotIterator(snapshotIteratorConfig{
+		tableSortColumns: testutils.TableSortCols,
+		db:               db,
+		database:         "meroxadb",
+		tables:           []string{"users"},
+		serverID:         serverID,
+	})
+	is.NoErr(err)
+
+	is.NoErr(iterator.setupWorkers(ctx))
+
+	// fetched end of the worker, now we can delete the last record
+	// delete the last record so that fetched worker end isn't found
+	_, err = db.ExecContext(ctx, "DELETE FROM users WHERE id = 100")
+	is.NoErr(err)
+
+	iterator.start(ctx)
+	defer func() {
+		is.NoErr(db.Close())
+		is.NoErr(iterator.Teardown(ctx))
+	}()
+
+	for i := 1; i <= 99; i++ {
+		rec, err := iterator.Next(ctx)
+		if errors.Is(err, ErrSnapshotIteratorDone) {
+			break
+		} else {
+			is.NoErr(err)
+		}
+		is.NoErr(iterator.Ack(ctx, rec.Position))
+
+		testutils.AssertUserSnapshot(is, users[i-1], rec)
+	}
 }

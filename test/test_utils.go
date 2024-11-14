@@ -233,13 +233,7 @@ func ReadAndAssertSnapshot(
 	is.NoErr(err)
 	is.NoErr(iterator.Ack(ctx, rec.Position))
 
-	is.Equal(rec.Operation, opencdc.OperationSnapshot)
-
-	assertMetadata(is, rec.Metadata)
-
-	IsDataEqual(is, rec.Key, opencdc.StructuredData{"id": user.ID})
-	IsDataEqual(is, rec.Payload.After, user.ToStructuredData())
-
+	AssertUserSnapshot(is, user, rec)
 	return rec
 }
 

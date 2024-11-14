@@ -213,3 +213,52 @@ func AreEqual(a, b any) (equal bool, cantCompare bool) {
 
 	return a == b, false
 }
+
+func IsGreaterOrEqual(a, b any) (greaterOrEqual bool, cantCompare bool) {
+	defer func() {
+		if err := recover(); err != nil {
+			cantCompare = true
+		}
+	}()
+
+	switch a := a.(type) {
+	case int:
+		if b, ok := b.(int); ok {
+			return a >= b, false
+		}
+	case int64:
+		if b, ok := b.(int64); ok {
+			return a >= b, false
+		}
+	case float64:
+		if b, ok := b.(float64); ok {
+			return a >= b, false
+		}
+	case string:
+		if b, ok := b.(string); ok {
+			return a >= b, false
+		}
+	case []uint8:
+		if b, ok := b.([]uint8); ok {
+			return string(a) >= string(b), false
+		}
+	case time.Time:
+		if b, ok := b.(time.Time); ok {
+			return a.After(b) || a.Equal(b), false
+		}
+	}
+
+	aStr, aIsStr := a.(string)
+	bStr, bIsStr := b.(string)
+	aBytes, aOk := a.([]uint8)
+	bBytes, bOk := b.([]uint8)
+	switch {
+	case aIsStr && bOk:
+		return aStr >= string(bBytes), false
+	case bIsStr && aOk:
+		return string(aBytes) >= bStr, false
+	}
+
+	cantCompare = true
+	return false, cantCompare
+}

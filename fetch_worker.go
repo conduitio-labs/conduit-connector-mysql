@@ -104,10 +104,10 @@ func (w *fetchWorker) run(ctx context.Context) (err error) {
 	discardFirst := w.config.lastPosition.Snapshots[w.config.table].LastRead != nil
 	chunkStart := w.start
 	for {
-		equal, cantCompare := common.AreEqual(chunkStart, w.end)
+		greaterOrEq, cantCompare := common.IsGreaterOrEqual(chunkStart, w.end)
 		if cantCompare {
 			return fmt.Errorf("cannot compare values %v and %v", chunkStart, w.end)
-		} else if equal {
+		} else if greaterOrEq {
 			break
 		}
 
@@ -115,6 +115,10 @@ func (w *fetchWorker) run(ctx context.Context) (err error) {
 			Any("chunk start", chunkStart).
 			Any("end", w.end).
 			Msg("fetching chunk")
+
+		if chunkStart == 99 {
+			fmt.Println()
+		}
 
 		rows, err := w.selectRowsChunk(ctx, tx, chunkStart, discardFirst)
 		if err != nil {
@@ -185,7 +189,6 @@ func (w *fetchWorker) selectRowsChunk(
 	ctx context.Context, tx *sqlx.Tx,
 	start any, discardFirst bool,
 ) (scannedRows []opencdc.StructuredData, err error) {
-
 	var wherePred any = squirrel.GtOrEq{w.config.sortColName: start}
 	if discardFirst {
 		wherePred = squirrel.Gt{w.config.sortColName: start}

@@ -88,7 +88,6 @@ func testSnapshotIteratorAtPosition(
 func TestSnapshotIterator_EmptyTable(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
-
 	db := testutils.Connection(t)
 
 	testutils.RecreateUsersTable(is, db)

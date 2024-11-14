@@ -124,8 +124,12 @@ func (s *snapshotIterator) setupWorkers(ctx context.Context) error {
 			sortColName:  sortCol,
 		})
 
-		if err := worker.fetchStartEnd(ctx); err != nil {
+		isTableEmpty, err := worker.fetchStartEnd(ctx)
+		if err != nil {
 			return fmt.Errorf("failed to start worker: %w", err)
+		} else if isTableEmpty {
+			sdk.Logger(ctx).Info().Msgf("table %s is empty, skipping...", table)
+			continue
 		}
 
 		s.workers = append(s.workers, worker)
@@ -146,6 +150,10 @@ func (s *snapshotIterator) start(ctx context.Context) {
 }
 
 func (s *snapshotIterator) Next(ctx context.Context) (rec opencdc.Record, err error) {
+	if len(s.workers) == 0 {
+		return rec, ErrSnapshotIteratorDone
+	}
+
 	select {
 	case <-ctx.Done():
 		//nolint:wrapcheck // no need to wrap canceled error
@@ -172,6 +180,10 @@ func (s *snapshotIterator) Ack(context.Context, opencdc.Position) error {
 }
 
 func (s *snapshotIterator) Teardown(ctx context.Context) error {
+	if len(s.workers) == 0 {
+		return nil
+	}
+
 	s.t.Kill(ErrSnapshotIteratorDone)
 	if err := s.t.Err(); err != nil && !errors.Is(err, ErrSnapshotIteratorDone) {
 		return fmt.Errorf(

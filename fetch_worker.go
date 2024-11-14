@@ -51,26 +51,28 @@ func newFetchWorker(db *sqlx.DB, data chan fetchData, config fetchWorkerConfig) 
 	}
 }
 
-func (w *fetchWorker) fetchStartEnd(ctx context.Context) (err error) {
-	minVal, maxVal, err := w.getMinMaxValues(ctx)
+func (w *fetchWorker) fetchStartEnd(ctx context.Context) (isTableEmpty bool, err error) {
+	row, isEmpty, err := w.getMinMaxValues(ctx)
 	if err != nil {
-		return err
+		return false, err
+	} else if isEmpty {
+		return true, nil
 	}
 
 	lastRead := w.config.lastPosition.Snapshots[w.config.table].LastRead
 	if lastRead != nil {
 		w.start = lastRead
 	} else {
-		w.start = minVal
+		w.start = row.MinValue
 	}
-	w.end = maxVal
+	w.end = row.MaxValue
 
 	sdk.Logger(ctx).Info().
 		Any("start", w.start).
 		Any("end", w.end).
 		Msg("fetched start and end")
 
-	return nil
+	return false, nil
 }
 
 func (w *fetchWorker) run(ctx context.Context) (err error) {
@@ -162,27 +164,33 @@ func (w *fetchWorker) run(ctx context.Context) (err error) {
 	return nil
 }
 
+type minmaxRow struct {
+	MinValue any `db:"min_value"`
+	MaxValue any `db:"max_value"`
+}
+
 // getMinMaxValues fetches the maximum value of the primary key from the table.
-func (w *fetchWorker) getMinMaxValues(ctx context.Context) (minVal, maxVal any, err error) {
-	var minmax struct {
-		MinValue any `db:"min_value"`
-		MaxValue any `db:"max_value"`
-	}
+func (w *fetchWorker) getMinMaxValues(
+	ctx context.Context) (scanned *minmaxRow, isTableEmpty bool, err error) {
+	var scannedRow minmaxRow
 
 	query := fmt.Sprintf(
 		"SELECT MIN(%s) as min_value, MAX(%s) as max_value FROM %s",
 		w.config.sortColName, w.config.sortColName, w.config.table,
 	)
 	row := w.db.QueryRowxContext(ctx, query)
-	if err := row.StructScan(&minmax); err != nil {
-		return nil, nil, fmt.Errorf("failed to get min value: %w", err)
+	if err := row.StructScan(&scannedRow); err != nil {
+		return nil, false, fmt.Errorf("failed to get min value: %w", err)
 	}
-
 	if err := row.Err(); err != nil {
-		return nil, nil, fmt.Errorf("failed to get min value: %w", err)
+		return nil, false, fmt.Errorf("failed to get min value: %w", err)
 	}
 
-	return minmax.MinValue, minmax.MaxValue, nil
+	if scannedRow.MinValue == nil || scannedRow.MaxValue == nil {
+		return nil, true, nil
+	}
+
+	return &scannedRow, false, nil
 }
 
 func (w *fetchWorker) selectRowsChunk(
@@ -250,13 +258,6 @@ func (w *fetchWorker) buildFetchData(
 		return fetchData{}, fmt.Errorf("key %s not found in payload", w.config.sortColName)
 	}
 
-	return fetchData{
-		key: snapshotKey{
-			Key:   w.config.sortColName,
-			Value: keyVal,
-		},
-		table:    w.config.table,
-		payload:  payload,
-		position: position,
-	}, nil
+	key := snapshotKey{w.config.sortColName, keyVal}
+	return fetchData{key, w.config.table, payload, position}, nil
 }

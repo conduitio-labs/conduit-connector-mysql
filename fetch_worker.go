@@ -59,11 +59,11 @@ func (w *fetchWorker) fetchStartEnd(ctx context.Context) (isTableEmpty bool, err
 		return true, nil
 	}
 
+	w.start = row.MinValue
+
 	lastRead := w.config.lastPosition.Snapshots[w.config.table].LastRead
 	if lastRead != nil {
 		w.start = lastRead
-	} else {
-		w.start = row.MinValue
 	}
 	w.end = row.MaxValue
 
@@ -108,7 +108,9 @@ func (w *fetchWorker) run(ctx context.Context) (err error) {
 	for {
 		greaterOrEq, cantCompare := common.IsGreaterOrEqual(chunkStart, w.end)
 		if cantCompare {
-			return fmt.Errorf("cannot compare values %v and %v", chunkStart, w.end)
+			return fmt.Errorf(
+				"cannot compare values %v and %v of types %T and %T",
+				chunkStart, w.end, chunkStart, w.end)
 		} else if greaterOrEq {
 			break
 		}
@@ -117,10 +119,6 @@ func (w *fetchWorker) run(ctx context.Context) (err error) {
 			Any("chunk start", chunkStart).
 			Any("end", w.end).
 			Msg("fetching chunk")
-
-		if chunkStart == 99 {
-			fmt.Println()
-		}
 
 		rows, err := w.selectRowsChunk(ctx, tx, chunkStart, discardFirst)
 		if err != nil {
@@ -171,13 +169,14 @@ type minmaxRow struct {
 
 // getMinMaxValues fetches the maximum value of the primary key from the table.
 func (w *fetchWorker) getMinMaxValues(
-	ctx context.Context) (scanned *minmaxRow, isTableEmpty bool, err error) {
+	ctx context.Context,
+) (scanned *minmaxRow, isTableEmpty bool, err error) {
 	var scannedRow minmaxRow
 
 	query := fmt.Sprintf(
 		"SELECT MIN(%s) as min_value, MAX(%s) as max_value FROM %s",
-		w.config.sortColName, w.config.sortColName, w.config.table,
-	)
+		w.config.sortColName, w.config.sortColName, w.config.table)
+
 	row := w.db.QueryRowxContext(ctx, query)
 	if err := row.StructScan(&scannedRow); err != nil {
 		return nil, false, fmt.Errorf("failed to get min value: %w", err)
@@ -189,6 +188,13 @@ func (w *fetchWorker) getMinMaxValues(
 	if scannedRow.MinValue == nil || scannedRow.MaxValue == nil {
 		return nil, true, nil
 	}
+
+	sdk.Logger(ctx).Debug().
+		Str("query", query).
+		Str("min_value_type", fmt.Sprintf("%T", scannedRow.MinValue)).
+		Str("max_value_type", fmt.Sprintf("%T", scannedRow.MaxValue)).
+		Any("scannedRow", scannedRow).
+		Send()
 
 	return &scannedRow, false, nil
 }

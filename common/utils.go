@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"reflect"
 	"strconv"
 	"time"
 
@@ -214,6 +215,8 @@ func AreEqual(a, b any) (equal bool, cantCompare bool) {
 	return a == b, false
 }
 
+// IsGreaterOrEqual uses reflection to apply the >= operation to two values of any type.
+// It is useful for determining when to stop the snapshot iteration.
 func IsGreaterOrEqual(a, b any) (greaterOrEqual bool, cantCompare bool) {
 	defer func() {
 		if err := recover(); err != nil {
@@ -221,44 +224,72 @@ func IsGreaterOrEqual(a, b any) (greaterOrEqual bool, cantCompare bool) {
 		}
 	}()
 
-	switch a := a.(type) {
-	case int:
-		if b, ok := b.(int); ok {
-			return a >= b, false
-		}
-	case int64:
-		if b, ok := b.(int64); ok {
-			return a >= b, false
-		}
-	case float64:
-		if b, ok := b.(float64); ok {
-			return a >= b, false
-		}
-	case string:
-		if b, ok := b.(string); ok {
-			return a >= b, false
-		}
-	case []uint8:
-		if b, ok := b.([]uint8); ok {
-			return string(a) >= string(b), false
-		}
-	case time.Time:
-		if b, ok := b.(time.Time); ok {
-			return a.After(b) || a.Equal(b), false
-		}
-	}
+	va := reflect.ValueOf(a)
+	vb := reflect.ValueOf(b)
 
-	aStr, aIsStr := a.(string)
-	bStr, bIsStr := b.(string)
-	aBytes, aOk := a.([]uint8)
-	bBytes, bOk := b.([]uint8)
 	switch {
-	case aIsStr && bOk:
-		return aStr >= string(bBytes), false
-	case bIsStr && aOk:
-		return string(aBytes) >= bStr, false
+	case va.Kind() == reflect.String || va.Type() == reflect.TypeOf([]uint8{}):
+		aStr := toString(a)
+		bStr := toString(b)
+		if aStr != nil && bStr != nil {
+			return *aStr >= *bStr, false
+		}
+		return false, true
+	case vb.Kind() == reflect.String || vb.Type() == reflect.TypeOf([]uint8{}):
+		return false, true
+	case va.Type() == reflect.TypeOf(time.Time{}) && vb.Type() == reflect.TypeOf(time.Time{}):
+		//nolint:forcetypeassert // checked already
+		aTime := a.(time.Time)
+		//nolint:forcetypeassert // checked already
+		bTime := b.(time.Time)
+		return aTime.After(bTime) || aTime.Equal(bTime), false
 	}
 
-	cantCompare = true
-	return false, cantCompare
+	if !isNumber(va.Kind()) || !isNumber(vb.Kind()) {
+		return false, true
+	}
+
+	af, ok1 := toFloat64(va)
+	bf, ok2 := toFloat64(vb)
+	if !ok1 || !ok2 {
+		return false, true
+	}
+
+	return af >= bf, false
+}
+
+func isNumber(k reflect.Kind) bool {
+	switch k {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Float32, reflect.Float64:
+		return true
+	default:
+		return false
+	}
+}
+
+func toFloat64(v reflect.Value) (float64, bool) {
+	switch v.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return float64(v.Int()), true
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return float64(v.Uint()), true
+	case reflect.Float32, reflect.Float64:
+		return v.Float(), true
+	default:
+		return 0, false
+	}
+}
+
+func toString(v any) *string {
+	switch v := v.(type) {
+	case string:
+		return &v
+	case []uint8:
+		s := string(v)
+		return &s
+	default:
+		return nil
+	}
 }

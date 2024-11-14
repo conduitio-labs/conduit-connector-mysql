@@ -17,6 +17,7 @@ package testutils
 import (
 	"context"
 	"fmt"
+	"os"
 	"testing"
 	"time"
 
@@ -52,7 +53,14 @@ func TestContext(t *testing.T) context.Context {
 		Out:        writer,
 		PartsOrder: []string{"level", "message"},
 	}
-	logger := zerolog.New(consoleWriter).Level(zerolog.InfoLevel)
+
+	traceLog := os.Getenv("TRACE") == "true"
+	level := zerolog.InfoLevel
+	if traceLog {
+		level = zerolog.TraceLevel
+	}
+	logger := zerolog.New(consoleWriter).Level(level)
+
 	return logger.WithContext(context.Background())
 }
 

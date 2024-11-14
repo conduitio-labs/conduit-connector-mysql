@@ -370,9 +370,8 @@ func TestSnapshotIterator_DeleteEndWhileSnapshotting(t *testing.T) {
 		rec, err := iterator.Next(ctx)
 		if errors.Is(err, ErrSnapshotIteratorDone) {
 			break
-		} else {
-			is.NoErr(err)
 		}
+		is.NoErr(err)
 		is.NoErr(iterator.Ack(ctx, rec.Position))
 
 		testutils.AssertUserSnapshot(is, users[i-1], rec)

@@ -216,7 +216,11 @@ func AreEqual(a, b any) (equal bool, cantCompare bool) {
 }
 
 // IsGreaterOrEqual uses reflection to apply the >= operation to two values of any type.
-// It is useful for determining when to stop the snapshot iteration.
+// This function is useful for determining when to stop the snapshot iteration.
+//
+// Manually checking each type can be error-prone. In production environments,
+// the default fetch size is quite large, so the latency of IsGreaterOrEqual is
+// negligible compared to the latency of fetching rows from the database.
 func IsGreaterOrEqual(a, b any) (greaterOrEqual bool, cantCompare bool) {
 	defer func() {
 		if err := recover(); err != nil {

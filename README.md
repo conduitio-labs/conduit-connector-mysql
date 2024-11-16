@@ -37,10 +37,10 @@ to capture detailed changes at the individual row level.
 
 ### Configuration
 
-| name     | description                                                                                                                                                                                                                        | required | default value |
-| -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------------- |
-| `url`    | The connection URL of the MySQL, in the [following format](https://github.com/go-sql-driver/mysql?tab=readme-ov-file#dsn-data-source-name): `[username[:password]@][protocol[(address)]]/dbname[?param1=value1&...&paramN=valueN]` | true     |               |
-| `tables` | The list of tables to pull data from                                                                                                                                                                                               | true     |               |
+| name     | description                               | required | default value | example                                                   |
+| -------- | ----------------------------------------- | -------- | ------------- | --------------------------------------------------------- |
+| `dsn`    | Connection string for the MySQL database. | true     |               | <user>:<password>@tcp(127.0.0.1:3306)/<db>?parseTime=true |
+| `tables` | The list of tables to pull data from      | true     |               | users,posts,admins                                        |
 
 ## Requirements and compatibility
 
@@ -77,8 +77,8 @@ If the target table contains a column with a unique constraint (this includes PR
 
 ### Configuration Options
 
-| name    | description                                              | required | default |
-| ------- | -------------------------------------------------------- | -------- | ------- |
-| `url`   | Connection string for the MySQL database.                | true     |         |
-| `table` | The target table to write the record to                  | true     |         |
-| `key`   | Key represents the column name to use to delete records. | false    |         |
+| name    | description                                              | required | default | example                                                   |
+| ------- | -------------------------------------------------------- | -------- | ------- | --------------------------------------------------------- |
+| `dsn`   | Connection string for the MySQL database.                | true     |         | <user>:<password>@tcp(127.0.0.1:3306)/<db>?parseTime=true |
+| `table` | The target table to write the record to                  | true     |         | users                                                     |
+| `key`   | Key represents the column name to use to delete records. | false    | ""      | user_id                                                   |

@@ -65,7 +65,7 @@ For Snapshot and CDC modes, the following privileges are required:
 
 ## Destination
 
-The mysql destination takes a `opencdc.Record` and parses it into a valid SQL query. Each record is individually parsed and upserted, and write batching is planned to be implemented.
+The MySQL destination takes a `opencdc.Record` and parses it into a valid SQL query. Each record is individually parsed and upserted. Writing in batches is [planned](https://github.com/conduitio-labs/conduit-connector-mysql/issues/63) to be implemented, which should greatly improve performance over the current implementation.
 
 ### Upsert Behavior
 

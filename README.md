@@ -37,10 +37,11 @@ to capture detailed changes at the individual row level.
 
 ### Configuration
 
-| name     | description                                                                                                                    | required | default value | example                                                   |
-| -------- | ------------------------------------------------------------------------------------------------------------------------------ | -------- | ------------- | --------------------------------------------------------- |
-| `dsn`    | [The data source name](https://github.com/go-sql-driver/mysql?tab=readme-ov-file#dsn-data-source-name) for the MySQL database. | true     |               | <user>:<password>@tcp(127.0.0.1:3306)/<db>?parseTime=true |
-| `tables` | The list of tables to pull data from                                                                                           | true     |               | users,posts,admins                                        |
+| name                                     | description                                                                                                                                             | required | default value | example                                                         |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------------- | --------------------------------------------------------------- |
+| `dsn`                                    | [The data source name](https://github.com/go-sql-driver/mysql?tab=readme-ov-file#dsn-data-source-name) for the MySQL database.                          | true     |               | <user>:<password>@tcp(127.0.0.1:3306)/<db>?parseTime=true       |
+| `tables`                                 | The list of tables to pull data from                                                                                                                    | true     |               | users,posts,admins                                              |
+| `tableConfig.<table name>.sortingColumn` | The custom column to use to sort the rows during the snapshot. Use this if there are any tables which don't have a proper autoincrementing primary key. |          |               | `tableConfig.users.sortingColumn` as the key, `id` as the value |
 
 ## Requirements and compatibility
 

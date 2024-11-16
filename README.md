@@ -81,4 +81,4 @@ If the target table contains a column with a unique constraint (this includes PR
 | ------- | -------------------------------------------------------- | -------- | ------- | --------------------------------------------------------- |
 | `dsn`   | Connection string for the MySQL database.                | true     |         | <user>:<password>@tcp(127.0.0.1:3306)/<db>?parseTime=true |
 | `table` | The target table to write the record to                  | true     |         | users                                                     |
-| `key`   | Key represents the column name to use to delete records. | false    | ""      | user_id                                                   |
+| `key`   | Key represents the column name to use to delete records. | true     |         | user_id                                                   |

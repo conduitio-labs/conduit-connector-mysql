@@ -1,6 +1,6 @@
 # Conduit Connector for MySQL
 
-[Conduit](https://conduit.io) connector for Mysql.
+[Conduit](https://conduit.io) connector for MySQL.
 
 ## How to build?
 
@@ -37,10 +37,10 @@ to capture detailed changes at the individual row level.
 
 ### Configuration
 
-| name     | description                                                                                                                                                                                                                           | required | default value |
-| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------------- |
-| `url`    | The connection URL of the MySQL, in the [following format](https://github.com/go-sql-driver/mysql?tab=readme-ov-file#dsn-data-source-name): `[username[:password]@][protocol[(address)]]/dbname[?param1=value1&...&paramN=valueN]`    | true     |               |
-| `tables` | The list of tables to pull data from                                                                                                                                                                                                  | true     |               |
+| name     | description                                                                                                                                                                                                                        | required | default value |
+| -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------------- |
+| `url`    | The connection URL of the MySQL, in the [following format](https://github.com/go-sql-driver/mysql?tab=readme-ov-file#dsn-data-source-name): `[username[:password]@][protocol[(address)]]/dbname[?param1=value1&...&paramN=valueN]` | true     |               |
+| `tables` | The list of tables to pull data from                                                                                                                                                                                               | true     |               |
 
 ## Requirements and compatibility
 
@@ -65,7 +65,7 @@ For Snapshot and CDC modes, the following privileges are required:
 
 ## Destination
 
-The mysql destination takes a `record.Record` and parses it into a valid SQL query. Each record is individually parsed and upserted, and write batching is planned to be implemented.
+The MySQL destination takes a `record.Record` and parses it into a valid SQL query. Each record is individually parsed and upserted. Writing in batches is [planned](https://github.com/conduitio-labs/conduit-connector-mysql/issues/63) to be implemented, which should greatly improve performance over the current implementation.
 
 ### Upsert Behavior
 
@@ -77,9 +77,8 @@ If the target table contains a column with a unique constraint (this includes PR
 
 ### Configuration Options
 
-| name    | description                                                                                                                                                                           | required | default                                      |
-| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | -------------------------------------------- |
-| `url`   | Connection string for the mysql database.                                                                                                                                          | true     |                                              |
-| `table` | The target table to write the record to | true    |  |
-| `key`   | Key represents the column name to use to delete records.                                                                                                 | false    |                                              |
-
+| name    | description                                              | required | default |
+| ------- | -------------------------------------------------------- | -------- | ------- |
+| `url`   | Connection string for the MySQL database.                | true     |         |
+| `table` | The target table to write the record to                  | true     |         |
+| `key`   | Key represents the column name to use to delete records. | false    |         |

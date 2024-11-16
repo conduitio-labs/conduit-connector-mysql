@@ -15,7 +15,6 @@
 package common
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"math"
@@ -185,34 +184,6 @@ func GetServerID(ctx context.Context, db *sqlx.DB) (string, error) {
 	serverID := strconv.FormatUint(serverIDRow.ServerID, 10)
 
 	return serverID, nil
-}
-
-func AreEqual(a, b any) (equal bool, cantCompare bool) {
-	aStr, aIsStr := a.(string)
-	bStr, bIsStr := b.(string)
-	aBytes, aOk := a.([]uint8)
-	bBytes, bOk := b.([]uint8)
-
-	switch {
-	case aIsStr && bOk:
-		return aStr == string(bBytes), false
-	case bIsStr && aOk:
-		return string(aBytes) == bStr, false
-	}
-
-	defer func() {
-		if err := recover(); err == nil {
-			return
-		}
-
-		if aOk && bOk {
-			equal = bytes.Equal(aBytes, bBytes)
-			return
-		}
-		cantCompare = true
-	}()
-
-	return a == b, false
 }
 
 // IsGreaterOrEqual uses reflection to apply the >= operation to two values of any type.

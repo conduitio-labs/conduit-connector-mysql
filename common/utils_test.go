@@ -113,25 +113,17 @@ func TestIsGreaterOrEqualSymmetric(t *testing.T) {
 	testCases := []struct {
 		a, b any
 	}{
-		{[]byte("hello"), []uint8("hello")},
-		{42, 42},
-		{"hello", "hello"},
-		{[]byte(nil), []byte(nil)},
-
-		{42, float64(42.0)},
-		{uint(42), int64(42)},
-		{float32(42.0), float64(42.0)},
-		{int64(42), uint64(42)},
-		{-1, uint(1)},                                  // edge case with negative numbers
-		{int64(math.MaxInt64), float64(math.MaxInt64)}, // edge case with large numbers
-
+		{[]byte("1hello"), []uint8("2hello")},
+		{42, 43},
+		{-1, uint(1)},                           // edge case with negative numbers
+		{int64(math.MaxInt64), math.MaxFloat64}, // edge case with large numbers
 	}
 
 	for _, tc := range testCases {
-		equal1, cantCmp1 := AreEqual(tc.a, tc.b)
-		equal2, cantCmp2 := AreEqual(tc.b, tc.a)
+		greater1, cantCmp1 := IsGreaterOrEqual(tc.a, tc.b)
+		greater2, cantCmp2 := IsGreaterOrEqual(tc.b, tc.a)
 
-		is.Equal(equal1, equal2)     // equality result should be symmetric
-		is.Equal(cantCmp1, cantCmp2) // cantCompare result should be symmetric
+		is.Equal(greater1, !greater2) // greater result should be symmetric
+		is.Equal(cantCmp1, cantCmp2)  // cantCompare result should be symmetric
 	}
 }

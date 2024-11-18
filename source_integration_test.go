@@ -214,12 +214,6 @@ func TestCustomTableKeys(t *testing.T) {
 	`))
 	is.NoErr(err)
 
-	fmt.Println(fmt.Sprint(`
-		INSERT INTO ulid_pk (data) VALUES 
-			('`, ulidPkData[0], `'),
-			('`, ulidPkData[1], `');
-	`))
-
 	_, err = db.ExecContext(ctx, fmt.Sprint(`
 		INSERT INTO timestamp_ordered (id, data) VALUES 
 			('rec1', '`, timestampOrderedData[0], `'),
@@ -229,12 +223,12 @@ func TestCustomTableKeys(t *testing.T) {
 
 	source := &Source{}
 	cfg := config.Config{
-		common.SourceConfigDsn:                            testutils.DSN,
-		common.SourceConfigTables:                         "composite_with_auto_inc,ulid_pk,timestamp_ordered",
-		common.SourceConfigDisableCanalLogs:               "true",
-		"tableKeys.composite_with_auto_inc.sortingColumn": "id",
-		"tableKeys.ulid_pk.sortingColumn":                 "id",
-		"tableKeys.timestamp_ordered.sortingColumn":       "created_at",
+		common.SourceConfigDsn:                              testutils.DSN,
+		common.SourceConfigTables:                           "composite_with_auto_inc,ulid_pk,timestamp_ordered",
+		common.SourceConfigDisableCanalLogs:                 "true",
+		"tableConfig.composite_with_auto_inc.sortingColumn": "id",
+		"tableConfig.ulid_pk.sortingColumn":                 "id",
+		"tableConfig.timestamp_ordered.sortingColumn":       "created_at",
 	}
 	err = source.Configure(ctx, cfg)
 	is.NoErr(err)

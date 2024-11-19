@@ -13,6 +13,7 @@ const (
 	SourceConfigFetchSize                = "fetchSize"
 	SourceConfigTableConfigSortingColumn = "tableConfig.*.sortingColumn"
 	SourceConfigTables                   = "tables"
+	SourceConfigUnsafeSnapshot           = "unsafeSnapshot"
 )
 
 func (SourceConfig) Parameters() map[string]config.Parameter {
@@ -50,6 +51,12 @@ func (SourceConfig) Parameters() map[string]config.Parameter {
 			Validations: []config.Validation{
 				config.ValidationRequired{},
 			},
+		},
+		SourceConfigUnsafeSnapshot: {
+			Default:     "",
+			Description: "UnsafeSnapshot allows a snapshot of a table with neither a primary key\nnor a defined sorting column. The opencdc.Position won't record the last record\nread from a table.",
+			Type:        config.ParameterTypeBool,
+			Validations: []config.Validation{},
 		},
 	}
 }

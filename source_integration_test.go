@@ -21,15 +21,12 @@ import (
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	testutils "github.com/conduitio-labs/conduit-connector-mysql/test"
 	"github.com/conduitio/conduit-commons/config"
-	"github.com/conduitio/conduit-commons/opencdc"
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/matryer/is"
 )
 
 func testSourceWithFetchSize(
-	ctx context.Context,
-	is *is.I, fetchSize string,
-) (sourceIterator, func()) {
+	ctx context.Context, is *is.I, fetchSize string) (sdk.Source, func()) {
 	source := &Source{}
 	cfg := config.Config{
 		common.SourceConfigDsn:              testutils.DSN,
@@ -44,18 +41,11 @@ func testSourceWithFetchSize(
 
 	is.NoErr(source.Open(ctx, nil))
 
-	return sourceIterator{source}, func() { is.NoErr(source.Teardown(ctx)) }
+	return source, func() { is.NoErr(source.Teardown(ctx)) }
 }
 
-func testSource(ctx context.Context, is *is.I) (sourceIterator, func()) {
+func testSource(ctx context.Context, is *is.I) (sdk.Source, func()) {
 	return testSourceWithFetchSize(ctx, is, "")
-}
-
-type sourceIterator struct{ sdk.Source }
-
-func (s sourceIterator) Next(ctx context.Context) (opencdc.Record, error) {
-	//nolint:wrapcheck // wrapped already
-	return s.Source.Read(ctx)
 }
 
 func TestSource_ConsistentSnapshot(t *testing.T) {

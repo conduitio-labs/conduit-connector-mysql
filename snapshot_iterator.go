@@ -149,7 +149,7 @@ func (s *snapshotIterator) start(ctx context.Context) {
 	}
 }
 
-func (s *snapshotIterator) Next(ctx context.Context) (rec opencdc.Record, err error) {
+func (s *snapshotIterator) Read(ctx context.Context) (rec opencdc.Record, err error) {
 	if len(s.workers) == 0 {
 		return rec, ErrSnapshotIteratorDone
 	}

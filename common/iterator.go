@@ -24,7 +24,7 @@ import (
 type Iterator interface {
 	// Read takes and returns the next record from the queue. Read is allowed to
 	// block until either a record is available or the context gets canceled.
-	Next(context.Context) (opencdc.Record, error)
+	Read(context.Context) (opencdc.Record, error)
 	// Ack signals that a record at a specific position was successfully
 	// processed.
 	Ack(context.Context, opencdc.Position) error

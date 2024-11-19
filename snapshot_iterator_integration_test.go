@@ -97,7 +97,7 @@ func TestSnapshotIterator_EmptyTable(t *testing.T) {
 	it, cleanup := testSnapshotIterator(ctx, t, is)
 	defer cleanup()
 
-	_, err := it.Next(ctx)
+	_, err := it.Read(ctx)
 	if !errors.Is(err, ErrSnapshotIteratorDone) {
 		is.NoErr(err)
 	}
@@ -126,7 +126,7 @@ func TestSnapshotIterator_WithData(t *testing.T) {
 		testutils.ReadAndAssertSnapshot(ctx, is, iterator, users[i-1])
 	}
 
-	_, err := iterator.Next(ctx)
+	_, err := iterator.Read(ctx)
 	is.True(errors.Is(err, ErrSnapshotIteratorDone))
 }
 
@@ -151,7 +151,7 @@ func TestSnapshotIterator_RestartOnPosition(t *testing.T) {
 		it, cleanup := testSnapshotIterator(ctx, t, is)
 
 		for i := 1; i <= 10; i++ {
-			rec, err := it.Next(ctx)
+			rec, err := it.Read(ctx)
 			if errors.Is(err, ErrSnapshotIteratorDone) {
 				err = it.Ack(ctx, rec.Position)
 				is.NoErr(err)
@@ -176,7 +176,7 @@ func TestSnapshotIterator_RestartOnPosition(t *testing.T) {
 	defer cleanup()
 
 	for {
-		rec, err := it.Next(ctx)
+		rec, err := it.Read(ctx)
 		if errors.Is(err, ErrSnapshotIteratorDone) {
 			break
 		}
@@ -300,7 +300,7 @@ func TestSnapshotIterator_CustomTableKeys(t *testing.T) {
 
 			var recs []opencdc.Record
 			for {
-				rec, err := iterator.Next(ctx)
+				rec, err := iterator.Read(ctx)
 				if errors.Is(err, ErrSnapshotIteratorDone) {
 					break
 				}
@@ -367,7 +367,7 @@ func TestSnapshotIterator_DeleteEndWhileSnapshotting(t *testing.T) {
 	}()
 
 	for i := 1; i <= 99; i++ {
-		rec, err := iterator.Next(ctx)
+		rec, err := iterator.Read(ctx)
 		if errors.Is(err, ErrSnapshotIteratorDone) {
 			break
 		}

@@ -119,7 +119,7 @@ func (c *cdcIterator) Ack(context.Context, opencdc.Position) error {
 	return nil
 }
 
-func (c *cdcIterator) Next(ctx context.Context) (rec opencdc.Record, err error) {
+func (c *cdcIterator) Read(ctx context.Context) (rec opencdc.Record, err error) {
 	select {
 	//nolint:wrapcheck // no need to wrap canceled error
 	case <-ctx.Done():

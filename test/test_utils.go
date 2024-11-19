@@ -172,7 +172,7 @@ func ReadAndAssertCreate(
 	iterator common.Iterator, user User,
 ) opencdc.Record {
 	is.Helper()
-	rec, err := iterator.Next(ctx)
+	rec, err := iterator.Read(ctx)
 	is.NoErr(err)
 	is.NoErr(iterator.Ack(ctx, rec.Position))
 
@@ -191,7 +191,7 @@ func ReadAndAssertUpdate(
 	iterator common.Iterator, prev, next User,
 ) opencdc.Record {
 	is.Helper()
-	rec, err := iterator.Next(ctx)
+	rec, err := iterator.Read(ctx)
 	is.NoErr(err)
 	is.NoErr(iterator.Ack(ctx, rec.Position))
 
@@ -214,7 +214,7 @@ func ReadAndAssertDelete(
 ) opencdc.Record {
 	is.Helper()
 
-	rec, err := iterator.Next(ctx)
+	rec, err := iterator.Read(ctx)
 	is.NoErr(err)
 	is.NoErr(iterator.Ack(ctx, rec.Position))
 
@@ -237,7 +237,7 @@ func ReadAndAssertSnapshot(
 	iterator common.Iterator, user User,
 ) opencdc.Record {
 	is.Helper()
-	rec, err := iterator.Next(ctx)
+	rec, err := iterator.Read(ctx)
 	is.NoErr(err)
 	is.NoErr(iterator.Ack(ctx, rec.Position))
 

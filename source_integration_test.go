@@ -16,27 +16,22 @@ package mysql
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	testutils "github.com/conduitio-labs/conduit-connector-mysql/test"
 	"github.com/conduitio/conduit-commons/config"
+	"github.com/conduitio/conduit-commons/opencdc"
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/matryer/is"
 )
 
-func testSourceWithFetchSize(
-	ctx context.Context, is *is.I, fetchSize string,
-) (sdk.Source, func()) {
+func testSource(ctx context.Context, is *is.I, cfg config.Config) (sdk.Source, func()) {
 	source := &Source{}
-	cfg := config.Config{
-		common.SourceConfigDsn:              testutils.DSN,
-		common.SourceConfigTables:           "users",
-		common.SourceConfigDisableCanalLogs: "true",
-	}
-	if fetchSize != "" {
-		cfg[common.SourceConfigFetchSize] = fetchSize
-	}
+	cfg[common.SourceConfigDsn] = testutils.DSN
+	cfg[common.SourceConfigDisableCanalLogs] = "true"
+
 	err := source.Configure(ctx, cfg)
 	is.NoErr(err)
 
@@ -45,8 +40,10 @@ func testSourceWithFetchSize(
 	return source, func() { is.NoErr(source.Teardown(ctx)) }
 }
 
-func testSource(ctx context.Context, is *is.I) (sdk.Source, func()) {
-	return testSourceWithFetchSize(ctx, is, "")
+func testSourceFromUsers(ctx context.Context, is *is.I) (sdk.Source, func()) {
+	return testSource(ctx, is, config.Config{
+		common.SourceConfigTables: "users",
+	})
 }
 
 func TestSource_ConsistentSnapshot(t *testing.T) {
@@ -66,7 +63,9 @@ func TestSource_ConsistentSnapshot(t *testing.T) {
 
 	// start source connector
 
-	source, teardown := testSource(ctx, is)
+	source, teardown := testSource(ctx, is, config.Config{
+		common.SourceConfigTables: "users",
+	})
 	defer teardown()
 
 	// read 2 records -> they shall be snapshots
@@ -110,7 +109,10 @@ func TestSource_NonZeroSnapshotStart(t *testing.T) {
 		inserted = append(inserted, user)
 	}
 
-	source, teardown := testSourceWithFetchSize(ctx, is, "10")
+	source, teardown := testSource(ctx, is, config.Config{
+		common.SourceConfigTables:    "users",
+		common.SourceConfigFetchSize: "10",
+	})
 	defer teardown()
 
 	for _, user := range inserted {
@@ -139,10 +141,90 @@ func TestSource_EmptyChunkRead(t *testing.T) {
 		expected = append(expected, user)
 	}
 
-	source, teardown := testSourceWithFetchSize(ctx, is, "10")
+	source, teardown := testSource(ctx, is, config.Config{
+		common.SourceConfigTables:    "users",
+		common.SourceConfigFetchSize: "10",
+	})
 	defer teardown()
 
 	for _, user := range expected {
 		testutils.ReadAndAssertSnapshot(ctx, is, source, user)
+	}
+}
+
+func TestUnsafeSnapshot(t *testing.T) {
+	ctx := testutils.TestContext(t)
+	is := is.New(t)
+
+	db := testutils.Connection(t)
+
+	_, err := db.ExecContext(ctx, "DROP TABLE IF EXISTS table_with_pk;")
+	is.NoErr(err)
+	_, err = db.ExecContext(ctx, "DROP TABLE IF EXISTS table_without_pk;")
+	is.NoErr(err)
+
+	_, err = db.ExecContext(ctx, `
+		CREATE TABLE table_with_pk (
+			id INT PRIMARY KEY,
+			data VARCHAR(100));`)
+	is.NoErr(err)
+
+	_, err = db.ExecContext(ctx, `
+		CREATE TABLE table_without_pk (
+			id INT,
+			data VARCHAR(100));`)
+	is.NoErr(err)
+
+	tableWithPkData := []string{"record 1", "record 2", "record 3"}
+	_, err = db.ExecContext(ctx, fmt.Sprint(`
+		INSERT INTO table_with_pk (id, data) VALUES
+			(1, '`, tableWithPkData[0], `'),
+			(2, '`, tableWithPkData[1], `'),
+			(3, '`, tableWithPkData[2], `');`))
+	is.NoErr(err)
+
+	tableWithoutPkData := []string{"record A", "record B"}
+	_, err = db.ExecContext(ctx, fmt.Sprint(`
+		INSERT INTO table_without_pk (id, data) VALUES
+			(1, '`, tableWithoutPkData[0], `'),
+			(2, '`, tableWithoutPkData[1], `');`))
+	is.NoErr(err)
+
+	type testCase struct {
+		tableName    string
+		expectedData []string
+	}
+
+	for _, testCase := range []testCase{
+		{
+			tableName:    "table_with_pk",
+			expectedData: tableWithPkData,
+		},
+		{
+			tableName:    "table_without_pk",
+			expectedData: tableWithoutPkData,
+		},
+	} {
+		t.Run(fmt.Sprintf("Test table %s", testCase.tableName), func(t *testing.T) {
+			source, teardown := testSource(ctx, is, config.Config{
+				common.SourceConfigTables: testCase.tableName,
+			})
+			defer teardown()
+
+			var recs []opencdc.Record
+			for i := 0; i < len(testCase.expectedData); i++ {
+				rec, err := source.Read(ctx)
+				is.NoErr(err)
+				is.NoErr(source.Ack(ctx, rec.Position))
+
+				recs = append(recs, rec)
+			}
+
+			for i, expectedData := range testCase.expectedData {
+				actual := recs[i]
+				is.Equal(actual.Operation, opencdc.OperationSnapshot)
+				is.Equal(actual.Payload.After.(opencdc.StructuredData)["data"].(string), expectedData)
+			}
+		})
 	}
 }

@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -29,6 +30,9 @@ import (
 	"github.com/jmoiron/sqlx"
 	"github.com/matryer/is"
 	"github.com/rs/zerolog"
+	gormmysql "gorm.io/driver/mysql"
+	"gorm.io/gorm"
+	"gorm.io/gorm/schema"
 )
 
 const DSN = "root:meroxaadmin@tcp(127.0.0.1:3306)/meroxadb?parseTime=true"
@@ -45,6 +49,23 @@ func Connection(t *testing.T) *sqlx.DB {
 	})
 
 	return db
+}
+
+func Gorm(t *testing.T, is *is.I) *gorm.DB {
+	gormDB, err := gorm.Open(gormmysql.Open(DSN))
+	is.NoErr(err)
+	return gormDB
+}
+
+func TableName(is *is.I, db *gorm.DB, model any) string {
+	stmt := gorm.Statement{DB: db}
+	err := stmt.Parse(model)
+	is.NoErr(err)
+
+	s, err := schema.Parse(model, &sync.Map{}, schema.NamingStrategy{})
+	is.NoErr(err)
+
+	return s.Table
 }
 
 func TestContext(t *testing.T) context.Context {

@@ -153,42 +153,39 @@ func TestSource_EmptyChunkRead(t *testing.T) {
 }
 
 func TestUnsafeSnapshot(t *testing.T) {
-	ctx := testutils.TestContext(t)
 	is := is.New(t)
+	db := testutils.Gorm(t, is)
+	var err error
 
-	db := testutils.Connection(t)
+	type TableWithPK struct {
+		ID   int    `gorm:"primaryKey"`
+		Data string `gorm:"size:100"`
+	}
 
-	_, err := db.ExecContext(ctx, "DROP TABLE IF EXISTS table_with_pk;")
-	is.NoErr(err)
-	_, err = db.ExecContext(ctx, "DROP TABLE IF EXISTS table_without_pk;")
-	is.NoErr(err)
+	type TableWithoutPK struct {
+		// No id field, forcing gorm to not create a primary key
 
-	_, err = db.ExecContext(ctx, `
-		CREATE TABLE table_with_pk (
-			id INT PRIMARY KEY,
-			data VARCHAR(100));`)
-	is.NoErr(err)
+		Data string `gorm:"size:100"`
+	}
 
-	_, err = db.ExecContext(ctx, `
-		CREATE TABLE table_without_pk (
-			id INT,
-			data VARCHAR(100));`)
+	err = db.Migrator().DropTable(&TableWithPK{}, &TableWithoutPK{})
 	is.NoErr(err)
 
-	tableWithPkData := []string{"record 1", "record 2", "record 3"}
-	_, err = db.ExecContext(ctx, fmt.Sprint(`
-		INSERT INTO table_with_pk (id, data) VALUES
-			(1, '`, tableWithPkData[0], `'),
-			(2, '`, tableWithPkData[1], `'),
-			(3, '`, tableWithPkData[2], `');`))
+	err = db.AutoMigrate(&TableWithPK{}, &TableWithoutPK{})
 	is.NoErr(err)
 
-	tableWithoutPkData := []string{"record A", "record B"}
-	_, err = db.ExecContext(ctx, fmt.Sprint(`
-		INSERT INTO table_without_pk (id, data) VALUES
-			(1, '`, tableWithoutPkData[0], `'),
-			(2, '`, tableWithoutPkData[1], `');`))
-	is.NoErr(err)
+	db.Create([]TableWithPK{
+		{ID: 1, Data: "record 1"},
+		{ID: 2, Data: "record 2"},
+		{ID: 3, Data: "record 3"},
+	})
+	is.NoErr(db.Error)
+
+	db.Create([]TableWithoutPK{
+		{Data: "record A"},
+		{Data: "record B"},
+	})
+	is.NoErr(db.Error)
 
 	type testCase struct {
 		tableName    string
@@ -197,17 +194,19 @@ func TestUnsafeSnapshot(t *testing.T) {
 
 	for _, testCase := range []testCase{
 		{
-			tableName:    "table_with_pk",
-			expectedData: tableWithPkData,
+			tableName:    testutils.TableName(is, db, &TableWithPK{}),
+			expectedData: []string{"record 1", "record 2", "record 3"},
 		},
 		{
-			tableName:    "table_without_pk",
-			expectedData: tableWithoutPkData,
+			tableName:    testutils.TableName(is, db, &TableWithoutPK{}),
+			expectedData: []string{"record A", "record B"},
 		},
 	} {
 		t.Run(fmt.Sprintf("Test table %s", testCase.tableName), func(t *testing.T) {
+			ctx := testutils.TestContext(t)
 			source, teardown := testSource(ctx, is, config.Config{
-				common.SourceConfigTables: testCase.tableName,
+				common.SourceConfigTables:         testCase.tableName,
+				common.SourceConfigUnsafeSnapshot: "true",
 			})
 			defer teardown()
 

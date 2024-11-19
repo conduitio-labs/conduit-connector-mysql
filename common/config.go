@@ -35,6 +35,11 @@ type SourceConfig struct {
 
 	// FetchSize limits how many rows should be retrieved on each database fetch.
 	FetchSize uint64 `json:"fetchSize" default:"50000"`
+
+	// UnsafeSnapshot allows a snapshot of a table with neither a primary key
+	// nor a defined sorting column. The opencdc.Position won't record the last record
+	// read from a table.
+	UnsafeSnapshot bool `json:"unsafeSnapshot"`
 }
 
 type TableConfig struct {

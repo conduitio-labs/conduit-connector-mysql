@@ -148,11 +148,10 @@ func getPrimaryKey(db *sqlx.DB, database, table string) (string, error) {
 	row := db.QueryRowx(`
 		SELECT COLUMN_NAME
 		FROM information_schema.key_column_usage
-		WHERE
-			constraint_name = 'PRIMARY'
+		WHERE constraint_name = 'PRIMARY'
 			AND table_schema = ?
 			AND table_name = ?
-			ORDER BY ORDINAL_POSITION DESC
+		ORDER BY ORDINAL_POSITION DESC
 	`, database, table)
 
 	if err := row.StructScan(&primaryKey); err != nil {

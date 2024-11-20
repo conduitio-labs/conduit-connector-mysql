@@ -48,6 +48,9 @@ func Connection(t *testing.T) *sqlx.DB {
 		is.NoErr(db.Close())
 	})
 
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+
 	return db
 }
 

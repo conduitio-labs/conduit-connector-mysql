@@ -17,6 +17,8 @@ package mysql
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -29,11 +31,12 @@ import (
 
 var ErrSortingKeyNotFoundInRow = errors.New("sorting key not found in row")
 
-type fetchWorker struct {
-	db         *sqlx.DB
-	data       chan fetchData
-	config     fetchWorkerConfig
-	start, end any
+type fetchWorker interface {
+	// for debug purposes
+	table() string
+
+	run(ctx context.Context) error
+	fetchStartEnd(ctx context.Context) (tableEmpty bool, err error)
 }
 
 type fetchWorkerConfig struct {
@@ -43,15 +46,34 @@ type fetchWorkerConfig struct {
 	sortColName  string
 }
 
-func newFetchWorker(db *sqlx.DB, data chan fetchData, config fetchWorkerConfig) *fetchWorker {
-	return &fetchWorker{
+func newFetchWorker(db *sqlx.DB, data chan fetchData, config fetchWorkerConfig) fetchWorker {
+	if config.sortColName == "" {
+		return newFetchWorkerByLimit(db, data, config)
+	}
+
+	return newFetchWorkerByKey(db, data, config)
+}
+
+type fetchWorkerByKey struct {
+	db         *sqlx.DB
+	data       chan fetchData
+	config     fetchWorkerConfig
+	start, end any
+}
+
+func newFetchWorkerByKey(db *sqlx.DB, data chan fetchData, config fetchWorkerConfig) fetchWorker {
+	return &fetchWorkerByKey{
 		db:     db,
 		data:   data,
 		config: config,
 	}
 }
 
-func (w *fetchWorker) fetchStartEnd(ctx context.Context) (isTableEmpty bool, err error) {
+func (w *fetchWorkerByKey) table() string {
+	return w.config.table
+}
+
+func (w *fetchWorkerByKey) fetchStartEnd(ctx context.Context) (isTableEmpty bool, err error) {
 	row, isEmpty, err := w.getMinMaxValues(ctx)
 	if err != nil {
 		return false, err
@@ -75,7 +97,7 @@ func (w *fetchWorker) fetchStartEnd(ctx context.Context) (isTableEmpty bool, err
 	return false, nil
 }
 
-func (w *fetchWorker) run(ctx context.Context) (err error) {
+func (w *fetchWorkerByKey) run(ctx context.Context) (err error) {
 	sdk.Logger(ctx).Info().Msgf("started fetcher for table %q", w.config.table)
 	defer sdk.Logger(ctx).Info().Msgf("finished fetcher for table %q", w.config.table)
 
@@ -163,7 +185,7 @@ type minmaxRow struct {
 }
 
 // getMinMaxValues fetches the maximum value of the primary key from the table.
-func (w *fetchWorker) getMinMaxValues(
+func (w *fetchWorkerByKey) getMinMaxValues(
 	ctx context.Context,
 ) (scanned *minmaxRow, isTableEmpty bool, err error) {
 	var scannedRow minmaxRow
@@ -194,7 +216,7 @@ func (w *fetchWorker) getMinMaxValues(
 	return &scannedRow, false, nil
 }
 
-func (w *fetchWorker) selectRowsChunk(
+func (w *fetchWorkerByKey) selectRowsChunk(
 	ctx context.Context, tx *sqlx.Tx,
 	start any, discardFirst bool,
 ) (scannedRows []opencdc.StructuredData, foundEnd bool, err error) {
@@ -254,7 +276,7 @@ func (w *fetchWorker) selectRowsChunk(
 	return scannedRows, foundEnd, nil
 }
 
-func (w *fetchWorker) buildFetchData(
+func (w *fetchWorkerByKey) buildFetchData(
 	payload opencdc.StructuredData,
 	position common.TablePosition,
 ) (fetchData, error) {
@@ -265,4 +287,102 @@ func (w *fetchWorker) buildFetchData(
 
 	key := snapshotKey{w.config.sortColName, keyVal}
 	return fetchData{key, w.config.table, payload, position}, nil
+}
+
+type fetchWorkerByLimit struct {
+	config fetchWorkerConfig
+	db     *sqlx.DB
+	data   chan fetchData
+	end    uint64
+}
+
+func newFetchWorkerByLimit(
+	db *sqlx.DB, data chan fetchData, config fetchWorkerConfig) fetchWorker {
+	return &fetchWorkerByLimit{
+		db:   db,
+		data: data,
+	}
+}
+
+func (w *fetchWorkerByLimit) table() string {
+	return w.config.table
+}
+
+func (w *fetchWorkerByLimit) countTotal(ctx context.Context) (uint64, error) {
+	var total struct {
+		Total uint64 `db:"total"`
+	}
+
+	stmt := fmt.Sprintf("select count(*) as total from %s", w.config.table)
+	err := w.db.SelectContext(ctx, &total, stmt)
+	if err != nil {
+		return 0, fmt.Errorf("failed to fetch total from %s: %w", w.config.table, err)
+	}
+
+	return total.Total, nil
+}
+
+func (w *fetchWorkerByLimit) fetchStartEnd(ctx context.Context) (isTableEmpty bool, err error) {
+	total, err := w.countTotal(ctx)
+	if errors.Is(err, sql.ErrNoRows) {
+		return true, nil
+	} else if err != nil {
+		return false, fmt.Errorf("failed to get total: %w", err)
+	}
+
+	w.end = total
+
+	return false, nil
+}
+
+func (w *fetchWorkerByLimit) run(ctx context.Context) (err error) {
+	tx, err := w.db.BeginTxx(ctx, &sql.TxOptions{
+		Isolation: sql.LevelRepeatableRead,
+		ReadOnly:  true,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create transaction: %w", err)
+	}
+	defer tx.Commit()
+
+	sdk.Logger(ctx).Info().Msgf("obtained tx for table %v", w.config.table)
+
+	for offset := uint64(0); offset < w.end; offset += w.config.fetchSize {
+		var rows []opencdc.StructuredData
+
+		stmt := fmt.Sprintf(
+			"SELECT * FROM %s LIMIT %d OFFSET %d",
+			w.config.table, w.config.fetchSize, offset)
+		if err = tx.SelectContext(ctx, &rows, stmt); err != nil {
+			return fmt.Errorf("failed to fetch rows at offset %v: %w", offset, err)
+		}
+
+		for _, row := range rows {
+			keyBytes, err := json.Marshal(row)
+			if err != nil {
+				return fmt.Errorf("failed to marshal row: %w", err)
+			}
+			encodedKey := base64.StdEncoding.EncodeToString(keyBytes)
+
+			// we don't really have any way to get the key from the table, so we
+			// make up for one
+			key := snapshotKey{
+				Key:   "",
+				Value: encodedKey,
+			}
+
+			w.data <- fetchData{
+				key:     key,
+				table:   w.config.table,
+				payload: row,
+
+				// ignoring position, we start from 0 each time
+				// TODO: we could save the offset as a position, we might want
+				// to do it in the future.
+				position: common.TablePosition{},
+			}
+		}
+	}
+
+	return nil
 }

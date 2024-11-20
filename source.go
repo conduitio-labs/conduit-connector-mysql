@@ -179,6 +179,12 @@ func (s *Source) getTableKeys(ctx context.Context) (map[string]string, error) {
 			if s.config.UnsafeSnapshot {
 				sdk.Logger(ctx).Warn().Msgf(
 					"table %s has no primary key, doing an unsafe snapshot ", table)
+
+				// The snapshot iterator should be able to interpret a zero
+				// value table key as a table where we cannot do a sorted
+				// snapshot.
+
+				tableKeys[table] = ""
 				continue
 			}
 

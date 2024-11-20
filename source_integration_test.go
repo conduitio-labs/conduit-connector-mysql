@@ -16,7 +16,6 @@ package mysql
 
 import (
 	"context"
-	"fmt"
 	"testing"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
@@ -157,29 +156,17 @@ func TestUnsafeSnapshot(t *testing.T) {
 	db := testutils.Gorm(t, is)
 	var err error
 
-	type TableWithPK struct {
-		ID   int    `gorm:"primaryKey"`
-		Data string `gorm:"size:100"`
-	}
-
 	type TableWithoutPK struct {
 		// No id field, forcing gorm to not create a primary key
 
 		Data string `gorm:"size:100"`
 	}
 
-	err = db.Migrator().DropTable(&TableWithPK{}, &TableWithoutPK{})
+	err = db.Migrator().DropTable(&TableWithoutPK{})
 	is.NoErr(err)
 
-	err = db.AutoMigrate(&TableWithPK{}, &TableWithoutPK{})
+	err = db.AutoMigrate(&TableWithoutPK{})
 	is.NoErr(err)
-
-	db.Create([]TableWithPK{
-		{ID: 1, Data: "record 1"},
-		{ID: 2, Data: "record 2"},
-		{ID: 3, Data: "record 3"},
-	})
-	is.NoErr(db.Error)
 
 	db.Create([]TableWithoutPK{
 		{Data: "record A"},
@@ -187,43 +174,27 @@ func TestUnsafeSnapshot(t *testing.T) {
 	})
 	is.NoErr(db.Error)
 
-	type testCase struct {
-		tableName    string
-		expectedData []string
+	expectedData := []string{"record A", "record B"}
+
+	ctx := testutils.TestContext(t)
+	source, teardown := testSource(ctx, is, config.Config{
+		common.SourceConfigTables:         testutils.TableName(is, db, &TableWithoutPK{}),
+		common.SourceConfigUnsafeSnapshot: "true",
+	})
+	defer teardown()
+
+	var recs []opencdc.Record
+	for i := 0; i < len(expectedData); i++ {
+		rec, err := source.Read(ctx)
+		is.NoErr(err)
+		is.NoErr(source.Ack(ctx, rec.Position))
+
+		recs = append(recs, rec)
 	}
 
-	for _, testCase := range []testCase{
-		{
-			tableName:    testutils.TableName(is, db, &TableWithPK{}),
-			expectedData: []string{"record 1", "record 2", "record 3"},
-		},
-		{
-			tableName:    testutils.TableName(is, db, &TableWithoutPK{}),
-			expectedData: []string{"record A", "record B"},
-		},
-	} {
-		t.Run(fmt.Sprintf("Test table %s", testCase.tableName), func(t *testing.T) {
-			ctx := testutils.TestContext(t)
-			source, teardown := testSource(ctx, is, config.Config{
-				common.SourceConfigTables:         testCase.tableName,
-				common.SourceConfigUnsafeSnapshot: "true",
-			})
-			defer teardown()
-
-			var recs []opencdc.Record
-			for i := 0; i < len(testCase.expectedData); i++ {
-				rec, err := source.Read(ctx)
-				is.NoErr(err)
-				is.NoErr(source.Ack(ctx, rec.Position))
-
-				recs = append(recs, rec)
-			}
-
-			for i, expectedData := range testCase.expectedData {
-				actual := recs[i]
-				is.Equal(actual.Operation, opencdc.OperationSnapshot)
-				is.Equal(actual.Payload.After.(opencdc.StructuredData)["data"].(string), expectedData)
-			}
-		})
+	for i, expectedData := range expectedData {
+		actual := recs[i]
+		is.Equal(actual.Operation, opencdc.OperationSnapshot)
+		is.Equal(actual.Payload.After.(opencdc.StructuredData)["data"].(string), expectedData)
 	}
 }

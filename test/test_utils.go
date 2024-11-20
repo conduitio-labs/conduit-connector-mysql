@@ -51,7 +51,7 @@ func Connection(t *testing.T) *sqlx.DB {
 	return db
 }
 
-func Gorm(t *testing.T, is *is.I) *gorm.DB {
+func Gorm(is *is.I) *gorm.DB {
 	gormDB, err := gorm.Open(gormmysql.Open(DSN))
 	is.NoErr(err)
 	return gormDB

@@ -153,7 +153,7 @@ func TestSource_EmptyChunkRead(t *testing.T) {
 
 func TestUnsafeSnapshot(t *testing.T) {
 	is := is.New(t)
-	db := testutils.Gorm(t, is)
+	db := testutils.Gorm(is)
 	var err error
 
 	type TableWithoutPK struct {

@@ -297,7 +297,8 @@ type fetchWorkerByLimit struct {
 }
 
 func newFetchWorkerByLimit(
-	db *sqlx.DB, data chan fetchData, config fetchWorkerConfig) fetchWorker {
+	db *sqlx.DB, data chan fetchData, config fetchWorkerConfig,
+) fetchWorker {
 	return &fetchWorkerByLimit{
 		db:     db,
 		data:   data,
@@ -352,7 +353,11 @@ func (w *fetchWorkerByLimit) run(ctx context.Context) (err error) {
 	if err != nil {
 		return fmt.Errorf("failed to create transaction: %w", err)
 	}
-	defer tx.Commit()
+	defer func() {
+		if err = tx.Commit(); err != nil {
+			err = fmt.Errorf("failed to commit transaction: %w", err)
+		}
+	}()
 
 	sdk.Logger(ctx).Info().Msgf("obtained tx for table %v", w.config.table)
 
@@ -370,6 +375,7 @@ func (w *fetchWorkerByLimit) run(ctx context.Context) (err error) {
 		if err != nil {
 			return fmt.Errorf("failed to query rows: %w", err)
 		}
+		defer rows.Close()
 
 		for rows.Next() {
 			row := opencdc.StructuredData{}

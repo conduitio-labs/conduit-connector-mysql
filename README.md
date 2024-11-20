@@ -1,6 +1,6 @@
 # Conduit Connector for MySQL
 
-[Conduit](https://conduit.io) connector for Mysql.
+[Conduit](https://conduit.io) connector for MySQL.
 
 ## How to build?
 
@@ -37,10 +37,10 @@ to capture detailed changes at the individual row level.
 
 ### Configuration
 
-| name     | description                                                                                                                                                                                                                           | required | default value |
-| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------------- |
-| `url`    | The connection URL of the MySQL, in the [following format](https://github.com/go-sql-driver/mysql?tab=readme-ov-file#dsn-data-source-name): `[username[:password]@][protocol[(address)]]/dbname[?param1=value1&...&paramN=valueN]`    | true     |               |
-| `tables` | The list of tables to pull data from                                                                                                                                                                                                  | true     |               |
+| name     | description                                                                                                                    | required | default value | example                                                   |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------ | -------- | ------------- | --------------------------------------------------------- |
+| `dsn`    | [The data source name](https://github.com/go-sql-driver/mysql?tab=readme-ov-file#dsn-data-source-name) for the MySQL database. | true     |               | <user>:<password>@tcp(127.0.0.1:3306)/<db>?parseTime=true |
+| `tables` | The list of tables to pull data from                                                                                           | true     |               | users,posts,admins                                        |
 
 ## Requirements and compatibility
 
@@ -65,4 +65,20 @@ For Snapshot and CDC modes, the following privileges are required:
 
 ## Destination
 
-(Planned)
+The MySQL destination takes a `opencdc.Record` and parses it into a valid SQL query. Each record is individually parsed and upserted. Writing in batches is [planned](https://github.com/conduitio-labs/conduit-connector-mysql/issues/63) to be implemented, which should greatly improve performance over the current implementation.
+
+### Upsert Behavior
+
+If the target table contains a column with a unique constraint (this includes PRIMARY KEY and UNIQUE indexes), records will be upserted; otherwise, they will be appended. Support for updating tables without unique constraints is tracked [here](https://github.com/conduitio-labs/conduit-connector-mysql/issues/66).
+
+### Multicollection mode
+
+(Planned to do). You can upvote [the following issue](https://github.com/conduitio-labs/conduit-connector-mysql/issues/13) to add more interest on getting this feature implemented sooner.
+
+### Configuration Options
+
+| name    | description                                                                                                                    | required | default | example                                                   |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------ | -------- | ------- | --------------------------------------------------------- |
+| `dsn`   | [The data source name](https://github.com/go-sql-driver/mysql?tab=readme-ov-file#dsn-data-source-name) for the MySQL database. | true     |         | <user>:<password>@tcp(127.0.0.1:3306)/<db>?parseTime=true |
+| `table` | The target table to write the record to                                                                                        | true     |         | users                                                     |
+| `key`   | Key represents the column name to use to delete records.                                                                       | true     |         | user_id                                                   |

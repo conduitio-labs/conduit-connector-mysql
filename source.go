@@ -53,7 +53,7 @@ func (s *Source) Configure(ctx context.Context, cfg config.Config) (err error) {
 		return fmt.Errorf("invalid config: %w", err)
 	}
 
-	s.configFromDsn, err = mysql.ParseDSN(s.config.URL)
+	s.configFromDsn, err = mysql.ParseDSN(s.config.DSN)
 	if err != nil {
 		return fmt.Errorf("failed to parse given URL: %w", err)
 	}
@@ -63,7 +63,7 @@ func (s *Source) Configure(ctx context.Context, cfg config.Config) (err error) {
 }
 
 func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) {
-	s.db, err = sqlx.Open("mysql", s.config.URL)
+	s.db, err = sqlx.Open("mysql", s.config.DSN)
 	if err != nil {
 		return fmt.Errorf("failed to connect to mysql: %w", err)
 	}

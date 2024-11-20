@@ -15,8 +15,8 @@
 package common
 
 type Config struct {
-	// URL is the connection string for the Mysql database.
-	URL string `json:"url" validate:"required"`
+	// DSN is the connection string for the MySQL database.
+	DSN string `json:"dsn" validate:"required"`
 }
 
 //go:generate paramgen -output=paramgen_src.go SourceConfig

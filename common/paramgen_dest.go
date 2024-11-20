@@ -8,13 +8,21 @@ import (
 )
 
 const (
+	DestinationConfigDsn   = "dsn"
 	DestinationConfigKey   = "key"
 	DestinationConfigTable = "table"
-	DestinationConfigUrl   = "url"
 )
 
 func (DestinationConfig) Parameters() map[string]config.Parameter {
 	return map[string]config.Parameter{
+		DestinationConfigDsn: {
+			Default:     "",
+			Description: "DSN is the connection string for the MySQL database.",
+			Type:        config.ParameterTypeString,
+			Validations: []config.Validation{
+				config.ValidationRequired{},
+			},
+		},
 		DestinationConfigKey: {
 			Default:     "",
 			Description: "Key is the primary key of the specified table.",
@@ -26,14 +34,6 @@ func (DestinationConfig) Parameters() map[string]config.Parameter {
 		DestinationConfigTable: {
 			Default:     "",
 			Description: "Table is used as the target table into which records are inserted.",
-			Type:        config.ParameterTypeString,
-			Validations: []config.Validation{
-				config.ValidationRequired{},
-			},
-		},
-		DestinationConfigUrl: {
-			Default:     "",
-			Description: "URL is the connection string for the Mysql database.",
 			Type:        config.ParameterTypeString,
 			Validations: []config.Validation{
 				config.ValidationRequired{},

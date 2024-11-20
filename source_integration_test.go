@@ -32,7 +32,7 @@ func testSourceWithFetchSize(
 ) (sourceIterator, func()) {
 	source := &Source{}
 	cfg := config.Config{
-		common.SourceConfigUrl:              testutils.DSN,
+		common.SourceConfigDsn:              testutils.DSN,
 		common.SourceConfigTables:           "users",
 		common.SourceConfigDisableCanalLogs: "true",
 	}

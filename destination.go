@@ -53,7 +53,7 @@ func (d *Destination) Configure(ctx context.Context, cfg config.Config) error {
 }
 
 func (d *Destination) Open(_ context.Context) (err error) {
-	d.db, err = sqlx.Open("mysql", d.config.URL)
+	d.db, err = sqlx.Open("mysql", d.config.DSN)
 	if err != nil {
 		return fmt.Errorf("failed to connect to mysql: %w", err)
 	}

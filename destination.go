@@ -61,11 +61,13 @@ func (d *Destination) Open(_ context.Context) (err error) {
 	return nil
 }
 
-func (d *Destination) Write(ctx context.Context, recs []opencdc.Record) (int, error) {
+func (d *Destination) Write(ctx context.Context, recs []opencdc.Record) (written int, err error) {
 	tx, err := d.db.BeginTxx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("failed to begin transaction: %w", err)
 	}
+
+	//nolint:errcheck // will always error if committed, no need to check
 	defer tx.Rollback()
 
 	for i, rec := range recs {

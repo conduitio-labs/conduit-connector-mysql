@@ -299,8 +299,9 @@ type fetchWorkerByLimit struct {
 func newFetchWorkerByLimit(
 	db *sqlx.DB, data chan fetchData, config fetchWorkerConfig) fetchWorker {
 	return &fetchWorkerByLimit{
-		db:   db,
-		data: data,
+		db:     db,
+		data:   data,
+		config: config,
 	}
 }
 
@@ -313,21 +314,29 @@ func (w *fetchWorkerByLimit) countTotal(ctx context.Context) (uint64, error) {
 		Total uint64 `db:"total"`
 	}
 
-	stmt := fmt.Sprintf("select count(*) as total from %s", w.config.table)
-	err := w.db.SelectContext(ctx, &total, stmt)
+	query, args, err := squirrel.Select("COUNT(*) as total").From(w.config.table).ToSql()
 	if err != nil {
+		return 0, fmt.Errorf("failed to build query: %w", err)
+	}
+
+	row := w.db.QueryRowxContext(ctx, query, args...)
+	if err := row.StructScan(&total); err != nil {
+		return 0, fmt.Errorf("failed to fetch total from %s: %w", w.config.table, err)
+	} else if err := row.Err(); err != nil {
 		return 0, fmt.Errorf("failed to fetch total from %s: %w", w.config.table, err)
 	}
+
+	sdk.Logger(ctx).Trace().Str("query", query).Any("args", args).Msg("count query")
 
 	return total.Total, nil
 }
 
 func (w *fetchWorkerByLimit) fetchStartEnd(ctx context.Context) (isTableEmpty bool, err error) {
 	total, err := w.countTotal(ctx)
-	if errors.Is(err, sql.ErrNoRows) {
-		return true, nil
-	} else if err != nil {
+	if err != nil {
 		return false, fmt.Errorf("failed to get total: %w", err)
+	} else if total == 0 {
+		return true, nil
 	}
 
 	w.end = total
@@ -348,16 +357,31 @@ func (w *fetchWorkerByLimit) run(ctx context.Context) (err error) {
 	sdk.Logger(ctx).Info().Msgf("obtained tx for table %v", w.config.table)
 
 	for offset := uint64(0); offset < w.end; offset += w.config.fetchSize {
-		var rows []opencdc.StructuredData
-
-		stmt := fmt.Sprintf(
-			"SELECT * FROM %s LIMIT %d OFFSET %d",
-			w.config.table, w.config.fetchSize, offset)
-		if err = tx.SelectContext(ctx, &rows, stmt); err != nil {
-			return fmt.Errorf("failed to fetch rows at offset %v: %w", offset, err)
+		query, args, err := squirrel.
+			Select("*").From(w.config.table).
+			Limit(w.config.fetchSize).Offset(offset).ToSql()
+		if err != nil {
+			return fmt.Errorf("failed to build query: %w", err)
 		}
 
-		for _, row := range rows {
+		sdk.Logger(ctx).Trace().Str("query", query).Any("args", args).Msg("created query")
+
+		rows, err := tx.QueryxContext(ctx, query, args...)
+		if err != nil {
+			return fmt.Errorf("failed to query rows: %w", err)
+		}
+
+		for rows.Next() {
+			row := opencdc.StructuredData{}
+			if err := rows.MapScan(row); err != nil {
+				return fmt.Errorf("failed to map scan row: %w", err)
+			}
+
+			// convert the values so that they can be easily serialized
+			for key, val := range row {
+				row[key] = common.FormatValue(val)
+			}
+
 			keyBytes, err := json.Marshal(row)
 			if err != nil {
 				return fmt.Errorf("failed to marshal row: %w", err)
@@ -381,6 +405,9 @@ func (w *fetchWorkerByLimit) run(ctx context.Context) (err error) {
 				// to do it in the future.
 				position: common.TablePosition{},
 			}
+		}
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("failed to close rows: %w", err)
 		}
 	}
 

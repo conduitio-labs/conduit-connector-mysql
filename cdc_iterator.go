@@ -16,6 +16,7 @@ package mysql
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -24,6 +25,7 @@ import (
 	"github.com/conduitio/conduit-commons/opencdc"
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/go-mysql-org/go-mysql/canal"
+	"github.com/go-mysql-org/go-mysql/replication"
 	"github.com/go-mysql-org/go-mysql/schema"
 	mysqldriver "github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
@@ -92,6 +94,7 @@ func (c *cdcIterator) start() error {
 	go func() {
 		c.canal.SetEventHandler(eventHandler)
 		pos := startPosition.ToMysqlPos()
+
 		c.canalRunErrC <- c.canal.RunFrom(pos)
 	}()
 
@@ -145,7 +148,9 @@ func (c *cdcIterator) Teardown(ctx context.Context) error {
 		//nolint:wrapcheck // no need to wrap canceled error
 		return ctx.Err()
 	case err := <-c.canalRunErrC:
-		if err != nil {
+		if errors.Is(err, replication.ErrSyncClosed) {
+			return nil
+		} else if err != nil {
 			return fmt.Errorf("failed to stop canal: %w", err)
 		}
 	}

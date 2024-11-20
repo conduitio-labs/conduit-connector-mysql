@@ -26,7 +26,8 @@ import (
 )
 
 func testSourceWithFetchSize(
-	ctx context.Context, is *is.I, fetchSize string) (sdk.Source, func()) {
+	ctx context.Context, is *is.I, fetchSize string,
+) (sdk.Source, func()) {
 	source := &Source{}
 	cfg := config.Config{
 		common.SourceConfigDsn:              testutils.DSN,

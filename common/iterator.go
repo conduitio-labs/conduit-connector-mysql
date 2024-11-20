@@ -21,7 +21,7 @@ import (
 	sdk "github.com/conduitio/conduit-connector-sdk"
 )
 
-// Iterator implements a subset of the sdk.Source interface
+// Iterator implements a subset of the sdk.Source interface.
 type Iterator interface {
 	Read(context.Context) (opencdc.Record, error)
 	Ack(context.Context, opencdc.Position) error

@@ -54,6 +54,8 @@ func newFetchWorker(db *sqlx.DB, data chan fetchData, config fetchWorkerConfig) 
 	return newFetchWorkerByKey(db, data, config)
 }
 
+// fetchWorkerByKey will perform a snapshot using the sortColName as
+// the sorting key for fetching rows in chunks.
 type fetchWorkerByKey struct {
 	db         *sqlx.DB
 	data       chan fetchData
@@ -289,6 +291,8 @@ func (w *fetchWorkerByKey) buildFetchData(
 	return fetchData{key, w.config.table, payload, position}, nil
 }
 
+// fetchWorkerByLimit will perform a snapshot using the LIMIT + OFFSET clauses to fetch
+// rows in chunks.
 type fetchWorkerByLimit struct {
 	config fetchWorkerConfig
 	db     *sqlx.DB

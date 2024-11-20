@@ -48,6 +48,7 @@ func Connection(t *testing.T) *sqlx.DB {
 		is.NoErr(db.Close())
 	})
 
+	// This should help in test isolation and consistency
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 

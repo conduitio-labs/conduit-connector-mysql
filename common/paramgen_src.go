@@ -9,9 +9,9 @@ import (
 
 const (
 	SourceConfigDisableCanalLogs = "disableCanalLogs"
+	SourceConfigDsn              = "dsn"
 	SourceConfigFetchSize        = "fetchSize"
 	SourceConfigTables           = "tables"
-	SourceConfigUrl              = "url"
 )
 
 func (SourceConfig) Parameters() map[string]config.Parameter {
@@ -22,6 +22,14 @@ func (SourceConfig) Parameters() map[string]config.Parameter {
 			Type:        config.ParameterTypeBool,
 			Validations: []config.Validation{},
 		},
+		SourceConfigDsn: {
+			Default:     "",
+			Description: "DSN is the connection string for the MySQL database.",
+			Type:        config.ParameterTypeString,
+			Validations: []config.Validation{
+				config.ValidationRequired{},
+			},
+		},
 		SourceConfigFetchSize: {
 			Default:     "50000",
 			Description: "FetchSize limits how many rows should be retrieved on each database fetch.",
@@ -31,14 +39,6 @@ func (SourceConfig) Parameters() map[string]config.Parameter {
 		SourceConfigTables: {
 			Default:     "",
 			Description: "Tables represents the tables to read from.",
-			Type:        config.ParameterTypeString,
-			Validations: []config.Validation{
-				config.ValidationRequired{},
-			},
-		},
-		SourceConfigUrl: {
-			Default:     "",
-			Description: "URL is the connection string for the Mysql database.",
 			Type:        config.ParameterTypeString,
 			Validations: []config.Validation{
 				config.ValidationRequired{},

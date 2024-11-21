@@ -91,9 +91,14 @@ func (w *fetchWorkerByKey) fetchStartEnd(ctx context.Context) (isTableEmpty bool
 	}
 	w.end = row.MaxValue
 
-	sdk.Logger(ctx).Info().
+	w.start = common.FormatValue(w.start)
+	w.end = common.FormatValue(w.end)
+
+	sdk.Logger(ctx).Debug().
 		Any("start", w.start).
+		Type("start type", w.start).
 		Any("end", w.end).
+		Type("end type", w.end).
 		Msg("fetched start and end")
 
 	return false, nil
@@ -111,7 +116,7 @@ func (w *fetchWorkerByKey) run(ctx context.Context) (err error) {
 		return fmt.Errorf("failed to create transaction: %w", err)
 	}
 
-	sdk.Logger(ctx).Info().Msgf("obtained tx for table %v", w.config.table)
+	sdk.Logger(ctx).Debug().Msgf("obtained tx for table %v", w.config.table)
 
 	defer func() { err = errors.Join(err, tx.Commit()) }()
 
@@ -239,7 +244,7 @@ func (w *fetchWorkerByKey) selectRowsChunk(
 		return nil, false, fmt.Errorf("failed to build query: %w", err)
 	}
 
-	sdk.Logger(ctx).Trace().Str("query", query).Any("args", args).Msg("created query")
+	sdk.Logger(ctx).Debug().Str("query", query).Any("args", args).Msg("created query")
 
 	rows, err := tx.QueryxContext(ctx, query, args...)
 	if err != nil {
@@ -331,7 +336,7 @@ func (w *fetchWorkerByLimit) countTotal(ctx context.Context) (uint64, error) {
 		return 0, fmt.Errorf("failed to fetch total from %s: %w", w.config.table, err)
 	}
 
-	sdk.Logger(ctx).Trace().Str("query", query).Any("args", args).Msg("count query")
+	sdk.Logger(ctx).Debug().Str("query", query).Any("args", args).Msg("count query")
 
 	return total.Total, nil
 }
@@ -363,7 +368,7 @@ func (w *fetchWorkerByLimit) run(ctx context.Context) (err error) {
 		}
 	}()
 
-	sdk.Logger(ctx).Info().Msgf("obtained tx for table %v", w.config.table)
+	sdk.Logger(ctx).Debug().Msgf("obtained tx for table %v", w.config.table)
 
 	for offset := uint64(0); offset < w.end; offset += w.config.fetchSize {
 		query, args, err := squirrel.
@@ -373,7 +378,7 @@ func (w *fetchWorkerByLimit) run(ctx context.Context) (err error) {
 			return fmt.Errorf("failed to build query: %w", err)
 		}
 
-		sdk.Logger(ctx).Trace().Str("query", query).Any("args", args).Msg("created query")
+		sdk.Logger(ctx).Debug().Str("query", query).Any("args", args).Msg("created query")
 
 		rows, err := tx.QueryxContext(ctx, query, args...)
 		if err != nil {

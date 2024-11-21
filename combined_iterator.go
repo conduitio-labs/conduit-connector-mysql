@@ -163,7 +163,7 @@ func lockTables(ctx context.Context, db *sqlx.DB, tables []string) (func() error
 
 	_, err := db.ExecContext(ctx, "FLUSH TABLES "+tableList+" WITH READ LOCK")
 	if err != nil {
-		return nil, fmt.Errorf("failed to flush tables and acquire lock: %w", err)
+		return nil, fmt.Errorf("failed to flush table list '%s' and acquire lock: %w", tableList, err)
 	}
 
 	return func() error {

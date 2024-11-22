@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"math"
 	"strconv"
-	"strings"
 	"time"
 
 	sdk "github.com/conduitio/conduit-connector-sdk"
@@ -48,14 +47,6 @@ func FormatValue(val any) any {
 	default:
 		return val
 	}
-}
-
-func LowerCaseIfString(val any) any {
-	if s, ok := val.(string); ok {
-		return strings.ToLower(s)
-	}
-
-	return val
 }
 
 type CanalConfig struct {

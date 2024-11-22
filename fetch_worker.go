@@ -84,15 +84,12 @@ func (w *fetchWorkerByKey) fetchStartEnd(ctx context.Context) (isTableEmpty bool
 	}
 
 	w.start = row.MinValue
-
 	lastRead := w.config.lastPosition.Snapshots[w.config.table].LastRead
 	if lastRead != nil {
 		w.start = lastRead
 	}
-	w.end = row.MaxValue
 
-	w.start = common.FormatValue(w.start)
-	w.end = common.FormatValue(w.end)
+	w.end = row.MaxValue
 
 	sdk.Logger(ctx).Debug().
 		Any("start", w.start).
@@ -126,9 +123,6 @@ func (w *fetchWorkerByKey) run(ctx context.Context) (err error) {
 		Uint64("fetchSize", w.config.fetchSize).
 		Msg("fetching rows")
 
-	// We need to batch the iteration in chunks because mysql cursors are very
-	// slow, compared to postgres.
-
 	// If the worker has been given a starting position it means that we have already
 	// read the record in that specific position, so we can just exclude it.
 
@@ -137,8 +131,7 @@ func (w *fetchWorkerByKey) run(ctx context.Context) (err error) {
 	for {
 		sdk.Logger(ctx).Info().
 			Any("chunk start", chunkStart).
-			Any("end", w.end).
-			Msg("fetching chunk")
+			Any("end", w.end).Msg("fetching chunk")
 
 		rows, foundEnd, err := w.selectRowsChunk(ctx, tx, chunkStart, discardFirst)
 		if err != nil {

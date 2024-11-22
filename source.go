@@ -177,7 +177,7 @@ func (s *Source) getTableKeys() (common.TableSortColumns, error) {
 
 		primaryKey, err := getPrimaryKey(s.db, s.configFromDsn.DBName, table)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get primary key for table %q: %w", table, err)
+			return nil, fmt.Errorf("failed to get primary key for table %s. You might want to add a `tableConfig.<table name>.sortingColumn entry, or enable `unsafeSnapshot` mode: %w", table, err)
 		}
 
 		tableKeys[table] = primaryKey

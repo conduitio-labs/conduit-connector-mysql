@@ -106,21 +106,12 @@ func (w *fetchWorker) run(ctx context.Context) (err error) {
 	discardFirst := w.config.lastPosition.Snapshots[w.config.table].LastRead != nil
 	chunkStart := w.start
 	for {
-		greaterOrEq, cantCompare := common.IsGreaterOrEqual(chunkStart, w.end)
-		if cantCompare {
-			return fmt.Errorf(
-				"cannot compare values %v and %v of types %T and %T",
-				chunkStart, w.end, chunkStart, w.end)
-		} else if greaterOrEq {
-			break
-		}
-
 		sdk.Logger(ctx).Info().
 			Any("chunk start", chunkStart).
 			Any("end", w.end).
 			Msg("fetching chunk")
 
-		rows, err := w.selectRowsChunk(ctx, tx, chunkStart, discardFirst)
+		rows, foundEnd, err := w.selectRowsChunk(ctx, tx, chunkStart, discardFirst)
 		if err != nil {
 			return fmt.Errorf("failed to select rows chunk: %w", err)
 		}
@@ -156,6 +147,10 @@ func (w *fetchWorker) run(ctx context.Context) (err error) {
 			}
 
 			chunkStart = lastRead
+		}
+
+		if foundEnd {
+			break
 		}
 	}
 
@@ -202,7 +197,7 @@ func (w *fetchWorker) getMinMaxValues(
 func (w *fetchWorker) selectRowsChunk(
 	ctx context.Context, tx *sqlx.Tx,
 	start any, discardFirst bool,
-) (scannedRows []opencdc.StructuredData, err error) {
+) (scannedRows []opencdc.StructuredData, foundEnd bool, err error) {
 	var wherePred any = squirrel.GtOrEq{w.config.sortColName: start}
 	if discardFirst {
 		wherePred = squirrel.Gt{w.config.sortColName: start}
@@ -212,18 +207,19 @@ func (w *fetchWorker) selectRowsChunk(
 		Select("*").
 		From(w.config.table).
 		Where(wherePred).
+		Where(squirrel.LtOrEq{w.config.sortColName: w.end}).
 		OrderBy(w.config.sortColName).
 		Limit(w.config.fetchSize).
 		ToSql()
 	if err != nil {
-		return nil, fmt.Errorf("failed to build query: %w", err)
+		return nil, false, fmt.Errorf("failed to build query: %w", err)
 	}
 
 	sdk.Logger(ctx).Trace().Str("query", query).Any("args", args).Msg("created query")
 
 	rows, err := tx.QueryxContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query rows: %w", err)
+		return nil, false, fmt.Errorf("failed to query rows: %w", err)
 	}
 	defer func() {
 		if closeErr := rows.Close(); err != nil {
@@ -238,7 +234,7 @@ func (w *fetchWorker) selectRowsChunk(
 	for rows.Next() {
 		row := opencdc.StructuredData{}
 		if err := rows.MapScan(row); err != nil {
-			return nil, fmt.Errorf("failed to map scan row: %w", err)
+			return nil, false, fmt.Errorf("failed to map scan row: %w", err)
 		}
 
 		// convert the values so that they can be easily serialized
@@ -249,10 +245,12 @@ func (w *fetchWorker) selectRowsChunk(
 		scannedRows = append(scannedRows, row)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("failed to close rows: %w", err)
+		return nil, false, fmt.Errorf("failed to close rows: %w", err)
 	}
 
-	return scannedRows, nil
+	foundEnd = len(scannedRows) < int(w.config.fetchSize)
+
+	return scannedRows, foundEnd, nil
 }
 
 func (w *fetchWorker) buildFetchData(

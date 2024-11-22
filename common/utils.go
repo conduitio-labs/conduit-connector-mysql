@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"reflect"
 	"strconv"
 	"time"
 
@@ -184,87 +183,4 @@ func GetServerID(ctx context.Context, db *sqlx.DB) (string, error) {
 	serverID := strconv.FormatUint(serverIDRow.ServerID, 10)
 
 	return serverID, nil
-}
-
-// IsGreaterOrEqual uses reflection to apply the >= operation to two values of any type.
-// This function is useful for determining when to stop the snapshot iteration.
-//
-// Manually checking each type can be error-prone. In production environments,
-// the default fetch size is quite large, so the latency of IsGreaterOrEqual is
-// negligible compared to the latency of fetching rows from the database.
-func IsGreaterOrEqual(a, b any) (greaterOrEqual bool, cantCompare bool) {
-	defer func() {
-		if err := recover(); err != nil {
-			cantCompare = true
-		}
-	}()
-
-	va := reflect.ValueOf(a)
-	vb := reflect.ValueOf(b)
-
-	switch {
-	case va.Kind() == reflect.String || va.Type() == reflect.TypeOf([]uint8{}):
-		aStr := toString(a)
-		bStr := toString(b)
-		if aStr != nil && bStr != nil {
-			return *aStr >= *bStr, false
-		}
-		return false, true
-	case vb.Kind() == reflect.String || vb.Type() == reflect.TypeOf([]uint8{}):
-		return false, true
-	case va.Type() == reflect.TypeOf(time.Time{}) && vb.Type() == reflect.TypeOf(time.Time{}):
-		//nolint:forcetypeassert // checked already
-		aTime := a.(time.Time)
-		//nolint:forcetypeassert // checked already
-		bTime := b.(time.Time)
-		return aTime.After(bTime) || aTime.Equal(bTime), false
-	}
-
-	if !isNumber(va.Kind()) || !isNumber(vb.Kind()) {
-		return false, true
-	}
-
-	af, ok1 := toFloat64(va)
-	bf, ok2 := toFloat64(vb)
-	if !ok1 || !ok2 {
-		return false, true
-	}
-
-	return af >= bf, false
-}
-
-func isNumber(k reflect.Kind) bool {
-	switch k {
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
-		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
-		reflect.Float32, reflect.Float64:
-		return true
-	default:
-		return false
-	}
-}
-
-func toFloat64(v reflect.Value) (float64, bool) {
-	switch v.Kind() {
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		return float64(v.Int()), true
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		return float64(v.Uint()), true
-	case reflect.Float32, reflect.Float64:
-		return v.Float(), true
-	default:
-		return 0, false
-	}
-}
-
-func toString(v any) *string {
-	switch v := v.(type) {
-	case string:
-		return &v
-	case []uint8:
-		s := string(v)
-		return &s
-	default:
-		return nil
-	}
 }

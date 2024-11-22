@@ -17,6 +17,7 @@ package mysql
 import (
 	"context"
 	"fmt"
+	"math"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	"github.com/conduitio/conduit-commons/config"
@@ -56,6 +57,10 @@ func (s *Source) Configure(ctx context.Context, cfg config.Config) (err error) {
 	s.configFromDsn, err = mysql.ParseDSN(s.config.DSN)
 	if err != nil {
 		return fmt.Errorf("failed to parse given URL: %w", err)
+	}
+
+	if s.config.FetchSize > math.MaxInt64 {
+		return fmt.Errorf("given fetch size is too large")
 	}
 
 	sdk.Logger(ctx).Info().Msg("configured source connector")

@@ -248,6 +248,7 @@ func (w *fetchWorker) selectRowsChunk(
 		return nil, false, fmt.Errorf("failed to close rows: %w", err)
 	}
 
+	//nolint:gosec // fetchSize is already checked for being a sane int value
 	foundEnd = len(scannedRows) < int(w.config.fetchSize)
 
 	return scannedRows, foundEnd, nil

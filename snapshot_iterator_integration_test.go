@@ -379,6 +379,8 @@ func TestSnapshotIterator_DeleteEndWhileSnapshotting(t *testing.T) {
 }
 
 func TestSnapshotIterator_StringSorting(t *testing.T) {
+	// MySQL sorts strings in a case-insensitive manner, so we need to test that we
+
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 
@@ -398,12 +400,24 @@ func TestSnapshotIterator_StringSorting(t *testing.T) {
 	}
 
 	data := []Table{
-		{"Zebra"}, {"apple"}, {"BANANA"}, {"āpple"},
-		{"_apple"}, {"123apple"}, {"Apple"}}
+		{"Zebra"},
+		{"apple"},
+		{"BANANA"},
+		{"āpple"},
+		{"_apple"},
+		{"123apple"},
+		{"Apple"},
+	}
 
 	sorted := []Table{
-		{"_apple"}, {"123apple"}, {"apple"}, {"āpple"}, {"Apple"},
-		{"BANANA"}, {"Zebra"}}
+		{"_apple"},
+		{"123apple"},
+		{"apple"},
+		{"āpple"},
+		{"Apple"},
+		{"BANANA"},
+		{"Zebra"},
+	}
 
 	for _, data := range data {
 		_, err = db.ExecContext(ctx, fmt.Sprintf(`

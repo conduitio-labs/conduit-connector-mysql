@@ -146,10 +146,6 @@ func (w *fetchWorkerByKey) run(ctx context.Context) (err error) {
 		}
 		discardFirst = true
 
-		if len(rows) == 0 {
-			continue
-		}
-
 		for _, row := range rows {
 			sdk.Logger(ctx).Trace().Msgf("fetched row: %+v", row)
 

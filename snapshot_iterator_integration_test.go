@@ -377,3 +377,77 @@ func TestSnapshotIterator_DeleteEndWhileSnapshotting(t *testing.T) {
 		testutils.AssertUserSnapshot(is, users[i-1], rec)
 	}
 }
+
+func TestSnapshotIterator_StringSorting(t *testing.T) {
+	ctx := testutils.TestContext(t)
+	is := is.New(t)
+
+	db := testutils.Connection(t)
+
+	_, err := db.ExecContext(ctx, "DROP TABLE IF EXISTS string_sorting;")
+	is.NoErr(err)
+
+	_, err = db.ExecContext(ctx, `
+		CREATE TABLE string_sorting (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			str VARCHAR(50));`)
+	is.NoErr(err)
+
+	type Table struct {
+		str string
+	}
+
+	data := []Table{
+		{"Zebra"}, {"apple"}, {"BANANA"}, {"āpple"},
+		{"_apple"}, {"123apple"}, {"Apple"}}
+
+	sorted := []Table{
+		{"_apple"}, {"123apple"}, {"apple"}, {"āpple"}, {"Apple"},
+		{"BANANA"}, {"Zebra"}}
+
+	for _, data := range data {
+		_, err = db.ExecContext(ctx, fmt.Sprintf(`
+			INSERT INTO string_sorting (str) VALUES ('%s');`,
+			data.str))
+		is.NoErr(err)
+	}
+
+	serverID, err := common.GetServerID(ctx, db)
+	is.NoErr(err)
+
+	iterator, err := newSnapshotIterator(snapshotIteratorConfig{
+		tableSortColumns: common.TableSortColumns{"string_sorting": "str"},
+		db:               db,
+		database:         "meroxadb",
+		tables:           []string{"string_sorting"},
+		serverID:         serverID,
+	})
+	is.NoErr(err)
+
+	is.NoErr(iterator.setupWorkers(ctx))
+	iterator.start(ctx)
+
+	var recs []opencdc.Record
+	for {
+		rec, err := iterator.Read(ctx)
+		if errors.Is(err, ErrSnapshotIteratorDone) {
+			break
+		}
+		is.NoErr(err)
+
+		err = iterator.Ack(ctx, rec.Position)
+		is.NoErr(err)
+
+		recs = append(recs, rec)
+	}
+
+	is.Equal(len(recs), len(sorted))
+
+	for i, expectedData := range sorted {
+		actual := recs[i]
+		is.Equal(actual.Operation, opencdc.OperationSnapshot)
+		is.Equal(actual.Payload.After.(opencdc.StructuredData)["str"].(string), expectedData.str)
+	}
+
+	is.NoErr(iterator.Teardown(ctx))
+}

@@ -18,7 +18,6 @@ require (
 require (
 	dario.cat/mergo v1.0.1 // indirect
 	github.com/Masterminds/semver v1.5.0 // indirect
-	github.com/cznic/mathutil v0.0.0-20181122101859-297441e03548 // indirect
 	github.com/golangci/go-printf-func-name v0.1.0 // indirect
 	github.com/hamba/avro/v2 v2.27.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
@@ -28,12 +27,11 @@ require (
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
-	github.com/pingcap/errors v0.11.5-0.20221009092201-b66cddb77c32 // indirect
-	github.com/pingcap/failpoint v0.0.0-20220801062533-2eaa32854a6c // indirect
+	github.com/pingcap/errors v0.11.5-0.20240311024730-e056997136bb // indirect
+	github.com/pingcap/failpoint v0.0.0-20240528011301-b51a646c7c86 // indirect
 	github.com/pingcap/log v1.1.1-0.20230317032135-a0d097d16e22 // indirect
-	github.com/pingcap/tidb/pkg/parser v0.0.0-20231103042308-035ad5ccbe67 // indirect
+	github.com/pingcap/tidb/pkg/parser v0.0.0-20241118164214-4f047be191be // indirect
 	github.com/raeperd/recvcheck v0.1.2 // indirect
-	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rogpeppe/go-internal v1.13.1 // indirect
 	github.com/siddontang/go v0.0.0-20180604090527-bdc77568d726 // indirect
 	github.com/twmb/go-cache v1.2.1 // indirect
@@ -93,7 +91,7 @@ require (
 	github.com/fzipp/gocyclo v0.6.0 // indirect
 	github.com/ghostiam/protogetter v0.3.8 // indirect
 	github.com/go-critic/go-critic v0.11.5 // indirect
-	github.com/go-mysql-org/go-mysql v1.9.1
+	github.com/go-mysql-org/go-mysql v1.10.0
 	github.com/go-toolsmith/astcast v1.1.0 // indirect
 	github.com/go-toolsmith/astcopy v1.1.0 // indirect
 	github.com/go-toolsmith/astequal v1.2.0 // indirect

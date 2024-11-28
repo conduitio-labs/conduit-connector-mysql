@@ -7,7 +7,7 @@ require (
 	github.com/conduitio/conduit-commons v0.5.0
 	github.com/conduitio/conduit-connector-sdk v0.12.0
 	github.com/go-sql-driver/mysql v1.8.1
-	github.com/golangci/golangci-lint v1.62.0
+	github.com/golangci/golangci-lint v1.62.2
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/matryer/is v1.4.1
 	github.com/rs/zerolog v1.33.0
@@ -18,7 +18,6 @@ require (
 require (
 	dario.cat/mergo v1.0.1 // indirect
 	github.com/Masterminds/semver v1.5.0 // indirect
-	github.com/cznic/mathutil v0.0.0-20181122101859-297441e03548 // indirect
 	github.com/golangci/go-printf-func-name v0.1.0 // indirect
 	github.com/hamba/avro/v2 v2.27.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
@@ -28,16 +27,15 @@ require (
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
-	github.com/pingcap/errors v0.11.5-0.20221009092201-b66cddb77c32 // indirect
-	github.com/pingcap/failpoint v0.0.0-20220801062533-2eaa32854a6c // indirect
+	github.com/pingcap/errors v0.11.5-0.20240311024730-e056997136bb // indirect
+	github.com/pingcap/failpoint v0.0.0-20240528011301-b51a646c7c86 // indirect
 	github.com/pingcap/log v1.1.1-0.20230317032135-a0d097d16e22 // indirect
-	github.com/pingcap/tidb/pkg/parser v0.0.0-20231103042308-035ad5ccbe67 // indirect
+	github.com/pingcap/tidb/pkg/parser v0.0.0-20241118164214-4f047be191be // indirect
 	github.com/raeperd/recvcheck v0.1.2 // indirect
-	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rogpeppe/go-internal v1.13.1 // indirect
 	github.com/siddontang/go v0.0.0-20180604090527-bdc77568d726 // indirect
 	github.com/twmb/go-cache v1.2.1 // indirect
-	github.com/uudashr/iface v1.2.0 // indirect
+	github.com/uudashr/iface v1.2.1 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 	go.uber.org/mock v0.5.0 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
@@ -51,9 +49,9 @@ require (
 	github.com/Abirdcfly/dupword v0.1.3 // indirect
 	github.com/Antonboom/errname v1.0.0 // indirect
 	github.com/Antonboom/nilnil v1.0.0 // indirect
-	github.com/Antonboom/testifylint v1.5.0 // indirect
+	github.com/Antonboom/testifylint v1.5.2 // indirect
 	github.com/BurntSushi/toml v1.4.1-0.20240526193622-a339e1f7089c // indirect
-	github.com/Crocmagnon/fatcontext v0.5.2 // indirect
+	github.com/Crocmagnon/fatcontext v0.5.3 // indirect
 	github.com/Djarvur/go-err113 v0.0.0-20210108212216-aea10b59be24 // indirect
 	github.com/GaijinEntertainment/go-exhaustruct/v3 v3.3.0 // indirect
 	github.com/Masterminds/goutils v1.1.1 // indirect
@@ -93,7 +91,7 @@ require (
 	github.com/fzipp/gocyclo v0.6.0 // indirect
 	github.com/ghostiam/protogetter v0.3.8 // indirect
 	github.com/go-critic/go-critic v0.11.5 // indirect
-	github.com/go-mysql-org/go-mysql v1.9.1
+	github.com/go-mysql-org/go-mysql v1.10.0
 	github.com/go-toolsmith/astcast v1.1.0 // indirect
 	github.com/go-toolsmith/astcopy v1.1.0 // indirect
 	github.com/go-toolsmith/astequal v1.2.0 // indirect
@@ -152,7 +150,7 @@ require (
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-runewidth v0.0.16 // indirect
-	github.com/mgechev/revive v1.5.0 // indirect
+	github.com/mgechev/revive v1.5.1 // indirect
 	github.com/mitchellh/copystructure v1.2.0 // indirect
 	github.com/mitchellh/go-homedir v1.1.0 // indirect
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
@@ -161,12 +159,12 @@ require (
 	github.com/nakabonne/nestif v0.3.1 // indirect
 	github.com/nishanths/exhaustive v0.12.0 // indirect
 	github.com/nishanths/predeclared v0.2.2 // indirect
-	github.com/nunnatsa/ginkgolinter v0.18.0 // indirect
+	github.com/nunnatsa/ginkgolinter v0.18.3 // indirect
 	github.com/oklog/run v1.1.0 // indirect
 	github.com/olekukonko/tablewriter v0.0.5 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.3 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
-	github.com/polyfloyd/go-errorlint v1.6.0 // indirect
+	github.com/polyfloyd/go-errorlint v1.7.0 // indirect
 	github.com/prometheus/client_golang v1.20.2 // indirect
 	github.com/prometheus/client_model v0.6.1 // indirect
 	github.com/prometheus/common v0.55.0 // indirect
@@ -202,7 +200,7 @@ require (
 	github.com/ssgreg/nlreturn/v2 v2.2.1 // indirect
 	github.com/stbenjam/no-sprintf-host-port v0.1.1 // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
-	github.com/stretchr/testify v1.9.0 // indirect
+	github.com/stretchr/testify v1.10.0 // indirect
 	github.com/subosito/gotenv v1.6.0 // indirect
 	github.com/tdakkota/asciicheck v0.2.0 // indirect
 	github.com/tetafro/godot v1.4.18 // indirect
@@ -226,7 +224,7 @@ require (
 	go.uber.org/zap v1.27.0 // indirect
 	golang.org/x/crypto v0.29.0 // indirect
 	golang.org/x/exp v0.0.0-20241009180824-f66d83c29e7c
-	golang.org/x/exp/typeparams v0.0.0-20240909161429-701f63a606c0 // indirect
+	golang.org/x/exp/typeparams v0.0.0-20241108190413-2d47ceb2692f // indirect
 	golang.org/x/mod v0.22.0 // indirect
 	golang.org/x/net v0.31.0 // indirect
 	golang.org/x/sync v0.9.0 // indirect

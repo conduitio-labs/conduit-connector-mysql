@@ -149,6 +149,7 @@ func (c *cdcIterator) Teardown(ctx context.Context) error {
 		return ctx.Err()
 	case err := <-c.canalRunErrC:
 		if errors.Is(err, replication.ErrSyncClosed) {
+			sdk.Logger(ctx).Err(err).Msg("error found when closing mysql canal")
 			return nil
 		} else if err != nil {
 			return fmt.Errorf("failed to stop canal: %w", err)

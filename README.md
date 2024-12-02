@@ -45,7 +45,7 @@ The position of the table is currently not recorded, so the unsafe snapshot will
 
 | name                                        | description                                                                                                                                             | required | default | example                                                         |
 | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------- | --------------------------------------------------------------- |
-| `dsn`                                       | [The data source name](https://github.com/go-sql-driver/mysql?tab=readme-ov-file#dsn-data-source-name) for the MySQL database.                          | true     |         | `<user>:<password>@tcp(127.0.0.1:3306)/<db>?parseTime=true`     |
+| `dsn`                                       | [The data source name](https://github.com/go-sql-driver/mysql?tab=readme-ov-file#dsn-data-source-name) for the MySQL database.                          | true     |         | `<user>:<password>@tcp(127.0.0.1:3306)/<db>`                    |
 | `tables`                                    | The list of tables to pull data from                                                                                                                    | true     |         | `users,posts,admins`                                            |
 | `tableConfig.<table name>.sortingColum (*)` | The custom column to use to sort the rows during the snapshot. Use this if there are any tables which don't have a proper autoincrementing primary key. | false    |         | `tableConfig.users.sortingColumn` as the key, `id` as the value |
 | `fetchSize`                                 | Limits how many rows should be retrieved on each database fetch.                                                                                        | false    | 50000   | 50000                                                           |
@@ -92,8 +92,8 @@ If there is no key, the record will be simply appended.
 
 ### Configuration Options
 
-| name    | description                                                                                                                    | required | example                                                     |
-| ------- | ------------------------------------------------------------------------------------------------------------------------------ | -------- | ----------------------------------------------------------- |
-| `dsn`   | [The data source name](https://github.com/go-sql-driver/mysql?tab=readme-ov-file#dsn-data-source-name) for the MySQL database. | true     | `<user>:<password>@tcp(127.0.0.1:3306)/<db>?parseTime=true` |
-| `table` | The target table to write the record to                                                                                        | true     | `users`                                                     |
-| `key`   | Key represents the column name to use to delete records.                                                                       | true     | `user_id`                                                   |
+| name    | description                                                                                                                    | required | example                                      |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------ | -------- | -------------------------------------------- |
+| `dsn`   | [The data source name](https://github.com/go-sql-driver/mysql?tab=readme-ov-file#dsn-data-source-name) for the MySQL database. | true     | `<user>:<password>@tcp(127.0.0.1:3306)/<db>` |
+| `table` | The target table to write the record to                                                                                        | true     | `users`                                      |
+| `key`   | Key represents the column name to use to delete records.                                                                       | true     | `user_id`                                    |

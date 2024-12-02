@@ -430,7 +430,7 @@ func TestSnapshotIterator_StringSorting(t *testing.T) {
 	is.NoErr(err)
 
 	iterator, err := newSnapshotIterator(snapshotIteratorConfig{
-		tableSortColumns: common.TableSortColumns{"string_sorting": "str"},
+		tableSortColumns: map[string]string{"string_sorting": "str"},
 		db:               db,
 		database:         "meroxadb",
 		tables:           []string{"string_sorting"},

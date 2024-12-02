@@ -101,7 +101,3 @@ func (p CdcPosition) ToSDKPosition() opencdc.Position {
 	}
 	return v
 }
-
-// TableSortColumns is a map of associations between table names and sort column
-// names. Useful for retrieving sort values from rows.
-type TableSortColumns map[string]string

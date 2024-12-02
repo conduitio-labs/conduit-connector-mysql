@@ -60,7 +60,7 @@ type (
 	}
 	snapshotIteratorConfig struct {
 		db               *sqlx.DB
-		tableSortColumns common.TableSortColumns
+		tableSortColumns map[string]string
 		fetchSize        uint64
 		startPosition    *common.SnapshotPosition
 		database         string

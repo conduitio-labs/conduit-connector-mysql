@@ -43,7 +43,7 @@ type cdcIteratorConfig struct {
 	db                  *sqlx.DB
 	tables              []string
 	mysqlConfig         *mysqldriver.Config
-	tableSortCols       common.TableSortColumns
+	tableSortCols       map[string]string
 	disableCanalLogging bool
 	startPosition       *common.CdcPosition
 }

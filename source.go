@@ -165,8 +165,8 @@ func getPrimaryKey(db *sqlx.DB, database, table string) (string, error) {
 	return primaryKey.ColumnName, nil
 }
 
-func (s *Source) getTableKeys() (common.TableSortColumns, error) {
-	tableKeys := make(common.TableSortColumns)
+func (s *Source) getTableKeys() (map[string]string, error) {
+	tableKeys := make(map[string]string)
 
 	for _, table := range s.config.Tables {
 		preconfiguredTableKey, ok := s.config.TableConfig[table]

@@ -287,7 +287,7 @@ func TestSnapshotIterator_CustomTableKeys(t *testing.T) {
 			is.NoErr(err)
 
 			iterator, err := newSnapshotIterator(snapshotIteratorConfig{
-				tableSortColumns: common.TableSortColumns{testCase.tableName: testCase.sortingCol},
+				tableSortColumns: map[string]string{testCase.tableName: testCase.sortingCol},
 				db:               db,
 				database:         "meroxadb",
 				tables:           []string{testCase.tableName},

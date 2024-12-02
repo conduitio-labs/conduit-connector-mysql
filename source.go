@@ -17,6 +17,7 @@ package mysql
 import (
 	"context"
 	"fmt"
+	"math"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	"github.com/conduitio/conduit-commons/config"
@@ -58,6 +59,10 @@ func (s *Source) Configure(ctx context.Context, cfg config.Config) (err error) {
 		return fmt.Errorf("failed to parse given URL: %w", err)
 	}
 
+	if s.config.FetchSize > math.MaxInt64 {
+		return fmt.Errorf("given fetch size is too large")
+	}
+
 	sdk.Logger(ctx).Info().Msg("configured source connector")
 	return nil
 }
@@ -68,7 +73,7 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 		return fmt.Errorf("failed to connect to mysql: %w", err)
 	}
 
-	tableKeys, err := getTableKeys(s.db, s.configFromDsn.DBName, s.config.Tables)
+	tableKeys, err := s.getTableKeys()
 	if err != nil {
 		return fmt.Errorf("failed to get table keys: %w", err)
 	}
@@ -90,7 +95,7 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 
 	s.iterator, err = newCombinedIterator(ctx, combinedIteratorConfig{
 		db:                    s.db,
-		tableKeys:             tableKeys,
+		tableSortCols:         tableKeys,
 		startSnapshotPosition: pos.SnapshotPosition,
 		startCdcPosition:      pos.CdcPosition,
 		database:              s.configFromDsn.DBName,
@@ -110,7 +115,7 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 
 func (s *Source) Read(ctx context.Context) (opencdc.Record, error) {
 	//nolint:wrapcheck // error already wrapped in iterator
-	return s.iterator.Next(ctx)
+	return s.iterator.Read(ctx)
 }
 
 func (s *Source) Ack(ctx context.Context, _ opencdc.Position) error {
@@ -160,13 +165,19 @@ func getPrimaryKey(db *sqlx.DB, database, table string) (string, error) {
 	return primaryKey.ColumnName, nil
 }
 
-func getTableKeys(db *sqlx.DB, database string, tables []string) (common.TableKeys, error) {
-	tableKeys := make(common.TableKeys)
+func (s *Source) getTableKeys() (map[string]string, error) {
+	tableKeys := make(map[string]string)
 
-	for _, table := range tables {
-		primaryKey, err := getPrimaryKey(db, database, table)
+	for _, table := range s.config.Tables {
+		preconfiguredTableKey, ok := s.config.TableConfig[table]
+		if ok {
+			tableKeys[table] = preconfiguredTableKey.SortingColumn
+			continue
+		}
+
+		primaryKey, err := getPrimaryKey(s.db, s.configFromDsn.DBName, table)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get primary key for table %q: %w", table, err)
+			return nil, fmt.Errorf("failed to get primary key for table %s. You might want to add a `tableConfig.<table name>.sortingColumn entry, or enable `unsafeSnapshot` mode: %w", table, err)
 		}
 
 		tableKeys[table] = primaryKey

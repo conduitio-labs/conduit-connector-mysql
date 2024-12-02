@@ -27,20 +27,20 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
-var ErrPrimaryKeyNotFoundInRow = errors.New("primary key not found in row")
+var ErrSortingKeyNotFoundInRow = errors.New("sorting key not found in row")
 
 type fetchWorker struct {
 	db         *sqlx.DB
 	data       chan fetchData
 	config     fetchWorkerConfig
-	start, end uint64
+	start, end any
 }
 
 type fetchWorkerConfig struct {
 	lastPosition common.SnapshotPosition
 	table        string
 	fetchSize    uint64
-	primaryKey   string
+	sortColName  string
 }
 
 func newFetchWorker(db *sqlx.DB, data chan fetchData, config fetchWorkerConfig) *fetchWorker {
@@ -51,27 +51,28 @@ func newFetchWorker(db *sqlx.DB, data chan fetchData, config fetchWorkerConfig) 
 	}
 }
 
-func (w *fetchWorker) fetchStartEnd(ctx context.Context) (err error) {
-	lastRead := w.config.lastPosition.Snapshots[w.config.table].LastRead
-	minVal, maxVal, err := w.getMinMaxValues(ctx)
+func (w *fetchWorker) fetchStartEnd(ctx context.Context) (isTableEmpty bool, err error) {
+	row, isEmpty, err := w.getMinMaxValues(ctx)
 	if err != nil {
-		return err
+		return false, err
+	} else if isEmpty {
+		return true, nil
 	}
 
-	if lastRead > minVal {
-		// last read takes preference, as previous records where already fetched.
+	w.start = row.MinValue
+
+	lastRead := w.config.lastPosition.Snapshots[w.config.table].LastRead
+	if lastRead != nil {
 		w.start = lastRead
-	} else {
-		w.start = minVal
 	}
-	w.end = maxVal
+	w.end = row.MaxValue
 
 	sdk.Logger(ctx).Info().
-		Uint64("start", w.start).
-		Uint64("end", w.end).
+		Any("start", w.start).
+		Any("end", w.end).
 		Msg("fetched start and end")
 
-	return nil
+	return false, nil
 }
 
 func (w *fetchWorker) run(ctx context.Context) (err error) {
@@ -91,21 +92,31 @@ func (w *fetchWorker) run(ctx context.Context) (err error) {
 	defer func() { err = errors.Join(err, tx.Commit()) }()
 
 	sdk.Logger(ctx).Info().
-		Uint64("start", w.start).
-		Uint64("end", w.end).
+		Any("start", w.start).
+		Any("end", w.end).
 		Uint64("fetchSize", w.config.fetchSize).
 		Msg("fetching rows")
 
-	for chunkStart := w.start; chunkStart <= w.end; chunkStart += w.config.fetchSize {
-		chunkEnd := chunkStart + w.config.fetchSize
+	// We need to batch the iteration in chunks because mysql cursors are very
+	// slow, compared to postgres.
+
+	// If the worker has been given a starting position it means that we have already
+	// read the record in that specific position, so we can just exclude it.
+
+	discardFirst := w.config.lastPosition.Snapshots[w.config.table].LastRead != nil
+	chunkStart := w.start
+	for {
 		sdk.Logger(ctx).Info().
-			Uint64("chunk start", chunkStart).
-			Uint64("chunk end", chunkEnd).
+			Any("chunk start", chunkStart).
+			Any("end", w.end).
 			Msg("fetching chunk")
-		rows, err := w.selectRowsChunk(ctx, tx, chunkStart, chunkEnd)
+
+		rows, foundEnd, err := w.selectRowsChunk(ctx, tx, chunkStart, discardFirst)
 		if err != nil {
 			return fmt.Errorf("failed to select rows chunk: %w", err)
 		}
+		discardFirst = true
+
 		if len(rows) == 0 {
 			continue
 		}
@@ -113,14 +124,9 @@ func (w *fetchWorker) run(ctx context.Context) (err error) {
 		for _, row := range rows {
 			sdk.Logger(ctx).Trace().Msgf("fetched row: %+v", row)
 
-			primaryKeyVal := row[w.config.primaryKey]
-			if primaryKeyVal == nil {
-				return ErrPrimaryKeyNotFoundInRow
-			}
-
-			lastRead, err := common.ConvertPrimaryKey(primaryKeyVal)
-			if err != nil {
-				return fmt.Errorf("failed to convert primary key: %w", err)
+			lastRead := row[w.config.sortColName]
+			if lastRead == nil {
+				return ErrSortingKeyNotFoundInRow
 			}
 
 			position := common.TablePosition{
@@ -139,77 +145,81 @@ func (w *fetchWorker) run(ctx context.Context) (err error) {
 					"fetch worker context done while waiting for data: %w", ctx.Err(),
 				)
 			}
+
+			chunkStart = lastRead
+		}
+
+		if foundEnd {
+			break
 		}
 	}
 
 	return nil
 }
 
-// getMinMaxValues fetches the maximum value of the primary key from the table.
-func (w *fetchWorker) getMinMaxValues(ctx context.Context) (minVal, maxVal uint64, err error) {
-	var minmax struct {
-		MinValue *uint64 `db:"min_value"`
-		MaxValue *uint64 `db:"max_value"`
-	}
+type minmaxRow struct {
+	MinValue any `db:"min_value"`
+	MaxValue any `db:"max_value"`
+}
 
-	// We obtain the minimum value this way so that we can fetch rows exclusive
-	// (>) to inclusive (<=). This way, when we fetch rows we discard the last
-	// previous fetched row. The only way that this is invalid is if the id
-	// value is <= 0, which is highly unusual.
-	//
-	// We could also start from 0 every time, but then we might do a few more
-	// initial fetches than necessary for each snapshot in some edge cases. in
-	// some edge cases. in some edge cases. in some edge cases.
+// getMinMaxValues fetches the maximum value of the primary key from the table.
+func (w *fetchWorker) getMinMaxValues(
+	ctx context.Context,
+) (scanned *minmaxRow, isTableEmpty bool, err error) {
+	var scannedRow minmaxRow
 
 	query := fmt.Sprintf(
-		"SELECT GREATEST(MIN(%s) - 1, 0) as min_value, MAX(%s) as max_value FROM %s",
-		w.config.primaryKey, w.config.primaryKey, w.config.table,
-	)
+		"SELECT MIN(%s) as min_value, MAX(%s) as max_value FROM %s",
+		w.config.sortColName, w.config.sortColName, w.config.table)
+
 	row := w.db.QueryRowxContext(ctx, query)
-	if err := row.StructScan(&minmax); err != nil {
-		return 0, 0, fmt.Errorf("failed to get min value: %w", err)
+	if err := row.StructScan(&scannedRow); err != nil {
+		return nil, false, fmt.Errorf("failed to get min value: %w", err)
 	}
-
 	if err := row.Err(); err != nil {
-		return 0, 0, fmt.Errorf("failed to get min value: %w", err)
+		return nil, false, fmt.Errorf("failed to get min value: %w", err)
 	}
 
-	if minmax.MinValue == nil || minmax.MaxValue == nil {
-		// table is empty
-		return 0, 0, nil
+	if scannedRow.MinValue == nil || scannedRow.MaxValue == nil {
+		return nil, true, nil
 	}
 
-	return *minmax.MinValue, *minmax.MaxValue, nil
+	sdk.Logger(ctx).Debug().
+		Str("query", query).
+		Str("min_value_type", fmt.Sprintf("%T", scannedRow.MinValue)).
+		Str("max_value_type", fmt.Sprintf("%T", scannedRow.MaxValue)).
+		Any("scannedRow", scannedRow).
+		Send()
+
+	return &scannedRow, false, nil
 }
 
 func (w *fetchWorker) selectRowsChunk(
 	ctx context.Context, tx *sqlx.Tx,
-	start, end uint64,
-) (scannedRows []opencdc.StructuredData, err error) {
+	start any, discardFirst bool,
+) (scannedRows []opencdc.StructuredData, foundEnd bool, err error) {
+	var wherePred any = squirrel.GtOrEq{w.config.sortColName: start}
+	if discardFirst {
+		wherePred = squirrel.Gt{w.config.sortColName: start}
+	}
+
 	query, args, err := squirrel.
 		Select("*").
 		From(w.config.table).
-		Where(squirrel.Gt{w.config.primaryKey: start}).
-		Where(squirrel.LtOrEq{w.config.primaryKey: end}).
-		OrderBy(w.config.primaryKey).
+		Where(wherePred).
+		Where(squirrel.LtOrEq{w.config.sortColName: w.end}).
+		OrderBy(w.config.sortColName).
 		Limit(w.config.fetchSize).
 		ToSql()
 	if err != nil {
-		return nil, fmt.Errorf("failed to build query: %w", err)
+		return nil, false, fmt.Errorf("failed to build query: %w", err)
 	}
 
-	logDataEvt := sdk.Logger(ctx).Debug().
-		Any("data", opencdc.StructuredData{
-			"query":     query,
-			"start":     start,
-			"end":       end,
-			"fetchSize": w.config.fetchSize,
-		})
+	sdk.Logger(ctx).Trace().Str("query", query).Any("args", args).Msg("created query")
 
 	rows, err := tx.QueryxContext(ctx, query, args...)
 	if err != nil {
-		logDataEvt.Msg("failed to query rows")
-		return nil, fmt.Errorf("failed to query rows: %w", err)
+		return nil, false, fmt.Errorf("failed to query rows: %w", err)
 	}
 	defer func() {
 		if closeErr := rows.Close(); err != nil {
@@ -224,8 +234,7 @@ func (w *fetchWorker) selectRowsChunk(
 	for rows.Next() {
 		row := opencdc.StructuredData{}
 		if err := rows.MapScan(row); err != nil {
-			logDataEvt.Msg("failed to map scan row")
-			return nil, fmt.Errorf("failed to map scan row: %w", err)
+			return nil, false, fmt.Errorf("failed to map scan row: %w", err)
 		}
 
 		// convert the values so that they can be easily serialized
@@ -236,29 +245,24 @@ func (w *fetchWorker) selectRowsChunk(
 		scannedRows = append(scannedRows, row)
 	}
 	if err := rows.Err(); err != nil {
-		logDataEvt.Msg("error occurred during row iteration")
-		return nil, fmt.Errorf("failed to close rows: %w", err)
+		return nil, false, fmt.Errorf("failed to close rows: %w", err)
 	}
 
-	return scannedRows, nil
+	//nolint:gosec // fetchSize is already checked for being a sane int value
+	foundEnd = len(scannedRows) < int(w.config.fetchSize)
+
+	return scannedRows, foundEnd, nil
 }
 
 func (w *fetchWorker) buildFetchData(
 	payload opencdc.StructuredData,
 	position common.TablePosition,
 ) (fetchData, error) {
-	keyVal, ok := payload[w.config.primaryKey]
+	keyVal, ok := payload[w.config.sortColName]
 	if !ok {
-		return fetchData{}, fmt.Errorf("key %s not found in payload", w.config.primaryKey)
+		return fetchData{}, fmt.Errorf("key %s not found in payload", w.config.sortColName)
 	}
 
-	return fetchData{
-		key: snapshotKey{
-			Key:   w.config.primaryKey,
-			Value: keyVal,
-		},
-		table:    w.config.table,
-		payload:  payload,
-		position: position,
-	}, nil
+	key := snapshotKey{w.config.sortColName, keyVal}
+	return fetchData{key, w.config.table, payload, position}, nil
 }

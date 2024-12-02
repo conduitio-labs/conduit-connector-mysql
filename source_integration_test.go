@@ -21,15 +21,13 @@ import (
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	testutils "github.com/conduitio-labs/conduit-connector-mysql/test"
 	"github.com/conduitio/conduit-commons/config"
-	"github.com/conduitio/conduit-commons/opencdc"
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/matryer/is"
 )
 
 func testSourceWithFetchSize(
-	ctx context.Context,
-	is *is.I, fetchSize string,
-) (sourceIterator, func()) {
+	ctx context.Context, is *is.I, fetchSize string,
+) (sdk.Source, func()) {
 	source := &Source{}
 	cfg := config.Config{
 		common.SourceConfigDsn:              testutils.DSN,
@@ -44,18 +42,11 @@ func testSourceWithFetchSize(
 
 	is.NoErr(source.Open(ctx, nil))
 
-	return sourceIterator{source}, func() { is.NoErr(source.Teardown(ctx)) }
+	return source, func() { is.NoErr(source.Teardown(ctx)) }
 }
 
-func testSource(ctx context.Context, is *is.I) (sourceIterator, func()) {
+func testSource(ctx context.Context, is *is.I) (sdk.Source, func()) {
 	return testSourceWithFetchSize(ctx, is, "")
-}
-
-type sourceIterator struct{ sdk.Source }
-
-func (s sourceIterator) Next(ctx context.Context) (opencdc.Record, error) {
-	//nolint:wrapcheck // wrapped already
-	return s.Source.Read(ctx)
 }
 
 func TestSource_ConsistentSnapshot(t *testing.T) {
@@ -135,22 +126,17 @@ func TestSource_EmptyChunkRead(t *testing.T) {
 
 	testutils.RecreateUsersTable(is, db)
 
-	var inserted []testutils.User
-	for i := range 100 {
-		user := testutils.InsertUser(is, db, i+1)
-		inserted = append(inserted, user)
-	}
-
-	firstPart := inserted[:20]
-	secondPart := inserted[40:]
-	toDelete := inserted[20:40]
-
 	var expected []testutils.User
-	expected = append(expected, firstPart...)
-	expected = append(expected, secondPart...)
+	for i := range 100 {
+		userID := i + 1
+		if userID > 20 && userID < 40 {
+			continue
+		} else if userID > 60 && userID < 80 {
+			continue
+		}
 
-	for _, user := range toDelete {
-		testutils.DeleteUser(is, db, user)
+		user := testutils.InsertUser(is, db, userID)
+		expected = append(expected, user)
 	}
 
 	source, teardown := testSourceWithFetchSize(ctx, is, "10")

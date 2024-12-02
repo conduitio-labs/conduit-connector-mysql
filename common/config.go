@@ -24,6 +24,9 @@ type Config struct {
 type SourceConfig struct {
 	Config
 
+	// TableConfig holds the custom configuration that each table can have.
+	TableConfig map[string]TableConfig `json:"tableConfig"`
+
 	// Tables represents the tables to read from.
 	Tables []string `json:"tables" validate:"required"`
 
@@ -32,6 +35,11 @@ type SourceConfig struct {
 
 	// FetchSize limits how many rows should be retrieved on each database fetch.
 	FetchSize uint64 `json:"fetchSize" default:"50000"`
+}
+
+type TableConfig struct {
+	// SortingColumn allows to force using a custom column to sort the snapshot.
+	SortingColumn string `json:"sortingColumn"`
 }
 
 const DefaultFetchSize = 50000

@@ -253,17 +253,17 @@ func TestSnapshotIterator_CustomTableKeys(t *testing.T) {
 
 	for _, testCase := range []testCase{
 		{
-			tableName:    "composite_with_auto_inc",
+			tableName:    testutils.TableName(is, db, &CompositeWithAutoInc{}),
 			sortingCol:   "id",
 			expectedData: []string{"record 1", "record 2", "record 3"},
 		},
 		{
-			tableName:    "ulid_pk",
+			tableName:    testutils.TableName(is, db, &UlidPk{}),
 			sortingCol:   "id",
 			expectedData: []string{"ULID record 1", "ULID record 2"},
 		},
 		{
-			tableName:    "timestamp_ordered",
+			tableName:    testutils.TableName(is, db, &TimestampOrdered{}),
 			sortingCol:   "created_at",
 			expectedData: []string{"Timestamp record 1", "Timestamp record 2"},
 		},

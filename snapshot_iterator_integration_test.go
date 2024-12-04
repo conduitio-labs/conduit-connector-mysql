@@ -379,7 +379,8 @@ func TestSnapshotIterator_DeleteEndWhileSnapshotting(t *testing.T) {
 }
 
 func TestSnapshotIterator_StringSorting(t *testing.T) {
-	// MySQL sorts strings in a case-insensitive manner, so we need to test that we
+	// This test ensures that we sort snapshot rows when using a string column as a
+	// custom sorting column.
 
 	ctx := testutils.TestContext(t)
 	is := is.New(t)

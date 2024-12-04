@@ -102,8 +102,8 @@ func (w *fetchWorkerByKey) fetchStartEnd(ctx context.Context) (isTableEmpty bool
 }
 
 func (w *fetchWorkerByKey) run(ctx context.Context) (err error) {
-	sdk.Logger(ctx).Info().Msgf("started fetcher for table %q", w.config.table)
-	defer sdk.Logger(ctx).Info().Msgf("finished fetcher for table %q", w.config.table)
+	sdk.Logger(ctx).Info().Msgf("started fetch worker by key for table %q", w.config.table)
+	defer sdk.Logger(ctx).Info().Msgf("finished fetch worker by key for table %q", w.config.table)
 
 	tx, err := w.db.BeginTxx(ctx, &sql.TxOptions{
 		Isolation: sql.LevelRepeatableRead,
@@ -325,7 +325,10 @@ func (w *fetchWorkerByLimit) countTotal(ctx context.Context) (uint64, error) {
 		return 0, fmt.Errorf("failed to fetch total from %s: %w", w.config.table, err)
 	}
 
-	sdk.Logger(ctx).Debug().Str("query", query).Any("args", args).Msg("count query")
+	sdk.Logger(ctx).Debug().
+		Str("query", query).Any("args", args).
+		Uint64("result", total.Total).
+		Msg("count query")
 
 	return total.Total, nil
 }
@@ -344,6 +347,9 @@ func (w *fetchWorkerByLimit) fetchStartEnd(ctx context.Context) (isTableEmpty bo
 }
 
 func (w *fetchWorkerByLimit) run(ctx context.Context) (err error) {
+	sdk.Logger(ctx).Info().Msgf("started fetch worker by limit for table %q", w.config.table)
+	defer sdk.Logger(ctx).Info().Msgf("finished fetch worker by limit for table %q", w.config.table)
+
 	tx, err := w.db.BeginTxx(ctx, &sql.TxOptions{
 		Isolation: sql.LevelRepeatableRead,
 		ReadOnly:  true,

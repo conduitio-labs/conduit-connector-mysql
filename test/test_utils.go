@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -29,22 +30,59 @@ import (
 	"github.com/jmoiron/sqlx"
 	"github.com/matryer/is"
 	"github.com/rs/zerolog"
+	gormmysql "gorm.io/driver/mysql"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
+	"gorm.io/gorm/schema"
 )
 
-const DSN = "root:meroxaadmin@tcp(127.0.0.1:3306)/meroxadb?parseTime=true"
+const DSN = "root:meroxaadmin@tcp(127.0.0.1:3306)/meroxadb"
 
 var ServerID = "1"
 
 func Connection(t *testing.T) *sqlx.DB {
 	is := is.New(t)
-	db, err := sqlx.Open("mysql", DSN)
+
+	// Individual iterators assume that parseTime has already been configured to true, so
+	// they have no knowledge whether that has actually been the case.
+	// We might want in the future to run many more tests using the Source itself, so that
+	// we don't have to do this dance.
+
+	dsnWithParseTime := DSN + "?parseTime=true"
+
+	db, err := sqlx.Open("mysql", dsnWithParseTime)
 	is.NoErr(err)
 
 	t.Cleanup(func() {
 		is.NoErr(db.Close())
 	})
 
+	// This should help in test isolation and consistency
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+
 	return db
+}
+
+func Gorm(is *is.I) *gorm.DB {
+	dsnWithParseTime := DSN + "?parseTime=true"
+	db, err := gorm.Open(gormmysql.Open(dsnWithParseTime), &gorm.Config{
+		Logger: logger.Discard,
+	})
+	is.NoErr(err)
+
+	return db
+}
+
+func TableName(is *is.I, db *gorm.DB, model any) string {
+	stmt := gorm.Statement{DB: db}
+	err := stmt.Parse(model)
+	is.NoErr(err)
+
+	s, err := schema.Parse(model, &sync.Map{}, schema.NamingStrategy{})
+	is.NoErr(err)
+
+	return s.Table
 }
 
 func TestContext(t *testing.T) context.Context {
@@ -227,9 +265,8 @@ func ReadAndAssertDelete(
 	return rec
 }
 
-func IsDataEqual(is *is.I, a, b opencdc.Data) {
-	is.Helper()
-	is.Equal("", cmp.Diff(a, b))
+func IsDataEqual(is *is.I, actual, expected opencdc.Data) {
+	is.Equal("", cmp.Diff(actual, expected)) // actual (-) != expected (+)
 }
 
 func ReadAndAssertSnapshot(

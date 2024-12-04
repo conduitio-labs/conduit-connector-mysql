@@ -61,26 +61,38 @@ func (d *Destination) Open(_ context.Context) (err error) {
 	return nil
 }
 
-func (d *Destination) Write(ctx context.Context, recs []opencdc.Record) (int, error) {
-	for i, rec := range recs {
+func (d *Destination) Write(ctx context.Context, recs []opencdc.Record) (written int, err error) {
+	tx, err := d.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+
+	//nolint:errcheck // will always error if committed, no need to check
+	defer tx.Rollback()
+
+	for _, rec := range recs {
 		switch rec.Operation {
 		case opencdc.OperationSnapshot:
-			if err := d.upsertRecord(ctx, rec); err != nil {
-				return i, err
+			if err := d.upsertRecord(ctx, tx, rec); err != nil {
+				return 0, err
 			}
 		case opencdc.OperationCreate:
-			if err := d.upsertRecord(ctx, rec); err != nil {
-				return i, err
+			if err := d.upsertRecord(ctx, tx, rec); err != nil {
+				return 0, err
 			}
 		case opencdc.OperationUpdate:
-			if err := d.upsertRecord(ctx, rec); err != nil {
-				return i, err
+			if err := d.upsertRecord(ctx, tx, rec); err != nil {
+				return 0, err
 			}
 		case opencdc.OperationDelete:
-			if err := d.deleteRecord(ctx, rec); err != nil {
-				return i, err
+			if err := d.deleteRecord(ctx, tx, rec); err != nil {
+				return 0, err
 			}
 		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
 	return len(recs), nil
@@ -96,7 +108,7 @@ func (d *Destination) Teardown(_ context.Context) error {
 	return nil
 }
 
-func (d *Destination) upsertRecord(ctx context.Context, rec opencdc.Record) error {
+func (d *Destination) upsertRecord(ctx context.Context, tx *sqlx.Tx, rec opencdc.Record) error {
 	payload, isStructured := rec.Payload.After.(opencdc.StructuredData)
 	if !isStructured {
 		data := make(opencdc.StructuredData)
@@ -125,7 +137,7 @@ func (d *Destination) upsertRecord(ctx context.Context, rec opencdc.Record) erro
 		return fmt.Errorf("failed to build query: %w", err)
 	}
 
-	_, err = d.db.ExecContext(ctx, sql, args...)
+	_, err = tx.ExecContext(ctx, sql, args...)
 	if err != nil {
 		return fmt.Errorf("failed to upsert record: %w", err)
 	}
@@ -141,7 +153,7 @@ func buildUpsertSuffix(upsertList opencdc.StructuredData) string {
 	return strings.Join(parts, ", ")
 }
 
-func (d *Destination) deleteRecord(ctx context.Context, rec opencdc.Record) error {
+func (d *Destination) deleteRecord(ctx context.Context, tx *sqlx.Tx, rec opencdc.Record) error {
 	val, err := d.parseRecordKey(rec.Key)
 	if err != nil {
 		return err
@@ -156,7 +168,7 @@ func (d *Destination) deleteRecord(ctx context.Context, rec opencdc.Record) erro
 		return fmt.Errorf("failed to build query: %w", err)
 	}
 
-	_, err = d.db.ExecContext(ctx, sql, args...)
+	_, err = tx.ExecContext(ctx, sql, args...)
 	if err != nil {
 		return fmt.Errorf("failed to delete record: %w", err)
 	}

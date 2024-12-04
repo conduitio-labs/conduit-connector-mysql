@@ -13,6 +13,8 @@ require (
 	github.com/rs/zerolog v1.33.0
 	github.com/siddontang/go-log v0.0.0-20180807004314-8d05993dda07
 	gopkg.in/tomb.v2 v2.0.0-20161208151619-d5d1b5820637
+	gorm.io/driver/mysql v1.5.7
+	gorm.io/gorm v1.25.12
 )
 
 require (
@@ -20,6 +22,8 @@ require (
 	github.com/Masterminds/semver v1.5.0 // indirect
 	github.com/golangci/go-printf-func-name v0.1.0 // indirect
 	github.com/hamba/avro/v2 v2.27.0 // indirect
+	github.com/jinzhu/inflection v1.0.0 // indirect
+	github.com/jinzhu/now v1.1.5 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/klauspost/compress v1.17.11 // indirect
 	github.com/lann/builder v0.0.0-20180802200727-47ae307949d0 // indirect

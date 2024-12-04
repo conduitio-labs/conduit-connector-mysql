@@ -26,7 +26,7 @@ import (
 )
 
 func testCdcIterator(ctx context.Context, t *testing.T, is *is.I) (common.Iterator, func()) {
-	db := testutils.Connection(t)
+	db := testutils.Connection(t).Conn()
 
 	config, err := mysql.ParseDSN(testutils.DSN)
 	is.NoErr(err)
@@ -50,7 +50,7 @@ func testCdcIteratorAtPosition(
 	ctx context.Context, t *testing.T, is *is.I,
 	sdkPos opencdc.Position,
 ) (common.Iterator, func()) {
-	db := testutils.Connection(t)
+	db := testutils.Connection(t).Conn()
 
 	config, err := mysql.ParseDSN(testutils.DSN)
 	is.NoErr(err)

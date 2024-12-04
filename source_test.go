@@ -21,7 +21,7 @@ import (
 	"github.com/matryer/is"
 )
 
-func TestTeardownSource_NoOpen(t *testing.T) {
+func TestSource_Teardown(t *testing.T) {
 	is := is.New(t)
 	con := NewSource()
 	err := con.Teardown(context.Background())

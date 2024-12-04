@@ -41,7 +41,15 @@ var ServerID = "1"
 
 func Connection(t *testing.T) *sqlx.DB {
 	is := is.New(t)
-	db, err := sqlx.Open("mysql", DSN)
+
+	// Individual iterators assume that parseTime has already been configured to true, so
+	// they have no knowledge whether that has actually been the case.
+	// We might want in the future to run many more tests using the Source itself, so that
+	// we don't have to do this dance.
+
+	dsnWithParseTime := DSN + "?parseTime=true"
+
+	db, err := sqlx.Open("mysql", dsnWithParseTime)
 	is.NoErr(err)
 
 	t.Cleanup(func() {
@@ -56,9 +64,13 @@ func Connection(t *testing.T) *sqlx.DB {
 }
 
 func Gorm(is *is.I) *gorm.DB {
-	gormDB, err := gorm.Open(gormmysql.Open(DSN))
+	dsnWithParseTime := DSN + "?parseTime=true"
+	db, err := gorm.Open(gormmysql.Open(dsnWithParseTime), &gorm.Config{
+		Logger: logger.Discard,
+	})
 	is.NoErr(err)
-	return gormDB
+
+	return db
 }
 
 func TableName(is *is.I, db *gorm.DB, model any) string {
@@ -252,9 +264,8 @@ func ReadAndAssertDelete(
 	return rec
 }
 
-func IsDataEqual(is *is.I, a, b opencdc.Data) {
-	is.Helper()
-	is.Equal("", cmp.Diff(a, b))
+func IsDataEqual(is *is.I, actual, expected opencdc.Data) {
+	is.Equal("", cmp.Diff(actual, expected)) // actual (-) != expected (+)
 }
 
 func ReadAndAssertSnapshot(

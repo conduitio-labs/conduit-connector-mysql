@@ -26,7 +26,7 @@ import (
 )
 
 func testCombinedIterator(ctx context.Context, t *testing.T, is *is.I) (common.Iterator, func()) {
-	db := testutils.Connection(t)
+	db := testutils.Connection(t).Conn()
 
 	config, err := mysql.ParseDSN(testutils.DSN)
 	is.NoErr(err)

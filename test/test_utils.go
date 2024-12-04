@@ -40,7 +40,18 @@ const DSN = "root:meroxaadmin@tcp(127.0.0.1:3306)/meroxadb"
 
 var ServerID = "1"
 
-func Connection(t *testing.T) *sqlx.DB {
+// DB is a gorm wrapper that also holds a sqlx DB. Iterators
+// don't manage sql connections, so we need to store them somehow.
+type DB struct {
+	*gorm.DB
+	conn *sqlx.DB
+}
+
+func (c DB) Conn() *sqlx.DB {
+	return c.conn
+}
+
+func Connection(t *testing.T) DB {
 	is := is.New(t)
 
 	// Individual iterators assume that parseTime has already been configured to true, so
@@ -50,32 +61,24 @@ func Connection(t *testing.T) *sqlx.DB {
 
 	dsnWithParseTime := DSN + "?parseTime=true"
 
-	db, err := sqlx.Open("mysql", dsnWithParseTime)
-	is.NoErr(err)
-
-	t.Cleanup(func() {
-		is.NoErr(db.Close())
-	})
-
-	// This should help in test isolation and consistency
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
-
-	return db
-}
-
-func Gorm(is *is.I) *gorm.DB {
-	dsnWithParseTime := DSN + "?parseTime=true"
 	db, err := gorm.Open(gormmysql.Open(dsnWithParseTime), &gorm.Config{
 		Logger: logger.Discard,
 	})
 	is.NoErr(err)
 
-	return db
+	sqlDB, err := db.DB()
+	is.NoErr(err)
+	sqlxDB := sqlx.NewDb(sqlDB, "mysql")
+
+	t.Cleanup(func() {
+		sqlxDB.Close()
+	})
+
+	return DB{DB: db, conn: sqlxDB}
 }
 
-func TableName(is *is.I, db *gorm.DB, model any) string {
-	stmt := gorm.Statement{DB: db}
+func TableName(is *is.I, db DB, model any) string {
+	stmt := gorm.Statement{DB: db.DB}
 	err := stmt.Parse(model)
 	is.NoErr(err)
 
@@ -119,7 +122,7 @@ func (u User) Update() User {
 	return u
 }
 
-func (u User) ToStructuredData() opencdc.StructuredData {
+func (u User) StructuredData() opencdc.StructuredData {
 	return opencdc.StructuredData{
 		"id":         u.ID,
 		"username":   u.Username,
@@ -128,81 +131,53 @@ func (u User) ToStructuredData() opencdc.StructuredData {
 	}
 }
 
-func RecreateUsersTable(is *is.I, db *sqlx.DB) {
-	_, err := db.Exec(`DROP TABLE IF EXISTS users`)
-	is.NoErr(err)
-
-	_, err = db.Exec(`
-	CREATE TABLE users (
-		id BIGINT PRIMARY KEY,
-		username VARCHAR(255) NOT NULL,
-		email VARCHAR(255) NOT NULL,
-		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-	)`)
-	is.NoErr(err)
+func RecreateUsersTable(is *is.I, db DB) {
+	db.Migrator().DropTable(&User{})
+	is.NoErr(db.AutoMigrate(&User{}))
 }
 
-func InsertUser(is *is.I, db *sqlx.DB, userID int) User {
+func InsertUser(is *is.I, db DB, userID int) User {
 	username := fmt.Sprint("user-", userID)
 	email := fmt.Sprint(username, "@example.com")
 
-	_, err := db.Exec(`
-		INSERT INTO users (id, username, email) 
-		VALUES (?, ?, ?);
-	`, userID, username, email)
-	is.NoErr(err)
-
-	var user User
-	err = db.QueryRowx(`
-		SELECT *
-		FROM users
-		WHERE id = ?;
-	`, userID).StructScan(&user)
-	is.NoErr(err)
-
-	return user
-}
-
-func GetUser(is *is.I, db *sqlx.DB, userID int64) User {
-	var user User
-	err := db.QueryRowx(`
-		SELECT *
-		FROM users
-		WHERE id = ?;
-	`, userID).StructScan(&user)
-	is.NoErr(err)
-
-	return user
-}
-
-func UpdateUser(is *is.I, db *sqlx.DB, user User) User {
-	_, err := db.Exec(`
-		UPDATE users
-		SET username = ?, email = ?
-		WHERE id = ?;
-	`, user.Username, user.Email, user.ID)
-	is.NoErr(err)
-
-	return user
-}
-
-func DeleteUser(is *is.I, db *sqlx.DB, user User) {
-	_, err := db.Exec(`
-		DELETE FROM users
-		WHERE id = ?;
-	`, user.ID)
-	is.NoErr(err)
-}
-
-func CountUsers(is *is.I, db *sqlx.DB) int {
-	var count struct {
-		Total int `db:"total"`
+	user := User{
+		ID:       int64(userID),
+		Username: username,
+		Email:    email,
 	}
 
-	err := db.QueryRowx("SELECT count(*) as total FROM users").StructScan(&count)
+	err := db.Create(&user).Error
 	is.NoErr(err)
 
-	return count.Total
+	return user
+}
+
+func GetUser(is *is.I, db DB, userID int64) User {
+	var user User
+	err := db.First(&user, userID).Error
+	is.NoErr(err)
+
+	return user
+}
+
+func UpdateUser(is *is.I, db DB, user User) User {
+	err := db.Model(&user).Updates(User{Username: user.Username, Email: user.Email}).Error
+	is.NoErr(err)
+
+	return user
+}
+
+func DeleteUser(is *is.I, db DB, user User) {
+	err := db.Delete(&user).Error
+	is.NoErr(err)
+}
+
+func CountUsers(is *is.I, db DB) int {
+	var count int64
+	err := db.Model(&User{}).Count(&count).Error
+	is.NoErr(err)
+
+	return int(count)
 }
 
 func ReadAndAssertCreate(
@@ -219,7 +194,7 @@ func ReadAndAssertCreate(
 	assertMetadata(is, rec.Metadata)
 
 	IsDataEqual(is, rec.Key, opencdc.StructuredData{"id": user.ID})
-	IsDataEqual(is, rec.Payload.After, user.ToStructuredData())
+	IsDataEqual(is, rec.Payload.After, user.StructuredData())
 
 	return rec
 }
@@ -240,8 +215,8 @@ func ReadAndAssertUpdate(
 	IsDataEqual(is, rec.Key, opencdc.StructuredData{"id": prev.ID})
 	IsDataEqual(is, rec.Key, opencdc.StructuredData{"id": next.ID})
 
-	IsDataEqual(is, rec.Payload.Before, prev.ToStructuredData())
-	IsDataEqual(is, rec.Payload.After, next.ToStructuredData())
+	IsDataEqual(is, rec.Payload.Before, prev.StructuredData())
+	IsDataEqual(is, rec.Payload.After, next.StructuredData())
 
 	return rec
 }
@@ -289,7 +264,7 @@ func AssertUserSnapshot(is *is.I, user User, rec opencdc.Record) {
 	assertMetadata(is, rec.Metadata)
 
 	IsDataEqual(is, rec.Key, opencdc.StructuredData{"id": user.ID})
-	IsDataEqual(is, rec.Payload.After, user.ToStructuredData())
+	IsDataEqual(is, rec.Payload.After, user.StructuredData())
 }
 
 func assertMetadata(is *is.I, metadata opencdc.Metadata) {

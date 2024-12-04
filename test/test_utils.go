@@ -132,7 +132,7 @@ func (u User) StructuredData() opencdc.StructuredData {
 }
 
 func RecreateUsersTable(is *is.I, db DB) {
-	db.Migrator().DropTable(&User{})
+	is.NoErr(db.Migrator().DropTable(&User{}))
 	is.NoErr(db.AutoMigrate(&User{}))
 }
 

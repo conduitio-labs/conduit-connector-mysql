@@ -92,7 +92,7 @@ func (d *Destination) Write(ctx context.Context, recs []opencdc.Record) (written
 	}
 
 	if err := tx.Commit(); err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
 	return len(recs), nil

@@ -33,7 +33,7 @@ func (SourceConfig) Parameters() map[string]config.Parameter {
 			},
 		},
 		SourceConfigFetchSize: {
-			Default:     "50000",
+			Default:     "10000",
 			Description: "FetchSize limits how many rows should be retrieved on each database fetch.",
 			Type:        config.ParameterTypeInt,
 			Validations: []config.Validation{},

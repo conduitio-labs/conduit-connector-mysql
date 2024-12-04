@@ -68,7 +68,7 @@ func (s *Source) Configure(ctx context.Context, cfg config.Config) (err error) {
 	s.configFromDsn.ParseTime = true
 
 	if s.config.FetchSize > math.MaxInt64 {
-		return fmt.Errorf("given fetch size is too large")
+		return fmt.Errorf("given fetch size %v is too large", s.config.FetchSize)
 	}
 
 	sdk.Logger(ctx).Info().Msg("configured source connector")

@@ -70,28 +70,32 @@ func (d *Destination) Write(ctx context.Context, recs []opencdc.Record) (written
 	//nolint:errcheck // will always error if committed, no need to check
 	defer tx.Rollback()
 
-	for i, rec := range recs {
+	for _, rec := range recs {
 		switch rec.Operation {
 		case opencdc.OperationSnapshot:
 			if err := d.upsertRecord(ctx, tx, rec); err != nil {
-				return i, err
+				return 0, err
 			}
 		case opencdc.OperationCreate:
 			if err := d.upsertRecord(ctx, tx, rec); err != nil {
-				return i, err
+				return 0, err
 			}
 		case opencdc.OperationUpdate:
 			if err := d.upsertRecord(ctx, tx, rec); err != nil {
-				return i, err
+				return 0, err
 			}
 		case opencdc.OperationDelete:
 			if err := d.deleteRecord(ctx, tx, rec); err != nil {
-				return i, err
+				return 0, err
 			}
 		}
 	}
 
-	return len(recs), tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+
+	return len(recs), nil
 }
 
 func (d *Destination) Teardown(_ context.Context) error {

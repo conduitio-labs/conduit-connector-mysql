@@ -32,6 +32,7 @@ import (
 	"github.com/rs/zerolog"
 	gormmysql "gorm.io/driver/mysql"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 	"gorm.io/gorm/schema"
 )
 

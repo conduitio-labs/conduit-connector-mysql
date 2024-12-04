@@ -381,6 +381,7 @@ func TestSnapshotIterator_StringSorting(t *testing.T) {
 		ID  int    `gorm:"primaryKey;autoIncrement"`
 		Str string `gorm:"size:50"`
 	}
+	tablename := testutils.TableName(is, db, &Table{})
 
 	is.NoErr(db.Migrator().DropTable(&Table{}))
 
@@ -412,10 +413,10 @@ func TestSnapshotIterator_StringSorting(t *testing.T) {
 	is.NoErr(err)
 
 	iterator, err := newSnapshotIterator(snapshotIteratorConfig{
-		tableSortColumns: map[string]string{"string_sorting": "str"},
+		tableSortColumns: map[string]string{tablename: "str"},
 		db:               db.Conn(),
 		database:         "meroxadb",
-		tables:           []string{"string_sorting"},
+		tables:           []string{tablename},
 		serverID:         serverID,
 	})
 	is.NoErr(err)

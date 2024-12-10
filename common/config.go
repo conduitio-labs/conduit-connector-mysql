@@ -47,11 +47,6 @@ type TableConfig struct {
 	SortingColumn string `json:"sortingColumn"`
 }
 
-type TableConfig struct {
-	// SortingColumn allows to force using a custom column to sort the snapshot.
-	SortingColumn string `json:"sortingColumn"`
-}
-
 const DefaultFetchSize = 50000
 
 //go:generate paramgen -output=paramgen_dest.go DestinationConfig

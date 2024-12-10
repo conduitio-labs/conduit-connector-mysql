@@ -21,22 +21,16 @@ import (
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	testutils "github.com/conduitio-labs/conduit-connector-mysql/test"
 	"github.com/conduitio/conduit-commons/config"
+	"github.com/conduitio/conduit-commons/opencdc"
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/matryer/is"
 )
 
-func testSourceWithFetchSize(
-	ctx context.Context, is *is.I, fetchSize string,
-) (sdk.Source, func()) {
+func testSource(ctx context.Context, is *is.I, cfg config.Config) (sdk.Source, func()) {
 	source := &Source{}
-	cfg := config.Config{
-		common.SourceConfigDsn:              testutils.DSN,
-		common.SourceConfigTables:           "users",
-		common.SourceConfigDisableCanalLogs: "true",
-	}
-	if fetchSize != "" {
-		cfg[common.SourceConfigFetchSize] = fetchSize
-	}
+	cfg[common.SourceConfigDsn] = testutils.DSN
+	cfg[common.SourceConfigDisableCanalLogs] = "true"
+
 	err := source.Configure(ctx, cfg)
 	is.NoErr(err)
 
@@ -45,8 +39,10 @@ func testSourceWithFetchSize(
 	return source, func() { is.NoErr(source.Teardown(ctx)) }
 }
 
-func testSource(ctx context.Context, is *is.I) (sdk.Source, func()) {
-	return testSourceWithFetchSize(ctx, is, "")
+func testSourceFromUsers(ctx context.Context, is *is.I) (sdk.Source, func()) {
+	return testSource(ctx, is, config.Config{
+		common.SourceConfigTables: "users",
+	})
 }
 
 func TestSource_ConsistentSnapshot(t *testing.T) {
@@ -66,7 +62,9 @@ func TestSource_ConsistentSnapshot(t *testing.T) {
 
 	// start source connector
 
-	source, teardown := testSource(ctx, is)
+	source, teardown := testSource(ctx, is, config.Config{
+		common.SourceConfigTables: "users",
+	})
 	defer teardown()
 
 	// read 2 records -> they shall be snapshots
@@ -110,7 +108,10 @@ func TestSource_NonZeroSnapshotStart(t *testing.T) {
 		inserted = append(inserted, user)
 	}
 
-	source, teardown := testSourceWithFetchSize(ctx, is, "10")
+	source, teardown := testSource(ctx, is, config.Config{
+		common.SourceConfigTables:    "users",
+		common.SourceConfigFetchSize: "10",
+	})
 	defer teardown()
 
 	for _, user := range inserted {
@@ -139,10 +140,61 @@ func TestSource_EmptyChunkRead(t *testing.T) {
 		expected = append(expected, user)
 	}
 
-	source, teardown := testSourceWithFetchSize(ctx, is, "10")
+	source, teardown := testSource(ctx, is, config.Config{
+		common.SourceConfigTables:    "users",
+		common.SourceConfigFetchSize: "10",
+	})
 	defer teardown()
 
 	for _, user := range expected {
 		testutils.ReadAndAssertSnapshot(ctx, is, source, user)
+	}
+}
+
+func TestUnsafeSnapshot(t *testing.T) {
+	is := is.New(t)
+	db := testutils.Gorm(is)
+	var err error
+
+	type TableWithoutPK struct {
+		// No id field, forcing gorm to not create a primary key
+
+		Data string `gorm:"size:100"`
+	}
+
+	err = db.Migrator().DropTable(&TableWithoutPK{})
+	is.NoErr(err)
+
+	err = db.AutoMigrate(&TableWithoutPK{})
+	is.NoErr(err)
+
+	db.Create([]TableWithoutPK{
+		{Data: "record A"},
+		{Data: "record B"},
+	})
+	is.NoErr(db.Error)
+
+	expectedData := []string{"record A", "record B"}
+
+	ctx := testutils.TestContext(t)
+	source, teardown := testSource(ctx, is, config.Config{
+		common.SourceConfigTables:         testutils.TableName(is, db, &TableWithoutPK{}),
+		common.SourceConfigUnsafeSnapshot: "true",
+	})
+	defer teardown()
+
+	var recs []opencdc.Record
+	for i := 0; i < len(expectedData); i++ {
+		rec, err := source.Read(ctx)
+		is.NoErr(err)
+		is.NoErr(source.Ack(ctx, rec.Position))
+
+		recs = append(recs, rec)
+	}
+
+	for i, expectedData := range expectedData {
+		actual := recs[i]
+		is.Equal(actual.Operation, opencdc.OperationSnapshot)
+		is.Equal(actual.Payload.After.(opencdc.StructuredData)["data"].(string), expectedData)
 	}
 }

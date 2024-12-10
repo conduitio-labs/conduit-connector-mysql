@@ -55,7 +55,7 @@ func TestDestination_OperationSnapshot(t *testing.T) {
 	dest, cleanDest := testDestination(ctx, is)
 	defer cleanDest()
 
-	src, cleanSrc := testSource(ctx, is)
+	src, cleanSrc := testSourceFromUsers(ctx, is)
 	defer cleanSrc()
 
 	rec1 := testutils.ReadAndAssertSnapshot(ctx, is, src, user1)
@@ -87,7 +87,7 @@ func TestDestination_OperationCreate(t *testing.T) {
 	dest, cleanDest := testDestination(ctx, is)
 	defer cleanDest()
 
-	src, cleanSrc := testSource(ctx, is)
+	src, cleanSrc := testSourceFromUsers(ctx, is)
 	defer cleanSrc()
 
 	user1 := testutils.InsertUser(is, db, 1)
@@ -128,7 +128,7 @@ func TestDestination_OperationUpdate(t *testing.T) {
 	dest, cleanDest := testDestination(ctx, is)
 	defer cleanDest()
 
-	src, cleanSrc := testSource(ctx, is)
+	src, cleanSrc := testSourceFromUsers(ctx, is)
 	defer cleanSrc()
 
 	user1Updated := testutils.UpdateUser(is, db, user1.Update())
@@ -174,7 +174,7 @@ func TestDestination_OperationDelete(t *testing.T) {
 	dest, cleanDest := testDestination(ctx, is)
 	defer cleanDest()
 
-	src, cleanSrc := testSource(ctx, is)
+	src, cleanSrc := testSourceFromUsers(ctx, is)
 	defer cleanSrc()
 
 	testutils.DeleteUser(is, db, user1)

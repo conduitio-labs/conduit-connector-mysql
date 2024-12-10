@@ -63,17 +63,25 @@ func (s *Source) Configure(ctx context.Context, cfg config.Config) (err error) {
 		return fmt.Errorf("given fetch size is too large")
 	}
 
+	// force parse time to true, as we need to take control over how do we
+	// handle time.Time values
+	s.configFromDsn.ParseTime = true
+
+	if s.config.FetchSize > math.MaxInt64 {
+		return fmt.Errorf("given fetch size %v is too large", s.config.FetchSize)
+	}
+
 	sdk.Logger(ctx).Info().Msg("configured source connector")
 	return nil
 }
 
 func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) {
-	s.db, err = sqlx.Open("mysql", s.config.DSN)
+	s.db, err = sqlx.Open("mysql", s.configFromDsn.FormatDSN())
 	if err != nil {
 		return fmt.Errorf("failed to connect to mysql: %w", err)
 	}
 
-	tableKeys, err := s.getTableKeys()
+	tableKeys, err := s.getTableKeys(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get table keys: %w", err)
 	}
@@ -148,11 +156,10 @@ func getPrimaryKey(db *sqlx.DB, database, table string) (string, error) {
 	row := db.QueryRowx(`
 		SELECT COLUMN_NAME
 		FROM information_schema.key_column_usage
-		WHERE
-			constraint_name = 'PRIMARY'
+		WHERE constraint_name = 'PRIMARY'
 			AND table_schema = ?
 			AND table_name = ?
-			ORDER BY ORDINAL_POSITION DESC
+		ORDER BY ORDINAL_POSITION DESC
 	`, database, table)
 
 	if err := row.StructScan(&primaryKey); err != nil {
@@ -165,7 +172,7 @@ func getPrimaryKey(db *sqlx.DB, database, table string) (string, error) {
 	return primaryKey.ColumnName, nil
 }
 
-func (s *Source) getTableKeys() (map[string]string, error) {
+func (s *Source) getTableKeys(ctx context.Context) (map[string]string, error) {
 	tableKeys := make(map[string]string)
 
 	for _, table := range s.config.Tables {
@@ -177,7 +184,21 @@ func (s *Source) getTableKeys() (map[string]string, error) {
 
 		primaryKey, err := getPrimaryKey(s.db, s.configFromDsn.DBName, table)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get primary key for table %s. You might want to add a `tableConfig.<table name>.sortingColumn entry, or enable `unsafeSnapshot` mode: %w", table, err)
+			if s.config.UnsafeSnapshot {
+				sdk.Logger(ctx).Warn().Msgf(
+					"table %s has no primary key, doing an unsafe snapshot ", table)
+
+				// The snapshot iterator should be able to interpret a zero
+				// value table key as a table where we cannot do a sorted
+				// snapshot.
+
+				tableKeys[table] = ""
+				continue
+			}
+
+			return nil, fmt.Errorf(
+				"failed to get primary key for table %s. You might want to add a `tableConfig.<table name>.sortingColumn entry, or enable `unsafeSnapshot` mode: %w",
+				table, err)
 		}
 
 		tableKeys[table] = primaryKey

@@ -57,7 +57,6 @@ func testCdcIteratorAtPosition(
 
 	pos, err := common.ParseSDKPosition(sdkPos)
 	is.NoErr(err)
-
 	is.Equal(pos.Kind, common.PositionTypeCDC)
 
 	iterator, err := newCdcIterator(ctx, cdcIteratorConfig{

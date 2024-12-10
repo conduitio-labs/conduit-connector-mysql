@@ -73,8 +73,8 @@ func ParseSDKPosition(p opencdc.Position) (Position, error) {
 type SnapshotPositions map[string]TablePosition
 
 type TablePosition struct {
-	LastRead    uint64 `json:"last_read"`
-	SnapshotEnd uint64 `json:"snapshot_end"`
+	LastRead    any `json:"last_read"`
+	SnapshotEnd any `json:"snapshot_end"`
 }
 
 type CdcPosition struct {
@@ -101,7 +101,3 @@ func (p CdcPosition) ToSDKPosition() opencdc.Position {
 	}
 	return v
 }
-
-// TableKeys is a collection of associations between table names and primary key
-// names. Useful for retrieving primary key values from rows.
-type TableKeys map[string]string

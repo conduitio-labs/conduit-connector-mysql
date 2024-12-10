@@ -17,6 +17,7 @@ package testutils
 import (
 	"context"
 	"fmt"
+	"os"
 	"testing"
 	"time"
 
@@ -48,11 +49,22 @@ func Connection(t *testing.T) *sqlx.DB {
 
 func TestContext(t *testing.T) context.Context {
 	writer := zerolog.NewTestWriter(t)
-	logger := zerolog.New(writer).Level(zerolog.InfoLevel)
+	consoleWriter := zerolog.ConsoleWriter{
+		Out:        writer,
+		PartsOrder: []string{"level", "message"},
+	}
+
+	traceLog := os.Getenv("TRACE") == "true"
+	level := zerolog.InfoLevel
+	if traceLog {
+		level = zerolog.TraceLevel
+	}
+	logger := zerolog.New(consoleWriter).Level(level)
+
 	return logger.WithContext(context.Background())
 }
 
-var TableKeys = common.TableKeys{
+var TableSortCols = map[string]string{
 	"users": "id",
 }
 
@@ -160,7 +172,7 @@ func ReadAndAssertCreate(
 	iterator common.Iterator, user User,
 ) opencdc.Record {
 	is.Helper()
-	rec, err := iterator.Next(ctx)
+	rec, err := iterator.Read(ctx)
 	is.NoErr(err)
 	is.NoErr(iterator.Ack(ctx, rec.Position))
 
@@ -168,8 +180,8 @@ func ReadAndAssertCreate(
 
 	assertMetadata(is, rec.Metadata)
 
-	isDataEqual(is, rec.Key, opencdc.StructuredData{"id": user.ID})
-	isDataEqual(is, rec.Payload.After, user.ToStructuredData())
+	IsDataEqual(is, rec.Key, opencdc.StructuredData{"id": user.ID})
+	IsDataEqual(is, rec.Payload.After, user.ToStructuredData())
 
 	return rec
 }
@@ -179,7 +191,7 @@ func ReadAndAssertUpdate(
 	iterator common.Iterator, prev, next User,
 ) opencdc.Record {
 	is.Helper()
-	rec, err := iterator.Next(ctx)
+	rec, err := iterator.Read(ctx)
 	is.NoErr(err)
 	is.NoErr(iterator.Ack(ctx, rec.Position))
 
@@ -187,11 +199,11 @@ func ReadAndAssertUpdate(
 
 	assertMetadata(is, rec.Metadata)
 
-	isDataEqual(is, rec.Key, opencdc.StructuredData{"id": prev.ID})
-	isDataEqual(is, rec.Key, opencdc.StructuredData{"id": next.ID})
+	IsDataEqual(is, rec.Key, opencdc.StructuredData{"id": prev.ID})
+	IsDataEqual(is, rec.Key, opencdc.StructuredData{"id": next.ID})
 
-	isDataEqual(is, rec.Payload.Before, prev.ToStructuredData())
-	isDataEqual(is, rec.Payload.After, next.ToStructuredData())
+	IsDataEqual(is, rec.Payload.Before, prev.ToStructuredData())
+	IsDataEqual(is, rec.Payload.After, next.ToStructuredData())
 
 	return rec
 }
@@ -202,7 +214,7 @@ func ReadAndAssertDelete(
 ) opencdc.Record {
 	is.Helper()
 
-	rec, err := iterator.Next(ctx)
+	rec, err := iterator.Read(ctx)
 	is.NoErr(err)
 	is.NoErr(iterator.Ack(ctx, rec.Position))
 
@@ -210,12 +222,12 @@ func ReadAndAssertDelete(
 
 	assertMetadata(is, rec.Metadata)
 
-	isDataEqual(is, rec.Key, opencdc.StructuredData{"id": user.ID})
+	IsDataEqual(is, rec.Key, opencdc.StructuredData{"id": user.ID})
 
 	return rec
 }
 
-func isDataEqual(is *is.I, a, b opencdc.Data) {
+func IsDataEqual(is *is.I, a, b opencdc.Data) {
 	is.Helper()
 	is.Equal("", cmp.Diff(a, b))
 }
@@ -225,17 +237,11 @@ func ReadAndAssertSnapshot(
 	iterator common.Iterator, user User,
 ) opencdc.Record {
 	is.Helper()
-	rec, err := iterator.Next(ctx)
+	rec, err := iterator.Read(ctx)
 	is.NoErr(err)
 	is.NoErr(iterator.Ack(ctx, rec.Position))
 
-	is.Equal(rec.Operation, opencdc.OperationSnapshot)
-
-	assertMetadata(is, rec.Metadata)
-
-	isDataEqual(is, rec.Key, opencdc.StructuredData{"id": user.ID})
-	isDataEqual(is, rec.Payload.After, user.ToStructuredData())
-
+	AssertUserSnapshot(is, user, rec)
 	return rec
 }
 
@@ -245,8 +251,8 @@ func AssertUserSnapshot(is *is.I, user User, rec opencdc.Record) {
 
 	assertMetadata(is, rec.Metadata)
 
-	isDataEqual(is, rec.Key, opencdc.StructuredData{"id": user.ID})
-	isDataEqual(is, rec.Payload.After, user.ToStructuredData())
+	IsDataEqual(is, rec.Key, opencdc.StructuredData{"id": user.ID})
+	IsDataEqual(is, rec.Payload.After, user.ToStructuredData())
 }
 
 func assertMetadata(is *is.I, metadata opencdc.Metadata) {

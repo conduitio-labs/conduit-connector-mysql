@@ -59,13 +59,13 @@ type (
 		config       snapshotIteratorConfig
 	}
 	snapshotIteratorConfig struct {
-		db            *sqlx.DB
-		tableKeys     common.TableKeys
-		fetchSize     uint64
-		startPosition *common.SnapshotPosition
-		database      string
-		tables        []string
-		serverID      string
+		db               *sqlx.DB
+		tableSortColumns map[string]string
+		fetchSize        uint64
+		startPosition    *common.SnapshotPosition
+		database         string
+		tables           []string
+		serverID         string
 	}
 )
 
@@ -114,16 +114,22 @@ func newSnapshotIterator(config snapshotIteratorConfig) (*snapshotIterator, erro
 // from the start method so that we can lock and unlock the given tables without
 // starting up the workers.
 func (s *snapshotIterator) setupWorkers(ctx context.Context) error {
-	for table, primaryKey := range s.config.tableKeys {
+	for table, sortCol := range s.config.tableSortColumns {
 		worker := newFetchWorker(s.config.db, s.data, fetchWorkerConfig{
-			lastPosition: s.lastPosition,
+			// the snapshot worker will update the last position, so we need to
+			// clone it to avoid dataraces
+			lastPosition: s.lastPosition.Clone(),
 			table:        table,
 			fetchSize:    s.config.fetchSize,
-			primaryKey:   primaryKey,
+			sortColName:  sortCol,
 		})
 
-		if err := worker.fetchStartEnd(ctx); err != nil {
+		isTableEmpty, err := worker.fetchStartEnd(ctx)
+		if err != nil {
 			return fmt.Errorf("failed to start worker: %w", err)
+		} else if isTableEmpty {
+			sdk.Logger(ctx).Info().Msgf("table %s is empty, skipping...", table)
+			continue
 		}
 
 		s.workers = append(s.workers, worker)
@@ -143,7 +149,11 @@ func (s *snapshotIterator) start(ctx context.Context) {
 	}
 }
 
-func (s *snapshotIterator) Next(ctx context.Context) (rec opencdc.Record, err error) {
+func (s *snapshotIterator) Read(ctx context.Context) (rec opencdc.Record, err error) {
+	if len(s.workers) == 0 {
+		return rec, ErrSnapshotIteratorDone
+	}
+
 	select {
 	case <-ctx.Done():
 		//nolint:wrapcheck // no need to wrap canceled error
@@ -170,6 +180,10 @@ func (s *snapshotIterator) Ack(context.Context, opencdc.Position) error {
 }
 
 func (s *snapshotIterator) Teardown(ctx context.Context) error {
+	if len(s.workers) == 0 {
+		return nil
+	}
+
 	s.t.Kill(ErrSnapshotIteratorDone)
 	if err := s.t.Err(); err != nil && !errors.Is(err, ErrSnapshotIteratorDone) {
 		return fmt.Errorf(

@@ -27,7 +27,6 @@ import (
 	"github.com/jmoiron/sqlx"
 	"github.com/rs/zerolog"
 	"github.com/siddontang/go-log/log"
-	"golang.org/x/exp/constraints"
 )
 
 func FormatValue(val any) any {
@@ -37,11 +36,7 @@ func FormatValue(val any) any {
 	case *time.Time:
 		return val.UTC()
 	case []uint8:
-		s := string(val)
-		if parsed, err := time.Parse(time.DateTime, s); err == nil {
-			return parsed.UTC().Format(time.RFC3339)
-		}
-		return s
+		return string(val)
 	case uint64:
 		if val <= math.MaxInt64 {
 			return int64(val)
@@ -51,39 +46,6 @@ func FormatValue(val any) any {
 		return val
 	default:
 		return val
-	}
-}
-
-func intToUint64[T constraints.Integer](val T) (uint64, error) {
-	v := int64(val)
-	if v < 0 {
-		return 0, fmt.Errorf("primary key %v of type %T is invalid", val, val)
-	}
-	return uint64(v), nil
-}
-
-func ConvertPrimaryKey(val any) (uint64, error) {
-	switch v := val.(type) {
-	case int:
-		return intToUint64(v)
-	case int8:
-		return intToUint64(v)
-	case int16:
-		return intToUint64(v)
-	case int32:
-		return intToUint64(v)
-	case int64:
-		return intToUint64(v)
-	case uint8:
-		return intToUint64(v)
-	case uint16:
-		return intToUint64(v)
-	case uint32:
-		return intToUint64(v)
-	case uint64:
-		return v, nil
-	default:
-		return 0, fmt.Errorf("unsupported primary key type %T", v)
 	}
 }
 

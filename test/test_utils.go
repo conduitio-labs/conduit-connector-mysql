@@ -44,14 +44,10 @@ var ServerID = "1"
 // don't manage sql connections, so we need to store them somehow.
 type DB struct {
 	*gorm.DB
-	conn *sqlx.DB
+	SqlxDB *sqlx.DB
 }
 
-func (c DB) Conn() *sqlx.DB {
-	return c.conn
-}
-
-func Connection(t *testing.T) DB {
+func NewDB(t *testing.T) DB {
 	is := is.New(t)
 
 	// Individual iterators assume that parseTime has already been configured to true, so
@@ -74,7 +70,7 @@ func Connection(t *testing.T) DB {
 		sqlxDB.Close()
 	})
 
-	return DB{DB: db, conn: sqlxDB}
+	return DB{DB: db, SqlxDB: sqlxDB}
 }
 
 func TableName(is *is.I, db DB, model any) string {

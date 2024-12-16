@@ -44,7 +44,7 @@ func testDestination(ctx context.Context, is *is.I) (sdk.Destination, func()) {
 func TestDestination_OperationSnapshot(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
-	db := testutils.Connection(t)
+	db := testutils.NewDB(t)
 
 	testutils.RecreateUsersTable(is, db)
 
@@ -81,7 +81,7 @@ func TestDestination_OperationSnapshot(t *testing.T) {
 func TestDestination_OperationCreate(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
-	db := testutils.Connection(t)
+	db := testutils.NewDB(t)
 
 	testutils.RecreateUsersTable(is, db)
 	dest, cleanDest := testDestination(ctx, is)
@@ -117,7 +117,7 @@ func TestDestination_OperationCreate(t *testing.T) {
 func TestDestination_OperationUpdate(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
-	db := testutils.Connection(t)
+	db := testutils.NewDB(t)
 
 	testutils.RecreateUsersTable(is, db)
 
@@ -163,7 +163,7 @@ func TestDestination_OperationUpdate(t *testing.T) {
 func TestDestination_OperationDelete(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
-	db := testutils.Connection(t)
+	db := testutils.NewDB(t)
 
 	testutils.RecreateUsersTable(is, db)
 

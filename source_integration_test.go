@@ -49,7 +49,7 @@ func TestSource_ConsistentSnapshot(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 
-	db := testutils.Connection(t)
+	db := testutils.NewDB(t)
 
 	testutils.RecreateUsersTable(is, db)
 
@@ -94,7 +94,7 @@ func TestSource_NonZeroSnapshotStart(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 
-	db := testutils.Connection(t)
+	db := testutils.NewDB(t)
 
 	testutils.RecreateUsersTable(is, db)
 
@@ -123,7 +123,7 @@ func TestSource_EmptyChunkRead(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 
-	db := testutils.Connection(t)
+	db := testutils.NewDB(t)
 
 	testutils.RecreateUsersTable(is, db)
 
@@ -153,7 +153,7 @@ func TestSource_EmptyChunkRead(t *testing.T) {
 
 func TestUnsafeSnapshot(t *testing.T) {
 	is := is.New(t)
-	db := testutils.Gorm(is)
+	db := testutils.NewDB(t)
 	var err error
 
 	type TableWithoutPK struct {

@@ -26,7 +26,7 @@ import (
 )
 
 func testCdcIterator(ctx context.Context, t *testing.T, is *is.I) (common.Iterator, func()) {
-	db := testutils.Connection(t)
+	db := testutils.NewDB(t).SqlxDB
 
 	config, err := mysql.ParseDSN(testutils.DSN)
 	is.NoErr(err)
@@ -50,7 +50,7 @@ func testCdcIteratorAtPosition(
 	ctx context.Context, t *testing.T, is *is.I,
 	sdkPos opencdc.Position,
 ) (common.Iterator, func()) {
-	db := testutils.Connection(t)
+	db := testutils.NewDB(t).SqlxDB
 
 	config, err := mysql.ParseDSN(testutils.DSN)
 	is.NoErr(err)
@@ -78,7 +78,7 @@ func TestCDCIterator_InsertAction(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 
-	db := testutils.Connection(t)
+	db := testutils.NewDB(t)
 
 	testutils.RecreateUsersTable(is, db)
 
@@ -98,7 +98,7 @@ func TestCDCIterator_DeleteAction(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 
-	db := testutils.Connection(t)
+	db := testutils.NewDB(t)
 
 	testutils.RecreateUsersTable(is, db)
 
@@ -122,7 +122,7 @@ func TestCDCIterator_UpdateAction(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 
-	db := testutils.Connection(t)
+	db := testutils.NewDB(t)
 
 	testutils.RecreateUsersTable(is, db)
 
@@ -146,7 +146,7 @@ func TestCDCIterator_RestartOnPosition(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 
-	db := testutils.Connection(t)
+	db := testutils.NewDB(t)
 
 	testutils.RecreateUsersTable(is, db)
 

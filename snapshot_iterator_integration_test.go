@@ -30,7 +30,7 @@ import (
 )
 
 func testSnapshotIterator(ctx context.Context, t *testing.T, is *is.I) (common.Iterator, func()) {
-	db := testutils.Connection(t).Conn()
+	db := testutils.NewDB(t).SqlxDB
 
 	serverID, err := common.GetServerID(ctx, db)
 	is.NoErr(err)
@@ -57,9 +57,9 @@ func testSnapshotIteratorAtPosition(
 	ctx context.Context, t *testing.T, is *is.I,
 	sdkPos opencdc.Position,
 ) (common.Iterator, func()) {
-	db := testutils.Connection(t)
+	db := testutils.NewDB(t)
 
-	serverID, err := common.GetServerID(ctx, db.Conn())
+	serverID, err := common.GetServerID(ctx, db.SqlxDB)
 	is.NoErr(err)
 
 	pos, err := common.ParseSDKPosition(sdkPos)
@@ -69,7 +69,7 @@ func testSnapshotIteratorAtPosition(
 
 	iterator, err := newSnapshotIterator(snapshotIteratorConfig{
 		tableSortColumns: testutils.TableSortCols,
-		db:               db.Conn(),
+		db:               db.SqlxDB,
 		startPosition:    pos.SnapshotPosition,
 		database:         "meroxadb",
 		tables:           []string{"users"},
@@ -81,7 +81,7 @@ func testSnapshotIteratorAtPosition(
 	iterator.start(ctx)
 
 	return iterator, func() {
-		is.NoErr(db.Conn().Close())
+		is.NoErr(db.SqlxDB.Close())
 		is.NoErr(iterator.Teardown(ctx))
 	}
 }
@@ -89,7 +89,7 @@ func testSnapshotIteratorAtPosition(
 func TestSnapshotIterator_EmptyTable(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
-	db := testutils.Connection(t)
+	db := testutils.NewDB(t)
 
 	testutils.RecreateUsersTable(is, db)
 
@@ -108,7 +108,7 @@ func TestSnapshotIterator_WithData(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 
-	db := testutils.Connection(t)
+	db := testutils.NewDB(t)
 
 	testutils.RecreateUsersTable(is, db)
 
@@ -135,7 +135,7 @@ func TestSnapshotIterator_RestartOnPosition(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 
-	db := testutils.Connection(t)
+	db := testutils.NewDB(t)
 
 	testutils.RecreateUsersTable(is, db)
 	var users []testutils.User
@@ -199,7 +199,7 @@ func TestSnapshotIterator_CustomTableKeys(t *testing.T) {
 	is := is.New(t)
 	ctx := testutils.TestContext(t)
 
-	db := testutils.Connection(t)
+	db := testutils.NewDB(t)
 
 	type CompositeWithAutoInc struct {
 		ID       int    `gorm:"primaryKey;autoIncrement"`
@@ -269,7 +269,7 @@ func TestSnapshotIterator_CustomTableKeys(t *testing.T) {
 		},
 	} {
 		t.Run(fmt.Sprintf("Test table %s", testCase.tableName), func(t *testing.T) {
-			db := testutils.Connection(t).Conn()
+			db := testutils.NewDB(t).SqlxDB
 
 			serverID, err := common.GetServerID(ctx, db)
 			is.NoErr(err)
@@ -320,8 +320,8 @@ func TestSnapshotIterator_DeleteEndWhileSnapshotting(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 
-	db := testutils.Connection(t)
-	conn := db.Conn()
+	db := testutils.NewDB(t)
+	conn := db.SqlxDB
 	testutils.RecreateUsersTable(is, db)
 
 	var users []testutils.User
@@ -375,7 +375,7 @@ func TestSnapshotIterator_StringSorting(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 
-	db := testutils.Connection(t)
+	db := testutils.NewDB(t)
 
 	type Table struct {
 		ID  int    `gorm:"primaryKey;autoIncrement"`
@@ -409,12 +409,12 @@ func TestSnapshotIterator_StringSorting(t *testing.T) {
 
 	is.NoErr(db.Create(&data).Error)
 
-	serverID, err := common.GetServerID(ctx, db.Conn())
+	serverID, err := common.GetServerID(ctx, db.SqlxDB)
 	is.NoErr(err)
 
 	iterator, err := newSnapshotIterator(snapshotIteratorConfig{
 		tableSortColumns: map[string]string{tablename: "str"},
-		db:               db.Conn(),
+		db:               db.SqlxDB,
 		database:         "meroxadb",
 		tables:           []string{tablename},
 		serverID:         serverID,

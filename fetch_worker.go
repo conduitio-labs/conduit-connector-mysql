@@ -57,17 +57,19 @@ func newFetchWorker(db *sqlx.DB, data chan fetchData, config fetchWorkerConfig) 
 // fetchWorkerByKey will perform a snapshot using the sortColName as
 // the sorting key for fetching rows in chunks.
 type fetchWorkerByKey struct {
-	db         *sqlx.DB
-	data       chan fetchData
-	config     fetchWorkerConfig
-	start, end any
+	db            *sqlx.DB
+	data          chan fetchData
+	config        fetchWorkerConfig
+	schemaManager *schemaManager
+	start, end    any
 }
 
 func newFetchWorkerByKey(db *sqlx.DB, data chan fetchData, config fetchWorkerConfig) fetchWorker {
 	return &fetchWorkerByKey{
-		db:     db,
-		data:   data,
-		config: config,
+		db:            db,
+		data:          data,
+		schemaManager: newSchemaManager(),
+		config:        config,
 	}
 }
 
@@ -216,16 +218,16 @@ func (w *fetchWorkerByKey) selectRowsChunk(
 	ctx context.Context, tx *sqlx.Tx,
 	start any, discardFirst bool,
 ) (scannedRows []opencdc.StructuredData, foundEnd bool, err error) {
-	var wherePred any = squirrel.GtOrEq{w.config.sortColName: start}
+	var whereStart any = squirrel.GtOrEq{w.config.sortColName: start}
 	if discardFirst {
-		wherePred = squirrel.Gt{w.config.sortColName: start}
+		whereStart = squirrel.Gt{w.config.sortColName: start}
 	}
+	whereEnd := squirrel.LtOrEq{w.config.sortColName: w.end}
 
 	query, args, err := squirrel.
 		Select("*").
 		From(w.config.table).
-		Where(wherePred).
-		Where(squirrel.LtOrEq{w.config.sortColName: w.end}).
+		Where(whereStart).Where(whereEnd).
 		OrderBy(w.config.sortColName).
 		Limit(w.config.fetchSize).
 		ToSql()
@@ -249,15 +251,23 @@ func (w *fetchWorkerByKey) selectRowsChunk(
 		}
 	}()
 
+	colTypes, err := rows.ColumnTypes()
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to retrieve column types: %w", err)
+	}
+
+	if err := w.schemaManager.create(ctx, w.config.table, colTypes); err != nil {
+		return nil, false, fmt.Errorf("failed to create schema: %w", err)
+	}
+
 	for rows.Next() {
 		row := opencdc.StructuredData{}
 		if err := rows.MapScan(row); err != nil {
 			return nil, false, fmt.Errorf("failed to map scan row: %w", err)
 		}
 
-		// convert the values so that they can be easily serialized
 		for key, val := range row {
-			row[key] = common.FormatValue(val)
+			row[key] = w.schemaManager.formatValue(key, val)
 		}
 
 		scannedRows = append(scannedRows, row)
@@ -391,6 +401,7 @@ func (w *fetchWorkerByLimit) run(ctx context.Context) (err error) {
 			for key, val := range row {
 				row[key] = common.FormatValue(val)
 			}
+
 
 			keyBytes, err := json.Marshal(row)
 			if err != nil {

@@ -24,6 +24,7 @@ import (
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	"github.com/conduitio/conduit-commons/opencdc"
+	"github.com/conduitio/conduit-connector-sdk/schema"
 	"github.com/go-mysql-org/go-mysql/canal"
 	"github.com/go-sql-driver/mysql"
 	"github.com/google/go-cmp/cmp"
@@ -33,7 +34,7 @@ import (
 	gormmysql "gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
-	"gorm.io/gorm/schema"
+	gormschema "gorm.io/gorm/schema"
 )
 
 const DSN = "root:meroxaadmin@tcp(127.0.0.1:3306)/meroxadb"
@@ -78,7 +79,7 @@ func TableName(is *is.I, db DB, model any) string {
 	err := stmt.Parse(model)
 	is.NoErr(err)
 
-	s, err := schema.Parse(model, &sync.Map{}, schema.NamingStrategy{})
+	s, err := gormschema.Parse(model, &sync.Map{}, gormschema.NamingStrategy{})
 	is.NoErr(err)
 
 	return s.Table
@@ -269,6 +270,20 @@ func assertMetadata(is *is.I, metadata opencdc.Metadata) {
 	is.Equal(col, "users")
 
 	is.Equal(metadata[common.ServerIDKey], ServerID)
+
+	assertSchema(is, metadata)
+}
+
+func assertSchema(is *is.I, metadata opencdc.Metadata) {
+	schemaV, err := metadata.GetKeySchemaVersion()
+	is.NoErr(err)
+	schemaSub, err := metadata.GetKeySchemaSubject()
+	is.NoErr(err)
+
+	s, err := schema.Get(context.Background(), schemaSub, schemaV)
+	is.NoErr(err)
+
+	fmt.Println("****************", string(s.Bytes))
 }
 
 func NewCanal(ctx context.Context, is *is.I) *canal.Canal {

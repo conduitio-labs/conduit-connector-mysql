@@ -11,14 +11,16 @@ import (
 	"github.com/hamba/avro/v2"
 )
 
-type schemaManager struct {
+// schemaMapper creates conduit avro schemas from sql.ColumnTypes and formats values
+// based on those.
+type schemaMapper struct {
 	schema   *subVerSchema
 	colTypes map[string]avro.Type
 }
 
-func newSchemaManager() *schemaManager {
+func newSchemaMapper() *schemaMapper {
 	// all fields can be nil, but we don't want consumers to have to worry about that
-	return &schemaManager{}
+	return &schemaMapper{}
 }
 
 func colTypeToAvroField(colType *sql.ColumnType) (*avro.Field, error) {
@@ -53,7 +55,8 @@ type subVerSchema struct {
 	version int
 }
 
-func (s *schemaManager) create(ctx context.Context, table string, colTypes []*sql.ColumnType) (*subVerSchema, error) {
+func (s *schemaMapper) createPayloadSchema(
+	ctx context.Context, table string, colTypes []*sql.ColumnType) (*subVerSchema, error) {
 	if s.schema != nil {
 		return s.schema, nil
 	}
@@ -71,7 +74,7 @@ func (s *schemaManager) create(ctx context.Context, table string, colTypes []*sq
 		s.colTypes[colType.Name()] = field.Type().Type()
 	}
 
-	recordSchema, err := avro.NewRecordSchema(table, "mysql", fields)
+	recordSchema, err := avro.NewRecordSchema(table+"_payload", "mysql", fields)
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +92,36 @@ func (s *schemaManager) create(ctx context.Context, table string, colTypes []*sq
 	return s.schema, nil
 }
 
-func (s *schemaManager) formatValue(column string, value any) any {
+func (s *schemaMapper) createKeySchema(
+	ctx context.Context, table string, colType *sql.ColumnType) (*subVerSchema, error) {
+	if s.schema != nil {
+		return s.schema, nil
+	}
+
+	field, err := colTypeToAvroField(colType)
+	if err != nil {
+		return nil, err
+	}
+
+	recordSchema, err := avro.NewRecordSchema(table+"_key", "mysql", []*avro.Field{field})
+	if err != nil {
+		return nil, err
+	}
+
+	schema, err := schema.Create(ctx, schema.TypeAvro, recordSchema.Name(), []byte(recordSchema.String()))
+	if err != nil {
+		return nil, err
+	}
+
+	s.schema = &subVerSchema{
+		subject: schema.Subject,
+		version: schema.Version,
+	}
+
+	return s.schema, nil
+}
+
+func (s *schemaMapper) formatValue(column string, value any) any {
 	t, found := s.colTypes[column]
 	if !found {
 		msg := fmt.Sprint("column", column, "not found")

@@ -57,18 +57,21 @@ func newFetchWorker(db *sqlx.DB, data chan fetchData, config fetchWorkerConfig) 
 // fetchWorkerByKey will perform a snapshot using the sortColName as
 // the sorting key for fetching rows in chunks.
 type fetchWorkerByKey struct {
-	db     *sqlx.DB
-	data   chan fetchData
-	config fetchWorkerConfig
-	schemaManager *schemaManager
-	start, end    any
+	db            *sqlx.DB
+	data          chan fetchData
+	config        fetchWorkerConfig
+	payloadSchema *schemaMapper
+	keySchema     *schemaMapper
+
+	start, end any
 }
 
 func newFetchWorkerByKey(db *sqlx.DB, data chan fetchData, config fetchWorkerConfig) fetchWorker {
 	return &fetchWorkerByKey{
 		db:            db,
 		data:          data,
-		schemaManager: newSchemaManager(),
+		payloadSchema: newSchemaMapper(),
+		keySchema:     newSchemaMapper(),
 		config:        config,
 	}
 }
@@ -288,23 +291,40 @@ func (w *fetchWorkerByKey) buildFetchData(
 		return fetchData{}, fmt.Errorf("key %s not found in payload", w.config.sortColName)
 	}
 
-	subver, err := w.schemaManager.create(ctx, w.config.table, colTypes)
+	payloadSubver, err := w.payloadSchema.createPayloadSchema(ctx, w.config.table, colTypes)
 	if err != nil {
-		return fetchData{}, fmt.Errorf("failed to create schema for table %s: %w", w.config.table, err)
+		return fetchData{}, fmt.Errorf("failed to create payload schema for table %s: %w", w.config.table, err)
 	}
 
 	payload := make(opencdc.StructuredData)
 	for key, val := range row {
-		payload[key] = w.schemaManager.formatValue(key, val)
+		payload[key] = w.payloadSchema.formatValue(key, val)
 	}
 
-	key := snapshotKey{w.config.sortColName, keyVal}
+	key := opencdc.StructuredData{w.config.sortColName: keyVal}
+	var keyColType *sql.ColumnType
+	for _, colType := range colTypes {
+		if colType.Name() == w.config.sortColName {
+			keyColType = colType
+			break
+		}
+	}
+	if keyColType == nil {
+		return fetchData{}, fmt.Errorf("failed to find key schema column type for table %s", w.config.table)
+	}
+
+	keySubver, err := w.keySchema.createKeySchema(ctx, w.config.table, keyColType)
+	if err != nil {
+		return fetchData{}, fmt.Errorf("failed to create key schema for table %s: %w", w.config.table, err)
+	}
+
 	return fetchData{
 		key:           key,
 		table:         w.config.table,
 		payload:       payload,
 		position:      position,
-		payloadSchema: *subver,
+		payloadSchema: *payloadSubver,
+		keySchema:     *keySubver,
 	}, nil
 }
 
@@ -429,10 +449,7 @@ func (w *fetchWorkerByLimit) run(ctx context.Context) (err error) {
 
 			// we don't really have any way to get the key from the table, so we
 			// make up for one
-			key := snapshotKey{
-				Key:   "",
-				Value: encodedKey,
-			}
+			key := opencdc.StructuredData{"": encodedKey}
 
 			w.data <- fetchData{
 				key:     key,

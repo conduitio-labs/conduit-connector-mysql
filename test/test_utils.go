@@ -114,7 +114,10 @@ type User struct {
 	CreatedAt time.Time `db:"created_at"`
 }
 
-var userSchema = newUserSchema()
+var (
+	userPayloadSchema = newUserPayloadSchema()
+	userKeySchema     = newUserKeySchema()
+)
 
 type AvroSchema struct {
 	Name   string `json:"name"`
@@ -125,15 +128,31 @@ type AvroSchema struct {
 	} `json:"fields"`
 }
 
-func newUserSchema() AvroSchema {
+func newUserPayloadSchema() AvroSchema {
 	var userSchema = []byte(`{
-		"name": "mysql.users",
+		"name": "mysql.users_payload",
 		"type": "record",
 		"fields": [
 			{"name": "id", "type": "long"},
 			{"name": "username", "type": "string"},
 			{"name": "email", "type": "string"},
 			{"name": "created_at", "type": "string"}
+		]
+	}`)
+	var schema AvroSchema
+	if err := json.Unmarshal(userSchema, &schema); err != nil {
+		panic(err)
+	}
+
+	return schema
+}
+
+func newUserKeySchema() AvroSchema {
+	var userSchema = []byte(`{
+		"name": "mysql.users_key",
+		"type": "record",
+		"fields": [
+			{"name": "id", "type": "long"}
 		]
 	}`)
 	var schema AvroSchema
@@ -306,18 +325,37 @@ func assertMetadata(is *is.I, metadata opencdc.Metadata) {
 }
 
 func assertSchema(is *is.I, metadata opencdc.Metadata) {
-	schemaV, err := metadata.GetKeySchemaVersion()
-	is.NoErr(err)
-	schemaSub, err := metadata.GetKeySchemaSubject()
-	is.NoErr(err)
+	ctx := context.Background()
 
-	s, err := schema.Get(context.Background(), schemaSub, schemaV)
-	is.NoErr(err)
+	{ // payload schema
+		ver, err := metadata.GetPayloadSchemaVersion()
+		is.NoErr(err)
+		sub, err := metadata.GetPayloadSchemaSubject()
+		is.NoErr(err)
 
-	var actualSchema AvroSchema
-	is.NoErr(json.Unmarshal(s.Bytes, &actualSchema))
+		s, err := schema.Get(ctx, sub, ver)
+		is.NoErr(err)
 
-	isDataEqual(is, actualSchema, userSchema)
+		var actualSchema AvroSchema
+		is.NoErr(json.Unmarshal(s.Bytes, &actualSchema))
+
+		isDataEqual(is, actualSchema, userPayloadSchema)
+	}
+
+	{ // key schema
+		ver, err := metadata.GetKeySchemaVersion()
+		is.NoErr(err)
+		sub, err := metadata.GetKeySchemaSubject()
+		is.NoErr(err)
+
+		s, err := schema.Get(ctx, sub, ver)
+		is.NoErr(err)
+
+		var actualSchema AvroSchema
+		is.NoErr(json.Unmarshal(s.Bytes, &actualSchema))
+
+		isDataEqual(is, actualSchema, userKeySchema)
+	}
 }
 
 func NewCanal(ctx context.Context, is *is.I) *canal.Canal {

@@ -66,8 +66,8 @@ func TestSchema(t *testing.T) {
 	colTypes, err := rows.ColumnTypes()
 	is.NoErr(err)
 
-	schemaManager := newSchemaManager()
-	_, err = schemaManager.create(ctx, tableName, colTypes)
+	schemaManager := newSchemaMapper()
+	_, err = schemaManager.createPayloadSchema(ctx, tableName, colTypes)
 	is.NoErr(err)
 
 	row := db.SqlxDB.QueryRowx("select * from " + tableName)

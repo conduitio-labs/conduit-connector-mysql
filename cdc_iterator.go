@@ -112,10 +112,7 @@ func (c *cdcIterator) getStartPosition() (common.CdcPosition, error) {
 		return cdcPosition, fmt.Errorf("failed to get master position: %w", err)
 	}
 
-	return common.CdcPosition{
-		Name: masterPos.Name,
-		Pos:  masterPos.Pos,
-	}, nil
+	return common.CdcPosition{Name: masterPos.Name, Pos: masterPos.Pos}, nil
 }
 
 func (c *cdcIterator) Ack(context.Context, opencdc.Position) error {

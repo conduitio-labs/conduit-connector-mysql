@@ -29,15 +29,6 @@ import (
 
 var ErrSnapshotIteratorDone = errors.New("snapshot complete")
 
-type snapshotKey struct {
-	Key   string `json:"key"`
-	Value any    `json:"value"`
-}
-
-func (key snapshotKey) ToSDKData() opencdc.Data {
-	return opencdc.StructuredData{key.Key: key.Value}
-}
-
 type (
 	// fetchData is the data that is fetched from a table row. As the iterator
 	// fetches rows from multiple tables, reading records from one table affects the
@@ -45,12 +36,13 @@ type (
 	// in order to prevent data races fetchData builds records within the snapshot
 	// iterator itself.
 	fetchData struct {
-		key      snapshotKey
 		table    string
+		key      opencdc.StructuredData
 		payload  opencdc.StructuredData
 		position common.TablePosition
 
 		payloadSchema subVerSchema
+		keySchema     subVerSchema
 	}
 	snapshotIterator struct {
 		t            *tomb.Tomb
@@ -213,11 +205,13 @@ func (s *snapshotIterator) buildRecord(d fetchData) opencdc.Record {
 	metadata.SetCollection(d.table)
 	metadata[common.ServerIDKey] = s.config.serverID
 
-	key := d.key.ToSDKData()
-	rec := sdk.Util.Source.NewRecordSnapshot(pos, metadata, key, d.payload)
+	rec := sdk.Util.Source.NewRecordSnapshot(pos, metadata, d.key, d.payload)
 
-	rec.Metadata.SetKeySchemaSubject(d.payloadSchema.subject)
-	rec.Metadata.SetKeySchemaVersion(d.payloadSchema.version)
+	rec.Metadata.SetPayloadSchemaSubject(d.payloadSchema.subject)
+	rec.Metadata.SetPayloadSchemaVersion(d.payloadSchema.version)
+
+	rec.Metadata.SetKeySchemaSubject(d.keySchema.subject)
+	rec.Metadata.SetKeySchemaVersion(d.keySchema.version)
 
 	return rec
 }

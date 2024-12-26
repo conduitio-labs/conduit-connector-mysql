@@ -113,6 +113,8 @@ type User struct {
 	CreatedAt time.Time `db:"created_at"`
 }
 
+var userSchema = `{"name":"mysql.users","type":"record","fields":[{"name":"id","type":"long"},{"name":"username","type":"string"},{"name":"email","type":"string"},{"name":"created_at","type":"string"}]}`
+
 func (u User) Update() User {
 	u.Username = fmt.Sprintf("%v-updated", u.Username)
 	u.Email = fmt.Sprintf("%v-updated@example.com", u.Email)
@@ -283,7 +285,7 @@ func assertSchema(is *is.I, metadata opencdc.Metadata) {
 	s, err := schema.Get(context.Background(), schemaSub, schemaV)
 	is.NoErr(err)
 
-	fmt.Println("****************", string(s.Bytes))
+	is.Equal(string(s.Bytes), userSchema) // actual schema != expected schema
 }
 
 func NewCanal(ctx context.Context, is *is.I) *canal.Canal {

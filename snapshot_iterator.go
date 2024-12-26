@@ -49,6 +49,8 @@ type (
 		table    string
 		payload  opencdc.StructuredData
 		position common.TablePosition
+
+		payloadSchema subVerSchema
 	}
 	snapshotIterator struct {
 		t            *tomb.Tomb
@@ -212,6 +214,10 @@ func (s *snapshotIterator) buildRecord(d fetchData) opencdc.Record {
 	metadata[common.ServerIDKey] = s.config.serverID
 
 	key := d.key.ToSDKData()
+	rec := sdk.Util.Source.NewRecordSnapshot(pos, metadata, key, d.payload)
 
-	return sdk.Util.Source.NewRecordSnapshot(pos, metadata, key, d.payload)
+	rec.Metadata.SetKeySchemaSubject(d.payloadSchema.subject)
+	rec.Metadata.SetKeySchemaVersion(d.payloadSchema.version)
+
+	return rec
 }

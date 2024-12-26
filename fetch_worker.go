@@ -57,9 +57,9 @@ func newFetchWorker(db *sqlx.DB, data chan fetchData, config fetchWorkerConfig) 
 // fetchWorkerByKey will perform a snapshot using the sortColName as
 // the sorting key for fetching rows in chunks.
 type fetchWorkerByKey struct {
-	db            *sqlx.DB
-	data          chan fetchData
-	config        fetchWorkerConfig
+	db     *sqlx.DB
+	data   chan fetchData
+	config fetchWorkerConfig
 	schemaManager *schemaManager
 	start, end    any
 }
@@ -135,13 +135,13 @@ func (w *fetchWorkerByKey) run(ctx context.Context) (err error) {
 			Any("chunk start", chunkStart).
 			Any("end", w.end).Msg("fetching chunk")
 
-		rows, foundEnd, err := w.selectRowsChunk(ctx, tx, chunkStart, discardFirst)
+		rowsChunk, err := w.selectRowsChunk(ctx, tx, chunkStart, discardFirst)
 		if err != nil {
 			return fmt.Errorf("failed to select rows chunk: %w", err)
 		}
 		discardFirst = true
 
-		for _, row := range rows {
+		for _, row := range rowsChunk.rows {
 			sdk.Logger(ctx).Trace().Msgf("fetched row: %+v", row)
 
 			lastRead := row[w.config.sortColName]
@@ -149,11 +149,7 @@ func (w *fetchWorkerByKey) run(ctx context.Context) (err error) {
 				return ErrSortingKeyNotFoundInRow
 			}
 
-			position := common.TablePosition{
-				LastRead:    lastRead,
-				SnapshotEnd: w.end,
-			}
-			data, err := w.buildFetchData(row, position)
+			data, err := w.buildFetchData(ctx, row, rowsChunk.colTypes, lastRead)
 			if err != nil {
 				return fmt.Errorf("failed to build fetch data: %w", err)
 			}
@@ -169,7 +165,7 @@ func (w *fetchWorkerByKey) run(ctx context.Context) (err error) {
 			chunkStart = lastRead
 		}
 
-		if foundEnd {
+		if rowsChunk.foundEnd {
 			break
 		}
 	}
@@ -214,10 +210,16 @@ func (w *fetchWorkerByKey) getMinMaxValues(
 	return &scannedRow, false, nil
 }
 
+type rowsChunk struct {
+	rows     []map[string]any
+	colTypes []*sql.ColumnType
+	foundEnd bool
+}
+
 func (w *fetchWorkerByKey) selectRowsChunk(
 	ctx context.Context, tx *sqlx.Tx,
 	start any, discardFirst bool,
-) (scannedRows []opencdc.StructuredData, foundEnd bool, err error) {
+) (_ *rowsChunk, err error) {
 	var whereStart any = squirrel.GtOrEq{w.config.sortColName: start}
 	if discardFirst {
 		whereStart = squirrel.Gt{w.config.sortColName: start}
@@ -232,67 +234,78 @@ func (w *fetchWorkerByKey) selectRowsChunk(
 		Limit(w.config.fetchSize).
 		ToSql()
 	if err != nil {
-		return nil, false, fmt.Errorf("failed to build query: %w", err)
+		return nil, fmt.Errorf("failed to build query: %w", err)
 	}
 
 	sdk.Logger(ctx).Debug().Str("query", query).Any("args", args).Msg("created query")
 
 	rows, err := tx.QueryxContext(ctx, query, args...)
 	if err != nil {
-		return nil, false, fmt.Errorf("failed to query rows: %w", err)
+		return nil, fmt.Errorf("failed to query rows: %w", err)
 	}
 	defer func() {
-		if closeErr := rows.Close(); err != nil {
-			if err == nil {
-				err = fmt.Errorf("failed to close rows: %w", closeErr)
-			} else {
-				err = errors.Join(err, fmt.Errorf("failed to close rows: %w", closeErr))
-			}
+		if closeErr := rows.Close(); closeErr != nil {
+			closeErr = fmt.Errorf("failed to close rows: %w", closeErr)
+			err = errors.Join(err, closeErr)
 		}
 	}()
 
-	colTypes, err := rows.ColumnTypes()
-	if err != nil {
-		return nil, false, fmt.Errorf("failed to retrieve column types: %w", err)
-	}
+	chunk := &rowsChunk{}
 
-	if err := w.schemaManager.create(ctx, w.config.table, colTypes); err != nil {
-		return nil, false, fmt.Errorf("failed to create schema: %w", err)
+	chunk.colTypes, err = rows.ColumnTypes()
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve column types: %w", err)
 	}
 
 	for rows.Next() {
-		row := opencdc.StructuredData{}
+		row := map[string]any{}
 		if err := rows.MapScan(row); err != nil {
-			return nil, false, fmt.Errorf("failed to map scan row: %w", err)
+			return nil, fmt.Errorf("failed to map scan row: %w", err)
 		}
 
-		for key, val := range row {
-			row[key] = w.schemaManager.formatValue(key, val)
-		}
-
-		scannedRows = append(scannedRows, row)
+		chunk.rows = append(chunk.rows, row)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, false, fmt.Errorf("failed to close rows: %w", err)
+		return nil, fmt.Errorf("failed to close rows: %w", err)
 	}
 
 	//nolint:gosec // fetchSize is already checked for being a sane int value
-	foundEnd = len(scannedRows) < int(w.config.fetchSize)
+	chunk.foundEnd = len(chunk.rows) < int(w.config.fetchSize)
 
-	return scannedRows, foundEnd, nil
+	return chunk, nil
 }
 
 func (w *fetchWorkerByKey) buildFetchData(
-	payload opencdc.StructuredData,
-	position common.TablePosition,
-) (fetchData, error) {
-	keyVal, ok := payload[w.config.sortColName]
+	ctx context.Context, row map[string]any,
+	colTypes []*sql.ColumnType, lastRead any) (fetchData, error) {
+	position := common.TablePosition{
+		LastRead:    lastRead,
+		SnapshotEnd: w.end,
+	}
+
+	keyVal, ok := row[w.config.sortColName]
 	if !ok {
 		return fetchData{}, fmt.Errorf("key %s not found in payload", w.config.sortColName)
 	}
 
+	subver, err := w.schemaManager.create(ctx, w.config.table, colTypes)
+	if err != nil {
+		return fetchData{}, fmt.Errorf("failed to create schema for table %s: %w", w.config.table, err)
+	}
+
+	payload := make(opencdc.StructuredData)
+	for key, val := range row {
+		payload[key] = w.schemaManager.formatValue(key, val)
+	}
+
 	key := snapshotKey{w.config.sortColName, keyVal}
-	return fetchData{key, w.config.table, payload, position}, nil
+	return fetchData{
+		key:           key,
+		table:         w.config.table,
+		payload:       payload,
+		position:      position,
+		payloadSchema: *subver,
+	}, nil
 }
 
 // fetchWorkerByLimit will perform a snapshot using the LIMIT + OFFSET clauses to fetch
@@ -389,7 +402,12 @@ func (w *fetchWorkerByLimit) run(ctx context.Context) (err error) {
 		if err != nil {
 			return fmt.Errorf("failed to query rows: %w", err)
 		}
-		defer rows.Close()
+		defer func() {
+			if closeErr := rows.Close(); closeErr != nil {
+				closeErr = fmt.Errorf("failed to close rows: %w", closeErr)
+				err = errors.Join(err, closeErr)
+			}
+		}()
 
 		for rows.Next() {
 			row := opencdc.StructuredData{}

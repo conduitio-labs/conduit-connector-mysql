@@ -8,6 +8,7 @@ require (
 	github.com/conduitio/conduit-connector-sdk v0.12.0
 	github.com/go-sql-driver/mysql v1.8.1
 	github.com/golangci/golangci-lint v1.63.4
+	github.com/hamba/avro/v2 v2.27.0
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/matryer/is v1.4.1
 	github.com/rs/zerolog v1.33.0

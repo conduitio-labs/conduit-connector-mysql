@@ -16,6 +16,7 @@ package testutils
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"sync"
@@ -113,7 +114,35 @@ type User struct {
 	CreatedAt time.Time `db:"created_at"`
 }
 
-var userSchema = `{"name":"mysql.users","type":"record","fields":[{"name":"id","type":"long"},{"name":"username","type":"string"},{"name":"email","type":"string"},{"name":"created_at","type":"string"}]}`
+var userSchema = newUserSchema()
+
+type AvroSchema struct {
+	Name   string `json:"name"`
+	Type   string `json:"type"`
+	Fields []struct {
+		Name string `json:"name"`
+		Type string `json:"type"`
+	} `json:"fields"`
+}
+
+func newUserSchema() AvroSchema {
+	var userSchema = []byte(`{
+		"name": "mysql.users",
+		"type": "record",
+		"fields": [
+			{"name": "id", "type": "long"},
+			{"name": "username", "type": "string"},
+			{"name": "email", "type": "string"},
+			{"name": "created_at", "type": "string"}
+		]
+	}`)
+	var schema AvroSchema
+	if err := json.Unmarshal(userSchema, &schema); err != nil {
+		panic(err)
+	}
+
+	return schema
+}
 
 func (u User) Update() User {
 	u.Username = fmt.Sprintf("%v-updated", u.Username)
@@ -192,8 +221,8 @@ func ReadAndAssertCreate(
 
 	assertMetadata(is, rec.Metadata)
 
-	IsDataEqual(is, rec.Key, opencdc.StructuredData{"id": user.ID})
-	IsDataEqual(is, rec.Payload.After, user.StructuredData())
+	isDataEqual(is, rec.Key, opencdc.StructuredData{"id": user.ID})
+	isDataEqual(is, rec.Payload.After, user.StructuredData())
 
 	return rec
 }
@@ -211,11 +240,11 @@ func ReadAndAssertUpdate(
 
 	assertMetadata(is, rec.Metadata)
 
-	IsDataEqual(is, rec.Key, opencdc.StructuredData{"id": prev.ID})
-	IsDataEqual(is, rec.Key, opencdc.StructuredData{"id": next.ID})
+	isDataEqual(is, rec.Key, opencdc.StructuredData{"id": prev.ID})
+	isDataEqual(is, rec.Key, opencdc.StructuredData{"id": next.ID})
 
-	IsDataEqual(is, rec.Payload.Before, prev.StructuredData())
-	IsDataEqual(is, rec.Payload.After, next.StructuredData())
+	isDataEqual(is, rec.Payload.Before, prev.StructuredData())
+	isDataEqual(is, rec.Payload.After, next.StructuredData())
 
 	return rec
 }
@@ -234,12 +263,12 @@ func ReadAndAssertDelete(
 
 	assertMetadata(is, rec.Metadata)
 
-	IsDataEqual(is, rec.Key, opencdc.StructuredData{"id": user.ID})
+	isDataEqual(is, rec.Key, opencdc.StructuredData{"id": user.ID})
 
 	return rec
 }
 
-func IsDataEqual(is *is.I, actual, expected opencdc.Data) {
+func isDataEqual(is *is.I, actual, expected any) {
 	is.Equal("", cmp.Diff(actual, expected)) // actual (-) != expected (+)
 }
 
@@ -262,8 +291,8 @@ func AssertUserSnapshot(is *is.I, user User, rec opencdc.Record) {
 
 	assertMetadata(is, rec.Metadata)
 
-	IsDataEqual(is, rec.Key, opencdc.StructuredData{"id": user.ID})
-	IsDataEqual(is, rec.Payload.After, user.StructuredData())
+	isDataEqual(is, rec.Key, opencdc.StructuredData{"id": user.ID})
+	isDataEqual(is, rec.Payload.After, user.StructuredData())
 }
 
 func assertMetadata(is *is.I, metadata opencdc.Metadata) {
@@ -285,7 +314,10 @@ func assertSchema(is *is.I, metadata opencdc.Metadata) {
 	s, err := schema.Get(context.Background(), schemaSub, schemaV)
 	is.NoErr(err)
 
-	is.Equal(string(s.Bytes), userSchema) // actual schema != expected schema
+	var actualSchema AvroSchema
+	is.NoErr(json.Unmarshal(s.Bytes, &actualSchema))
+
+	isDataEqual(is, actualSchema, userSchema)
 }
 
 func NewCanal(ctx context.Context, is *is.I) *canal.Canal {

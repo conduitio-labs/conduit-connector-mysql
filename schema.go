@@ -11,12 +11,8 @@ import (
 	"github.com/hamba/avro/v2"
 )
 
-type User struct {
-	Name string
-}
-
 type schemaManager struct {
-	schema   *avro.RecordSchema
+	schema   *subVerSchema
 	colTypes map[string]avro.Type
 }
 
@@ -51,9 +47,15 @@ func colTypeToAvroField(colType *sql.ColumnType) (*avro.Field, error) {
 	return nameField, nil
 }
 
-func (s *schemaManager) create(ctx context.Context, table string, colTypes []*sql.ColumnType) error {
+// subVerSchema represents the (sub)ject and the (ver)sion of a schema
+type subVerSchema struct {
+	subject string
+	version int
+}
+
+func (s *schemaManager) create(ctx context.Context, table string, colTypes []*sql.ColumnType) (*subVerSchema, error) {
 	if s.schema != nil {
-		return nil
+		return s.schema, nil
 	}
 
 	s.colTypes = make(map[string]avro.Type)
@@ -61,7 +63,7 @@ func (s *schemaManager) create(ctx context.Context, table string, colTypes []*sq
 	for _, colType := range colTypes {
 		field, err := colTypeToAvroField(colType)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		fields = append(fields, field)
@@ -71,18 +73,20 @@ func (s *schemaManager) create(ctx context.Context, table string, colTypes []*sq
 
 	recordSchema, err := avro.NewRecordSchema(table, "mysql", fields)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	fmt.Println(recordSchema.Name())
-	_, err = schema.Create(ctx, schema.TypeAvro, recordSchema.Name(), []byte(recordSchema.String()))
+	schema, err := schema.Create(ctx, schema.TypeAvro, recordSchema.Name(), []byte(recordSchema.String()))
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	s.schema = recordSchema
+	s.schema = &subVerSchema{
+		subject: schema.Subject,
+		version: schema.Version,
+	}
 
-	return nil
+	return s.schema, nil
 }
 
 func (s *schemaManager) formatValue(column string, value any) any {

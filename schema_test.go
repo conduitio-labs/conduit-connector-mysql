@@ -67,7 +67,8 @@ func TestSchema(t *testing.T) {
 	is.NoErr(err)
 
 	schemaManager := newSchemaManager()
-	is.NoErr(schemaManager.create(ctx, tableName, colTypes))
+	_, err = schemaManager.create(ctx, tableName, colTypes)
+	is.NoErr(err)
 
 	row := db.SqlxDB.QueryRowx("select * from " + tableName)
 	dest := map[string]any{}

@@ -321,8 +321,8 @@ func (w *fetchWorkerByKey) buildFetchData(
 		table:         w.config.table,
 		payload:       payload,
 		position:      position,
-		payloadSchema: *payloadSubver,
-		keySchema:     *keySubver,
+		payloadSchema: payloadSubver,
+		keySchema:     keySubver,
 	}, nil
 }
 
@@ -419,48 +419,62 @@ func (w *fetchWorkerByLimit) run(ctx context.Context) (err error) {
 
 		sdk.Logger(ctx).Debug().Str("query", query).Any("args", args).Msg("created query")
 
-		rows, err := tx.QueryxContext(ctx, query, args...)
+		sqlxRows, err := tx.QueryxContext(ctx, query, args...)
 		if err != nil {
 			return fmt.Errorf("failed to query rows: %w", err)
 		}
 		defer func() {
-			if closeErr := rows.Close(); closeErr != nil {
+			if closeErr := sqlxRows.Close(); closeErr != nil {
 				closeErr = fmt.Errorf("failed to close rows: %w", closeErr)
 				err = errors.Join(err, closeErr)
 			}
 		}()
 
-		var counter uint64
-		for rows.Next() {
-			counter++
-			row := opencdc.StructuredData{}
-			if err := rows.MapScan(row); err != nil {
+		rows := []map[string]any{}
+		for sqlxRows.Next() {
+			row := map[string]any{}
+			if err := sqlxRows.MapScan(row); err != nil {
 				return fmt.Errorf("failed to map scan row: %w", err)
 			}
+			rows = append(rows, row)
+		}
+		if err := sqlxRows.Err(); err != nil {
+			return fmt.Errorf("failed to close rows: %w", err)
+		}
 
-			// convert the values so that they can be easily serialized
-			for key, val := range row {
-				row[key] = common.FormatValue(val)
+		colTypes, err := sqlxRows.ColumnTypes()
+		if err != nil {
+			return fmt.Errorf("failed to retrieve column types: %w", err)
+		}
+
+		for i, row := range rows {
+			payloadSubver, err := w.payloadSchema.createPayloadSchema(ctx, w.config.table, colTypes)
+			if err != nil {
+				return fmt.Errorf("failed to create payload schema for table %s: %w", w.config.table, err)
 			}
 
+			payload := make(opencdc.StructuredData)
+			for key, val := range row {
+				payload[key] = w.payloadSchema.formatValue(key, val)
+			}
 
-			keyStr := fmt.Sprintf("%s_%d", w.config.table, offset+counter)
+			keyStr := fmt.Sprintf("%s_%d", w.config.table, offset+uint64(i))
 			key := opencdc.RawData([]byte(keyStr))
 
 			w.data <- fetchData{
-				key:     key,
-				table:   w.config.table,
-				payload: row,
+				key:           key,
+				table:         w.config.table,
+				payload:       payload,
+				payloadSchema: payloadSubver,
 
 				// ignoring position, we start from 0 each time
 				// TODO: we could save the offset as a position, we might want
 				// to do it in the future.
 				position: common.TablePosition{},
 			}
+
 		}
-		if err := rows.Err(); err != nil {
-			return fmt.Errorf("failed to close rows: %w", err)
-		}
+
 	}
 
 	return nil

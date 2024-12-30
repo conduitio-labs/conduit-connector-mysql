@@ -37,7 +37,7 @@ type (
 	// iterator itself.
 	fetchData struct {
 		table    string
-		key      opencdc.StructuredData
+		key      opencdc.Data
 		payload  opencdc.StructuredData
 		position common.TablePosition
 

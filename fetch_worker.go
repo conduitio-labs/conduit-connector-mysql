@@ -17,8 +17,6 @@ package mysql
 import (
 	"context"
 	"database/sql"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -335,6 +333,9 @@ type fetchWorkerByLimit struct {
 	db     *sqlx.DB
 	data   chan fetchData
 	end    uint64
+
+	payloadSchema *schemaMapper
+	keySchema     *schemaMapper
 }
 
 func newFetchWorkerByLimit(
@@ -429,7 +430,9 @@ func (w *fetchWorkerByLimit) run(ctx context.Context) (err error) {
 			}
 		}()
 
+		var counter uint64
 		for rows.Next() {
+			counter++
 			row := opencdc.StructuredData{}
 			if err := rows.MapScan(row); err != nil {
 				return fmt.Errorf("failed to map scan row: %w", err)
@@ -441,15 +444,8 @@ func (w *fetchWorkerByLimit) run(ctx context.Context) (err error) {
 			}
 
 
-			keyBytes, err := json.Marshal(row)
-			if err != nil {
-				return fmt.Errorf("failed to marshal row: %w", err)
-			}
-			encodedKey := base64.StdEncoding.EncodeToString(keyBytes)
-
-			// we don't really have any way to get the key from the table, so we
-			// make up for one
-			key := opencdc.StructuredData{"": encodedKey}
+			keyStr := fmt.Sprintf("%s_%d", w.config.table, offset+counter)
+			key := opencdc.RawData([]byte(keyStr))
 
 			w.data <- fetchData{
 				key:     key,

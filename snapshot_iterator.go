@@ -41,8 +41,10 @@ type (
 		payload  opencdc.StructuredData
 		position common.TablePosition
 
-		payloadSchema subVerSchema
-		keySchema     subVerSchema
+		payloadSchema *subVerSchema
+
+		// keySchema might be nil, as fetchWorkerByLimit doesn't have any key
+		keySchema *subVerSchema
 	}
 	snapshotIterator struct {
 		t            *tomb.Tomb
@@ -210,8 +212,10 @@ func (s *snapshotIterator) buildRecord(d fetchData) opencdc.Record {
 	rec.Metadata.SetPayloadSchemaSubject(d.payloadSchema.subject)
 	rec.Metadata.SetPayloadSchemaVersion(d.payloadSchema.version)
 
-	rec.Metadata.SetKeySchemaSubject(d.keySchema.subject)
-	rec.Metadata.SetKeySchemaVersion(d.keySchema.version)
+	if d.keySchema != nil {
+		rec.Metadata.SetKeySchemaSubject(d.keySchema.subject)
+		rec.Metadata.SetKeySchemaVersion(d.keySchema.version)
+	}
 
 	return rec
 }

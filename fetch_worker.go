@@ -342,9 +342,10 @@ func newFetchWorkerByLimit(
 	db *sqlx.DB, data chan fetchData, config fetchWorkerConfig,
 ) fetchWorker {
 	return &fetchWorkerByLimit{
-		db:     db,
-		data:   data,
-		config: config,
+		payloadSchema: newSchemaMapper(),
+		db:            db,
+		data:          data,
+		config:        config,
 	}
 }
 
@@ -429,6 +430,10 @@ func (w *fetchWorkerByLimit) run(ctx context.Context) (err error) {
 				err = errors.Join(err, closeErr)
 			}
 		}()
+		colTypes, err := sqlxRows.ColumnTypes()
+		if err != nil {
+			return fmt.Errorf("failed to retrieve column types: %w", err)
+		}
 
 		rows := []map[string]any{}
 		for sqlxRows.Next() {
@@ -442,12 +447,9 @@ func (w *fetchWorkerByLimit) run(ctx context.Context) (err error) {
 			return fmt.Errorf("failed to close rows: %w", err)
 		}
 
-		colTypes, err := sqlxRows.ColumnTypes()
-		if err != nil {
-			return fmt.Errorf("failed to retrieve column types: %w", err)
-		}
-
 		for i, row := range rows {
+			sdk.Logger(ctx).Trace().Msgf("fetched row: %+v", row)
+
 			payloadSubver, err := w.payloadSchema.createPayloadSchema(ctx, w.config.table, colTypes)
 			if err != nil {
 				return fmt.Errorf("failed to create payload schema for table %s: %w", w.config.table, err)

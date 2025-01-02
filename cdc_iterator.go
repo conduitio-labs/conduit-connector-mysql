@@ -32,9 +32,11 @@ import (
 )
 
 type cdcIterator struct {
-	config   cdcIteratorConfig
-	canal    *canal.Canal
-	position *common.CdcPosition
+	config        cdcIteratorConfig
+	canal         *canal.Canal
+	position      *common.CdcPosition
+	payloadSchema *schemaMapper
+	keySchema     *schemaMapper
 
 	rowsEventsC  chan rowEvent
 	canalRunErrC chan error
@@ -61,12 +63,14 @@ func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (*cdcIterator
 	}
 
 	return &cdcIterator{
-		config:       config,
-		canal:        canal,
-		position:     config.startPosition,
-		rowsEventsC:  make(chan rowEvent),
-		canalRunErrC: make(chan error),
-		canalDoneC:   make(chan struct{}),
+		config:        config,
+		canal:         canal,
+		position:      config.startPosition,
+		payloadSchema: newSchemaMapper(),
+		keySchema:     newSchemaMapper(),
+		rowsEventsC:   make(chan rowEvent),
+		canalRunErrC:  make(chan error),
+		canalDoneC:    make(chan struct{}),
 	}, nil
 }
 

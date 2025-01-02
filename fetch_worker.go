@@ -150,7 +150,7 @@ func (w *fetchWorkerByKey) run(ctx context.Context) (err error) {
 				return ErrSortingKeyNotFoundInRow
 			}
 
-			data, err := w.buildFetchData(ctx, row, rowsChunk.colTypes, lastRead)
+			data, err := w.buildFetchData(ctx, row, rowsChunk.mysqlAvroCols, lastRead)
 			if err != nil {
 				return fmt.Errorf("failed to build fetch data: %w", err)
 			}
@@ -212,9 +212,9 @@ func (w *fetchWorkerByKey) getMinMaxValues(
 }
 
 type rowsChunk struct {
-	rows     []map[string]any
-	colTypes []*sql.ColumnType
-	foundEnd bool
+	rows          []map[string]any
+	mysqlAvroCols []*avroColType
+	foundEnd      bool
 }
 
 func (w *fetchWorkerByKey) selectRowsChunk(
@@ -253,7 +253,7 @@ func (w *fetchWorkerByKey) selectRowsChunk(
 
 	chunk := &rowsChunk{}
 
-	chunk.colTypes, err = rows.ColumnTypes()
+	chunk.mysqlAvroCols, err = parseMultipleSqlColtypes(rows)
 	if err != nil {
 		return nil, fmt.Errorf("failed to retrieve column types: %w", err)
 	}
@@ -278,7 +278,8 @@ func (w *fetchWorkerByKey) selectRowsChunk(
 
 func (w *fetchWorkerByKey) buildFetchData(
 	ctx context.Context, row map[string]any,
-	colTypes []*sql.ColumnType, lastRead any) (fetchData, error) {
+	colTypes []*avroColType, lastRead any,
+) (fetchData, error) {
 	position := common.TablePosition{
 		LastRead:    lastRead,
 		SnapshotEnd: w.end,
@@ -300,9 +301,9 @@ func (w *fetchWorkerByKey) buildFetchData(
 	}
 
 	key := opencdc.StructuredData{w.config.sortColName: keyVal}
-	var keyColType *sql.ColumnType
+	var keyColType *avroColType
 	for _, colType := range colTypes {
-		if colType.Name() == w.config.sortColName {
+		if colType.Name == w.config.sortColName {
 			keyColType = colType
 			break
 		}
@@ -430,7 +431,7 @@ func (w *fetchWorkerByLimit) run(ctx context.Context) (err error) {
 				err = errors.Join(err, closeErr)
 			}
 		}()
-		colTypes, err := sqlxRows.ColumnTypes()
+		colTypes, err := parseMultipleSqlColtypes(sqlxRows)
 		if err != nil {
 			return fmt.Errorf("failed to retrieve column types: %w", err)
 		}

@@ -129,7 +129,7 @@ type AvroSchema struct {
 }
 
 func newUserPayloadSchema() AvroSchema {
-	var userSchema = []byte(`{
+	userSchema := []byte(`{
 		"name": "mysql.users_payload",
 		"type": "record",
 		"fields": [
@@ -148,7 +148,7 @@ func newUserPayloadSchema() AvroSchema {
 }
 
 func newUserKeySchema() AvroSchema {
-	var userSchema = []byte(`{
+	userSchema := []byte(`{
 		"name": "mysql.users_key",
 		"type": "record",
 		"fields": [

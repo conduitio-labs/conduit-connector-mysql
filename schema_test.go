@@ -60,10 +60,10 @@ func TestSchema(t *testing.T) {
 	}).Error
 	is.NoErr(err)
 
-	rows, err := db.SqlxDB.Query("select * from " + tableName)
+	rows, err := db.SqlxDB.Queryx("select * from " + tableName)
 	is.NoErr(err)
 
-	colTypes, err := rows.ColumnTypes()
+	colTypes, err := parseMultipleSqlColtypes(rows)
 	is.NoErr(err)
 
 	schemaManager := newSchemaMapper()

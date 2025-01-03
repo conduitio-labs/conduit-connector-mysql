@@ -16,6 +16,7 @@ package testutils
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"sync"
@@ -24,6 +25,7 @@ import (
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	"github.com/conduitio/conduit-commons/opencdc"
+	"github.com/conduitio/conduit-connector-sdk/schema"
 	"github.com/go-mysql-org/go-mysql/canal"
 	"github.com/go-sql-driver/mysql"
 	"github.com/google/go-cmp/cmp"
@@ -33,7 +35,7 @@ import (
 	gormmysql "gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
-	"gorm.io/gorm/schema"
+	gormschema "gorm.io/gorm/schema"
 )
 
 const DSN = "root:meroxaadmin@tcp(127.0.0.1:3306)/meroxadb"
@@ -78,7 +80,7 @@ func TableName(is *is.I, db DB, model any) string {
 	err := stmt.Parse(model)
 	is.NoErr(err)
 
-	s, err := schema.Parse(model, &sync.Map{}, schema.NamingStrategy{})
+	s, err := gormschema.Parse(model, &sync.Map{}, gormschema.NamingStrategy{})
 	is.NoErr(err)
 
 	return s.Table
@@ -110,6 +112,55 @@ type User struct {
 	Username  string    `db:"username"`
 	Email     string    `db:"email"`
 	CreatedAt time.Time `db:"created_at"`
+}
+
+var (
+	userPayloadSchema = newUserPayloadSchema()
+	userKeySchema     = newUserKeySchema()
+)
+
+type AvroSchema struct {
+	Name   string `json:"name"`
+	Type   string `json:"type"`
+	Fields []struct {
+		Name string `json:"name"`
+		Type string `json:"type"`
+	} `json:"fields"`
+}
+
+func newUserPayloadSchema() AvroSchema {
+	userSchema := []byte(`{
+		"name": "mysql.users_payload",
+		"type": "record",
+		"fields": [
+			{"name": "id", "type": "long"},
+			{"name": "username", "type": "string"},
+			{"name": "email", "type": "string"},
+			{"name": "created_at", "type": "string"}
+		]
+	}`)
+	var schema AvroSchema
+	if err := json.Unmarshal(userSchema, &schema); err != nil {
+		panic(err)
+	}
+
+	return schema
+}
+
+func newUserKeySchema() AvroSchema {
+	userSchema := []byte(`{
+		"name": "mysql.users_key",
+		"type": "record",
+		"fields": [
+			{"name": "id", "type": "long"}
+		]
+	}`)
+	var schema AvroSchema
+	if err := json.Unmarshal(userSchema, &schema); err != nil {
+		panic(err)
+	}
+
+	return schema
 }
 
 func (u User) Update() User {
@@ -189,8 +240,8 @@ func ReadAndAssertCreate(
 
 	assertMetadata(is, rec.Metadata)
 
-	IsDataEqual(is, rec.Key, opencdc.StructuredData{"id": user.ID})
-	IsDataEqual(is, rec.Payload.After, user.StructuredData())
+	isDataEqual(is, rec.Key, opencdc.StructuredData{"id": user.ID})
+	isDataEqual(is, rec.Payload.After, user.StructuredData())
 
 	return rec
 }
@@ -208,11 +259,11 @@ func ReadAndAssertUpdate(
 
 	assertMetadata(is, rec.Metadata)
 
-	IsDataEqual(is, rec.Key, opencdc.StructuredData{"id": prev.ID})
-	IsDataEqual(is, rec.Key, opencdc.StructuredData{"id": next.ID})
+	isDataEqual(is, rec.Key, opencdc.StructuredData{"id": prev.ID})
+	isDataEqual(is, rec.Key, opencdc.StructuredData{"id": next.ID})
 
-	IsDataEqual(is, rec.Payload.Before, prev.StructuredData())
-	IsDataEqual(is, rec.Payload.After, next.StructuredData())
+	isDataEqual(is, rec.Payload.Before, prev.StructuredData())
+	isDataEqual(is, rec.Payload.After, next.StructuredData())
 
 	return rec
 }
@@ -231,12 +282,12 @@ func ReadAndAssertDelete(
 
 	assertMetadata(is, rec.Metadata)
 
-	IsDataEqual(is, rec.Key, opencdc.StructuredData{"id": user.ID})
+	isDataEqual(is, rec.Key, opencdc.StructuredData{"id": user.ID})
 
 	return rec
 }
 
-func IsDataEqual(is *is.I, actual, expected opencdc.Data) {
+func isDataEqual(is *is.I, actual, expected any) {
 	is.Equal("", cmp.Diff(actual, expected)) // actual (-) != expected (+)
 }
 
@@ -259,8 +310,8 @@ func AssertUserSnapshot(is *is.I, user User, rec opencdc.Record) {
 
 	assertMetadata(is, rec.Metadata)
 
-	IsDataEqual(is, rec.Key, opencdc.StructuredData{"id": user.ID})
-	IsDataEqual(is, rec.Payload.After, user.StructuredData())
+	isDataEqual(is, rec.Key, opencdc.StructuredData{"id": user.ID})
+	isDataEqual(is, rec.Payload.After, user.StructuredData())
 }
 
 func assertMetadata(is *is.I, metadata opencdc.Metadata) {
@@ -269,6 +320,42 @@ func assertMetadata(is *is.I, metadata opencdc.Metadata) {
 	is.Equal(col, "users")
 
 	is.Equal(metadata[common.ServerIDKey], ServerID)
+
+	assertSchema(is, metadata)
+}
+
+func assertSchema(is *is.I, metadata opencdc.Metadata) {
+	ctx := context.Background()
+
+	{ // payload schema
+		ver, err := metadata.GetPayloadSchemaVersion()
+		is.NoErr(err)
+		sub, err := metadata.GetPayloadSchemaSubject()
+		is.NoErr(err)
+
+		s, err := schema.Get(ctx, sub, ver)
+		is.NoErr(err)
+
+		var actualSchema AvroSchema
+		is.NoErr(json.Unmarshal(s.Bytes, &actualSchema))
+
+		isDataEqual(is, actualSchema, userPayloadSchema)
+	}
+
+	{ // key schema
+		ver, err := metadata.GetKeySchemaVersion()
+		is.NoErr(err)
+		sub, err := metadata.GetKeySchemaSubject()
+		is.NoErr(err)
+
+		s, err := schema.Get(ctx, sub, ver)
+		is.NoErr(err)
+
+		var actualSchema AvroSchema
+		is.NoErr(json.Unmarshal(s.Bytes, &actualSchema))
+
+		isDataEqual(is, actualSchema, userKeySchema)
+	}
 }
 
 func NewCanal(ctx context.Context, is *is.I) *canal.Canal {

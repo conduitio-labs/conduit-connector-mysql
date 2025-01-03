@@ -131,7 +131,7 @@ func (c *cdcIterator) Read(ctx context.Context) (rec opencdc.Record, err error) 
 	case <-c.canalDoneC:
 		return rec, fmt.Errorf("canal is closed")
 	case data := <-c.rowsEventsC:
-		rec, err := c.buildRecord(data)
+		rec, err := c.buildRecord(ctx, data)
 		if err != nil {
 			return rec, fmt.Errorf("failed to build record: %w", err)
 		}
@@ -161,15 +161,20 @@ func (c *cdcIterator) Teardown(ctx context.Context) error {
 	return nil
 }
 
-func buildPayload(columns []schema.TableColumn, rows []any) opencdc.StructuredData {
-	payload := opencdc.StructuredData{}
-	for i, col := range columns {
-		payload[col.Name] = common.FormatValue(rows[i])
+func (c *cdcIterator) buildRecord(ctx context.Context, e rowEvent) (opencdc.Record, error) {
+	switch e.Action {
+	case canal.InsertAction:
+		return c.buildRecordCreate(ctx, e)
+	case canal.DeleteAction:
+		return c.buildRecordDelete(ctx, e)
+	case canal.UpdateAction:
+		return c.buildRecordUpdate(ctx, e)
 	}
-	return payload
+
+	return opencdc.Record{}, fmt.Errorf("unknown row event action: %s", e.Action)
 }
 
-func (c *cdcIterator) buildRecord(e rowEvent) (opencdc.Record, error) {
+func (c *cdcIterator) buildRecordCreate(ctx context.Context, e rowEvent) (opencdc.Record, error) {
 	pos := common.CdcPosition{
 		Name: e.binlogName,
 		Pos:  e.Header.LogPos,
@@ -181,54 +186,119 @@ func (c *cdcIterator) buildRecord(e rowEvent) (opencdc.Record, error) {
 	metadata.SetCreatedAt(createdAt)
 	metadata[common.ServerIDKey] = strconv.FormatUint(uint64(e.Header.ServerID), 10)
 
-	switch e.Action {
-	case canal.InsertAction:
-		position := pos.ToSDKPosition()
-		payload := buildPayload(e.Table.Columns, e.Rows[0])
+	position := pos.ToSDKPosition()
+	payload := c.buildPayload(e.Table.Columns, e.Rows[0])
+	sortCol := c.config.tableSortCols[e.Table.Name]
 
-		sortCol := c.config.tableSortCols[e.Table.Name]
-
-		key, err := buildRecordKey(sortCol, payload)
-		if err != nil {
-			return opencdc.Record{}, fmt.Errorf("failed to build record key: %w", err)
-		}
-
-		return sdk.Util.Source.NewRecordCreate(position, metadata, key, payload), nil
-	case canal.DeleteAction:
-		position := pos.ToSDKPosition()
-
-		payload := buildPayload(e.Table.Columns, e.Rows[0])
-
-		sortCol := c.config.tableSortCols[e.Table.Name]
-
-		key, err := buildRecordKey(sortCol, payload)
-		if err != nil {
-			return opencdc.Record{}, fmt.Errorf("failed to build record key: %w", err)
-		}
-
-		return sdk.Util.Source.NewRecordDelete(position, metadata, key, nil), nil
-	case canal.UpdateAction:
-		position := pos.ToSDKPosition()
-		before := buildPayload(e.Table.Columns, e.Rows[0])
-		after := buildPayload(e.Table.Columns, e.Rows[1])
-
-		sortCol := c.config.tableSortCols[e.Table.Name]
-
-		key, err := buildRecordKey(sortCol, before)
-		if err != nil {
-			return opencdc.Record{}, fmt.Errorf("failed to build record key: %w", err)
-		}
-
-		return sdk.Util.Source.NewRecordUpdate(position, metadata, key, before, after), nil
+	key, err := buildRecordKey(sortCol, payload)
+	if err != nil {
+		return opencdc.Record{}, fmt.Errorf("failed to build record key: %w", err)
 	}
 
-	return opencdc.Record{}, fmt.Errorf("unknown row event action: %s", e.Action)
+	return sdk.Util.Source.NewRecordCreate(position, metadata, key, payload), nil
+}
+
+func (c *cdcIterator) buildRecordDelete(ctx context.Context, e rowEvent) (opencdc.Record, error) {
+	pos := common.CdcPosition{
+		Name: e.binlogName,
+		Pos:  e.Header.LogPos,
+	}
+
+	metadata := opencdc.Metadata{}
+	metadata.SetCollection(e.Table.Name)
+	metadata.SetCreatedAt(time.Unix(int64(e.Header.Timestamp), 0).UTC())
+	metadata[common.ServerIDKey] = strconv.FormatUint(uint64(e.Header.ServerID), 10)
+
+	tableName := e.Table.Name
+	avroCols := make([]*avroColType, len(e.Table.Columns))
+	for i, col := range e.Table.Columns {
+		avroCol, err := mysqlSchemaToAvroCol(col)
+		if err != nil {
+			return opencdc.Record{}, err
+		}
+		avroCols[i] = avroCol
+	}
+
+	payloadSubver, err := c.payloadSchema.createPayloadSchema(ctx, tableName, avroCols)
+	if err != nil {
+		return opencdc.Record{}, fmt.Errorf("failed to create cdc payload schema for table %s: %w", tableName, err)
+	}
+
+	metadata.SetPayloadSchemaSubject(payloadSubver.subject)
+	metadata.SetPayloadSchemaVersion(payloadSubver.version)
+
+	position := pos.ToSDKPosition()
+	payload := c.buildPayload(e.Table.Columns, e.Rows[0])
+
+	// key schema
+	var key opencdc.Data
+	keyCol := c.config.tableSortCols[tableName]
+	if keyCol == "" {
+		keyVal := fmt.Sprintf("%s_%d", e.binlogName, e.Header.LogPos)
+		key = opencdc.RawData(keyVal)
+	} else {
+		var keyColType *avroColType
+		for _, avroCol := range avroCols {
+			if keyCol == avroCol.Name {
+				keyColType = avroCol
+			}
+		}
+		if keyColType == nil {
+			return opencdc.Record{}, fmt.Errorf("failed to find key schema column type for table %s", tableName)
+		}
+
+		keySubver, err := c.keySchema.createKeySchema(ctx, tableName, keyColType)
+		if err != nil {
+			return opencdc.Record{}, fmt.Errorf("failed to create key schema for table %s: %w", tableName, err)
+		}
+
+		metadata.SetKeySchemaSubject(keySubver.subject)
+		metadata.SetKeySchemaVersion(keySubver.version)
+		keyVal := payload[keyCol]
+		keyVal = c.keySchema.formatValue(keyCol, keyVal)
+
+		key = opencdc.StructuredData{keyCol: keyVal}
+	}
+
+	return sdk.Util.Source.NewRecordDelete(position, metadata, key, nil), nil
+}
+
+func (c *cdcIterator) buildRecordUpdate(ctx context.Context, e rowEvent) (opencdc.Record, error) {
+	pos := common.CdcPosition{
+		Name: e.binlogName,
+		Pos:  e.Header.LogPos,
+	}
+
+	metadata := opencdc.Metadata{}
+	metadata.SetCollection(e.Table.Name)
+	createdAt := time.Unix(int64(e.Header.Timestamp), 0).UTC()
+	metadata.SetCreatedAt(createdAt)
+	metadata[common.ServerIDKey] = strconv.FormatUint(uint64(e.Header.ServerID), 10)
+
+	position := pos.ToSDKPosition()
+	before := c.buildPayload(e.Table.Columns, e.Rows[0])
+	after := c.buildPayload(e.Table.Columns, e.Rows[1])
+	sortCol := c.config.tableSortCols[e.Table.Name]
+
+	key, err := buildRecordKey(sortCol, before)
+	if err != nil {
+		return opencdc.Record{}, fmt.Errorf("failed to build record key: %w", err)
+	}
+
+	return sdk.Util.Source.NewRecordUpdate(position, metadata, key, before, after), nil
+}
+
+func (c *cdcIterator) buildPayload(
+	columns []schema.TableColumn, rows []any) opencdc.StructuredData {
+	payload := opencdc.StructuredData{}
+	for i, col := range columns {
+		payload[col.Name] = c.payloadSchema.formatValue(col.Name, rows[i])
+	}
+	return payload
 }
 
 func buildRecordKey(
-	primaryKey string,
-	payload opencdc.StructuredData,
-) (opencdc.StructuredData, error) {
+	primaryKey string, payload opencdc.StructuredData) (opencdc.StructuredData, error) {
 	val, ok := payload[primaryKey]
 	if !ok {
 		return nil, fmt.Errorf("key %s not found in payload", primaryKey)

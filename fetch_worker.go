@@ -285,11 +285,6 @@ func (w *fetchWorkerByKey) buildFetchData(
 		SnapshotEnd: w.end,
 	}
 
-	keyVal, ok := row[w.config.sortColName]
-	if !ok {
-		return fetchData{}, fmt.Errorf("key %s not found in payload", w.config.sortColName)
-	}
-
 	payloadSubver, err := w.payloadSchema.createPayloadSchema(ctx, w.config.table, colTypes)
 	if err != nil {
 		return fetchData{}, fmt.Errorf("failed to create payload schema for table %s: %w", w.config.table, err)
@@ -300,7 +295,6 @@ func (w *fetchWorkerByKey) buildFetchData(
 		payload[key] = w.payloadSchema.formatValue(key, val)
 	}
 
-	key := opencdc.StructuredData{w.config.sortColName: keyVal}
 	var keyColType *avroColType
 	for _, colType := range colTypes {
 		if colType.Name == w.config.sortColName {
@@ -317,6 +311,13 @@ func (w *fetchWorkerByKey) buildFetchData(
 		return fetchData{}, fmt.Errorf("failed to create key schema for table %s: %w", w.config.table, err)
 	}
 
+	keyVal, ok := row[w.config.sortColName]
+	if !ok {
+		return fetchData{}, fmt.Errorf("key %s not found in payload", w.config.sortColName)
+	}
+	keyVal = w.keySchema.formatValue(w.config.sortColName, keyVal)
+
+	key := opencdc.StructuredData{w.config.sortColName: keyVal}
 	return fetchData{
 		key:           key,
 		table:         w.config.table,
@@ -475,9 +476,7 @@ func (w *fetchWorkerByLimit) run(ctx context.Context) (err error) {
 				// to do it in the future.
 				position: common.TablePosition{},
 			}
-
 		}
-
 	}
 
 	return nil

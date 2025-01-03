@@ -17,9 +17,7 @@ package common
 import (
 	"context"
 	"fmt"
-	"math"
 	"strconv"
-	"time"
 
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/go-mysql-org/go-mysql/canal"
@@ -28,26 +26,6 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/siddontang/go-log/log"
 )
-
-func FormatValue(val any) any {
-	switch val := val.(type) {
-	case time.Time:
-		return val.UTC()
-	case *time.Time:
-		return val.UTC()
-	case []uint8:
-		return string(val)
-	case uint64:
-		if val <= math.MaxInt64 {
-			return int64(val)
-		}
-
-		// this will make avro encoding fail, as it doesn't support uint64.
-		return val
-	default:
-		return val
-	}
-}
 
 type CanalConfig struct {
 	*mysql.Config

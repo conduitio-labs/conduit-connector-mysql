@@ -174,7 +174,7 @@ func (s *schemaMapper) createKeySchema(
 func (s *schemaMapper) formatValue(column string, value any) any {
 	t, found := s.colTypes[column]
 	if !found {
-		msg := fmt.Sprint("column", column, "not found")
+		msg := fmt.Sprintf("column \"%v\" not found", column)
 		panic(msg)
 	}
 

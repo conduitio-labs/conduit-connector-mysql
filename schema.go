@@ -21,8 +21,9 @@ type schemaMapper struct {
 }
 
 func newSchemaMapper() *schemaMapper {
-	// all fields can be nil, but we don't want consumers to have to worry about that
-	return &schemaMapper{}
+	return &schemaMapper{
+		colTypes: make(map[string]avro.Type),
+	}
 }
 
 // avroColType represents the avro type of a mysql column.
@@ -70,17 +71,17 @@ func parseMultipleSqlColtypes(rows *sqlx.Rows) ([]*avroColType, error) {
 
 func mysqlSchemaToAvroCol(tableCol mysqlschema.TableColumn) (*avroColType, error) {
 	var avroType avro.Type
-	switch typename := tableCol.RawType; typename {
-	case "BIGINT":
+	switch tableCol.Type {
+	case mysqlschema.TYPE_NUMBER:
 		avroType = avro.Long
-	case "INT":
-		avroType = avro.Int
-	case "DATETIME":
+	case mysqlschema.TYPE_FLOAT:
+		avroType = avro.Float
+	case mysqlschema.TYPE_DATETIME:
 		avroType = avro.String
-	case "VARCHAR", "TEXT":
+	case mysqlschema.TYPE_STRING:
 		avroType = avro.String
 	default:
-		return nil, fmt.Errorf("unsupported column type %s", typename)
+		return nil, fmt.Errorf("unsupported column type %s for column %s", tableCol.RawType, tableCol.Name)
 	}
 
 	return &avroColType{avroType, tableCol.Name}, nil
@@ -157,6 +158,8 @@ func (s *schemaMapper) createKeySchema(
 	if err != nil {
 		return nil, err
 	}
+
+	s.colTypes[colType.Name] = field.Type().Type()
 
 	schema, err := schema.Create(ctx, schema.TypeAvro, recordSchema.Name(), []byte(recordSchema.String()))
 	if err != nil {

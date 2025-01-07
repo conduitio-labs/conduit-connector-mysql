@@ -12,11 +12,6 @@ import (
 	"github.com/matryer/is"
 )
 
-type TableSchemaTest struct {
-	F1 string `gorm:"column:f1;type:varchar(255)"`
-	F2 int    `gorm:"column:f2;type:int"`
-}
-
 var tableName = "table_schema_tests"
 
 func field(is *is.I, fieldName string, t avro.Type) *avro.Field {
@@ -33,8 +28,8 @@ func toMap(is *is.I, bs []byte) map[string]any {
 	return m
 }
 
-func expectedRecordSchema(is *is.I) map[string]any {
-	recordSchema, err := avro.NewRecordSchema(tableName, "mysql", []*avro.Field{
+func expectedPayloadRecordSchema(is *is.I) map[string]any {
+	recordSchema, err := avro.NewRecordSchema(tableName+"_payload", "mysql", []*avro.Field{
 		field(is, "f1", avro.String),
 		field(is, "f2", avro.Long),
 	})
@@ -46,19 +41,32 @@ func expectedRecordSchema(is *is.I) map[string]any {
 	return toMap(is, bs)
 }
 
-func TestSchema(t *testing.T) {
+func expectedKeyRecordSchema(is *is.I) map[string]any {
+	recordSchema, err := avro.NewRecordSchema(tableName+"_key", "mysql", []*avro.Field{
+		field(is, "f1", avro.String),
+	})
+	is.NoErr(err)
+
+	bs, err := recordSchema.MarshalJSON()
+	is.NoErr(err)
+
+	return toMap(is, bs)
+}
+
+func TestSchema_Payload(t *testing.T) {
 	is := is.New(t)
 	db := testutils.NewDB(t)
 	ctx := context.Background()
 
-	is.NoErr(db.Migrator().DropTable(&TableSchemaTest{}))
-	is.NoErr(db.AutoMigrate(&TableSchemaTest{}))
+	type Table struct {
+		F1 string `gorm:"column:f1;type:varchar(255)"`
+		F2 int    `gorm:"column:f2;type:int"`
+	}
 
-	err := db.Create(&TableSchemaTest{
-		F1: "test",
-		F2: 1,
-	}).Error
-	is.NoErr(err)
+	is.NoErr(db.Migrator().DropTable(&Table{}))
+	is.NoErr(db.AutoMigrate(&Table{}))
+
+	is.NoErr(db.Create(&Table{F1: "test", F2: 1}).Error)
 
 	rows, err := db.SqlxDB.Queryx("select * from " + tableName)
 	is.NoErr(err)
@@ -66,8 +74,9 @@ func TestSchema(t *testing.T) {
 	colTypes, err := parseMultipleSqlColtypes(rows)
 	is.NoErr(err)
 
-	schemaManager := newSchemaMapper()
-	_, err = schemaManager.createPayloadSchema(ctx, tableName, colTypes)
+	// Test payload schema
+	payloadSchemaManager := newSchemaMapper()
+	_, err = payloadSchemaManager.createPayloadSchema(ctx, tableName, colTypes)
 	is.NoErr(err)
 
 	row := db.SqlxDB.QueryRowx("select * from " + tableName)
@@ -76,7 +85,7 @@ func TestSchema(t *testing.T) {
 
 	formatted := map[string]any{}
 	for k, v := range dest {
-		formatted[k] = schemaManager.formatValue(k, v)
+		formatted[k] = payloadSchemaManager.formatValue(k, v)
 	}
 
 	expected := map[string]any{
@@ -86,11 +95,54 @@ func TestSchema(t *testing.T) {
 
 	is.Equal("", cmp.Diff(expected, formatted))
 
-	s, err := schema.Get(ctx, tableName, 1)
+	s, err := schema.Get(ctx, tableName+"_payload", 1)
 	is.NoErr(err)
 
 	actualSchema := toMap(is, s.Bytes)
-	expectedSchema := expectedRecordSchema(is)
+	expectedSchema := expectedPayloadRecordSchema(is)
 
 	is.Equal("", cmp.Diff(expectedSchema, actualSchema))
+}
+
+func TestSchema_Key(t *testing.T) {
+	is := is.New(t)
+	db := testutils.NewDB(t)
+	ctx := context.Background()
+
+	type Table struct {
+		ID int    `gorm:"column:id;type:int"`
+		F1 string `gorm:"column:f1;type:varchar(255)"`
+	}
+
+	is.NoErr(db.Migrator().DropTable(&Table{}))
+	is.NoErr(db.AutoMigrate(&Table{}))
+
+	is.NoErr(db.Create(&Table{ID: 1, F1: "test"}).Error)
+
+	rows, err := db.SqlxDB.Queryx("select * from " + tableName)
+	is.NoErr(err)
+
+	colTypes, err := parseMultipleSqlColtypes(rows)
+	is.NoErr(err)
+
+	keySchemaManager := newSchemaMapper()
+
+	var f1Col *avroColType
+	for _, colType := range colTypes {
+		if colType.Name == "f1" {
+			f1Col = colType
+			break
+		}
+	}
+
+	_, err = keySchemaManager.createKeySchema(ctx, tableName, f1Col)
+	is.NoErr(err)
+
+	s, err := schema.Get(ctx, tableName+"_key", 1)
+	is.NoErr(err)
+
+	actualKeySchema := toMap(is, s.Bytes)
+	expectedKeySchema := expectedKeyRecordSchema(is)
+
+	is.Equal("", cmp.Diff(expectedKeySchema, actualKeySchema))
 }

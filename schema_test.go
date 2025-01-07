@@ -12,7 +12,7 @@ import (
 	"github.com/matryer/is"
 )
 
-var tableName = "table_schema_tests"
+var tableName = "schema_examples"
 
 func field(is *is.I, fieldName string, t avro.Type) *avro.Field {
 	field, err := avro.NewField(fieldName, avro.NewPrimitiveSchema(t, nil))
@@ -58,15 +58,15 @@ func TestSchema_Payload(t *testing.T) {
 	db := testutils.NewDB(t)
 	ctx := context.Background()
 
-	type Table struct {
+	type SchemaExample struct {
 		F1 string `gorm:"column:f1;type:varchar(255)"`
 		F2 int    `gorm:"column:f2;type:int"`
 	}
 
-	is.NoErr(db.Migrator().DropTable(&Table{}))
-	is.NoErr(db.AutoMigrate(&Table{}))
+	is.NoErr(db.Migrator().DropTable(&SchemaExample{}))
+	is.NoErr(db.AutoMigrate(&SchemaExample{}))
 
-	is.NoErr(db.Create(&Table{F1: "test", F2: 1}).Error)
+	is.NoErr(db.Create(&SchemaExample{F1: "test", F2: 1}).Error)
 
 	rows, err := db.SqlxDB.Queryx("select * from " + tableName)
 	is.NoErr(err)
@@ -109,15 +109,15 @@ func TestSchema_Key(t *testing.T) {
 	db := testutils.NewDB(t)
 	ctx := context.Background()
 
-	type Table struct {
+	type SchemaExample struct {
 		ID int    `gorm:"column:id;type:int"`
 		F1 string `gorm:"column:f1;type:varchar(255)"`
 	}
 
-	is.NoErr(db.Migrator().DropTable(&Table{}))
-	is.NoErr(db.AutoMigrate(&Table{}))
+	is.NoErr(db.Migrator().DropTable(&SchemaExample{}))
+	is.NoErr(db.AutoMigrate(&SchemaExample{}))
 
-	is.NoErr(db.Create(&Table{ID: 1, F1: "test"}).Error)
+	is.NoErr(db.Create(&SchemaExample{ID: 1, F1: "test"}).Error)
 
 	rows, err := db.SqlxDB.Queryx("select * from " + tableName)
 	is.NoErr(err)

@@ -26,7 +26,7 @@ import (
 )
 
 func testCombinedIterator(ctx context.Context, t *testing.T, is *is.I) (common.Iterator, func()) {
-	db := testutils.Connection(t)
+	db := testutils.NewDB(t).SqlxDB
 
 	config, err := mysql.ParseDSN(testutils.DSN)
 	is.NoErr(err)
@@ -48,7 +48,7 @@ func testCombinedIterator(ctx context.Context, t *testing.T, is *is.I) (common.I
 func TestCombinedIterator_SnapshotAndCDC(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
-	db := testutils.Connection(t)
+	db := testutils.NewDB(t)
 
 	testutils.RecreateUsersTable(is, db)
 

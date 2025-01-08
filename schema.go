@@ -204,7 +204,7 @@ func (s *schemaMapper) formatValue(column string, value any) any {
 	case avro.String:
 		switch v := value.(type) {
 		case time.Time:
-			return v.UTC().Format(time.RFC3339Nano)
+			return v.UTC()
 		case []uint8:
 			return string(v)
 		case string:

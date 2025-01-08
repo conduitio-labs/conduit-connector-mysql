@@ -192,7 +192,7 @@ func TestSnapshotIterator_RestartOnPosition(t *testing.T) {
 
 	is.Equal(len(recs), 100)
 	for i, rec := range recs {
-		testutils.AssertUserSnapshot(is, users[i], rec)
+		testutils.AssertUserSnapshot(ctx, is, users[i], rec)
 	}
 }
 
@@ -359,7 +359,7 @@ func TestSnapshotIterator_DeleteEndWhileSnapshotting(t *testing.T) {
 		is.NoErr(err)
 		is.NoErr(iterator.Ack(ctx, rec.Position))
 
-		testutils.AssertUserSnapshot(is, user, rec)
+		testutils.AssertUserSnapshot(ctx, is, user, rec)
 	}
 
 	_, err = iterator.Read(ctx)

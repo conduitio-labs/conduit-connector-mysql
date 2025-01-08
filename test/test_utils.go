@@ -238,7 +238,7 @@ func ReadAndAssertCreate(
 
 	is.Equal(rec.Operation, opencdc.OperationCreate)
 
-	assertMetadata(is, rec.Metadata)
+	assertMetadata(ctx, is, rec.Metadata)
 
 	isDataEqual(is, rec.Key, opencdc.StructuredData{"id": user.ID})
 	isDataEqual(is, rec.Payload.After, user.StructuredData())
@@ -257,7 +257,7 @@ func ReadAndAssertUpdate(
 
 	is.Equal(rec.Operation, opencdc.OperationUpdate)
 
-	assertMetadata(is, rec.Metadata)
+	assertMetadata(ctx, is, rec.Metadata)
 
 	isDataEqual(is, rec.Key, opencdc.StructuredData{"id": prev.ID})
 	isDataEqual(is, rec.Key, opencdc.StructuredData{"id": next.ID})
@@ -280,7 +280,7 @@ func ReadAndAssertDelete(
 
 	is.Equal(rec.Operation, opencdc.OperationDelete)
 
-	assertMetadata(is, rec.Metadata)
+	assertMetadata(ctx, is, rec.Metadata)
 
 	isDataEqual(is, rec.Key, opencdc.StructuredData{"id": user.ID})
 
@@ -300,33 +300,31 @@ func ReadAndAssertSnapshot(
 	is.NoErr(err)
 	is.NoErr(iterator.Ack(ctx, rec.Position))
 
-	AssertUserSnapshot(is, user, rec)
+	AssertUserSnapshot(ctx, is, user, rec)
 	return rec
 }
 
-func AssertUserSnapshot(is *is.I, user User, rec opencdc.Record) {
+func AssertUserSnapshot(ctx context.Context, is *is.I, user User, rec opencdc.Record) {
 	is.Helper()
 	is.Equal(rec.Operation, opencdc.OperationSnapshot)
 
-	assertMetadata(is, rec.Metadata)
+	assertMetadata(ctx, is, rec.Metadata)
 
 	isDataEqual(is, rec.Key, opencdc.StructuredData{"id": user.ID})
 	isDataEqual(is, rec.Payload.After, user.StructuredData())
 }
 
-func assertMetadata(is *is.I, metadata opencdc.Metadata) {
+func assertMetadata(ctx context.Context, is *is.I, metadata opencdc.Metadata) {
 	col, err := metadata.GetCollection()
 	is.NoErr(err)
 	is.Equal(col, "users")
 
 	is.Equal(metadata[common.ServerIDKey], ServerID)
 
-	assertSchema(is, metadata)
+	assertSchema(ctx, is, metadata)
 }
 
-func assertSchema(is *is.I, metadata opencdc.Metadata) {
-	ctx := context.Background()
-
+func assertSchema(ctx context.Context, is *is.I, metadata opencdc.Metadata) {
 	{ // payload schema
 		ver, err := metadata.GetPayloadSchemaVersion()
 		is.NoErr(err)

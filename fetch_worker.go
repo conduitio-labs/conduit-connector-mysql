@@ -253,7 +253,7 @@ func (w *fetchWorkerByKey) selectRowsChunk(
 
 	chunk := &rowsChunk{}
 
-	chunk.mysqlAvroCols, err = parseMultipleSqlColtypes(rows)
+	chunk.mysqlAvroCols, err = parseMultipleSQLColtypes(rows)
 	if err != nil {
 		return nil, fmt.Errorf("failed to retrieve column types: %w", err)
 	}
@@ -337,7 +337,6 @@ type fetchWorkerByLimit struct {
 	end    uint64
 
 	payloadSchema *schemaMapper
-	keySchema     *schemaMapper
 }
 
 func newFetchWorkerByLimit(
@@ -432,7 +431,7 @@ func (w *fetchWorkerByLimit) run(ctx context.Context) (err error) {
 				err = errors.Join(err, closeErr)
 			}
 		}()
-		colTypes, err := parseMultipleSqlColtypes(sqlxRows)
+		colTypes, err := parseMultipleSQLColtypes(sqlxRows)
 		if err != nil {
 			return fmt.Errorf("failed to retrieve column types: %w", err)
 		}
@@ -462,7 +461,9 @@ func (w *fetchWorkerByLimit) run(ctx context.Context) (err error) {
 				payload[key] = w.payloadSchema.formatValue(key, val)
 			}
 
-			keyStr := fmt.Sprintf("%s_%d", w.config.table, offset+uint64(i))
+			//nolint:gosec // i is guaranteed to be greater than 0
+			rowNum := offset + uint64(i)
+			keyStr := fmt.Sprintf("%s_%d", w.config.table, rowNum)
 			key := opencdc.RawData([]byte(keyStr))
 
 			w.data <- fetchData{

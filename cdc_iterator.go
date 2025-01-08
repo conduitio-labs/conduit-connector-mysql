@@ -197,19 +197,15 @@ func (c *cdcIterator) buildRecord(ctx context.Context, e rowEvent) (opencdc.Reco
 	// payload really is just an alias, but makes buildRecord easier to understand.
 	payload = payloadBefore
 
-	var key opencdc.Data
 	keyCol := c.config.tableSortCols[tableName]
+	var key opencdc.Data
+
 	if keyCol == "" {
 		keyVal := fmt.Sprintf("%s_%d", e.binlogName, e.Header.LogPos)
 		key = opencdc.RawData(keyVal)
 	} else {
-		var keyColType *avroColType
-		for _, avroCol := range avroCols {
-			if keyCol == avroCol.Name {
-				keyColType = avroCol
-			}
-		}
-		if keyColType == nil {
+		keyColType, found := findKeyColType(avroCols, keyCol)
+		if !found {
 			return opencdc.Record{}, fmt.Errorf("failed to find key schema column type for table %s", tableName)
 		}
 
@@ -245,9 +241,19 @@ func (c *cdcIterator) buildRecord(ctx context.Context, e rowEvent) (opencdc.Reco
 	}
 }
 
+func findKeyColType(avroCols []*avroColType, keyCol string) (*avroColType, bool) {
+	for _, avroCol := range avroCols {
+		if keyCol == avroCol.Name {
+			return avroCol, true
+		}
+	}
+	return nil, false
+}
+
 func (c *cdcIterator) buildPayload(
 	payloadSchema *schemaMapper,
-	columns []schema.TableColumn, rows []any) opencdc.StructuredData {
+	columns []schema.TableColumn, rows []any,
+) opencdc.StructuredData {
 	payload := opencdc.StructuredData{}
 	for i, col := range columns {
 		payload[col.Name] = payloadSchema.formatValue(col.Name, rows[i])

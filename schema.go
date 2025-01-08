@@ -1,3 +1,17 @@
+// Copyright © 2024 Meroxa, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package mysql
 
 import (
@@ -50,17 +64,17 @@ func sqlColTypeToAvroCol(colType *sql.ColumnType) (*avroColType, error) {
 	return &avroColType{avroType, colType.Name()}, nil
 }
 
-func parseMultipleSqlColtypes(rows *sqlx.Rows) ([]*avroColType, error) {
+func parseMultipleSQLColtypes(rows *sqlx.Rows) ([]*avroColType, error) {
 	colTypes, err := rows.ColumnTypes()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to retrieve column types: %w", err)
 	}
 
 	avroCols := make([]*avroColType, len(colTypes))
 	for i, colType := range colTypes {
 		avroCol, err := sqlColTypeToAvroCol(colType)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to retrieve column types: %w", err)
 		}
 
 		avroCols[i] = avroCol
@@ -92,13 +106,13 @@ func colTypeToAvroField(avroCol *avroColType) (*avro.Field, error) {
 
 	nameField, err := avro.NewField(avroCol.Name, primitive)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create field for column %s: %w", avroCol.Name, err)
+		return nil, fmt.Errorf("failed to create avro field for column %s: %w", avroCol.Name, err)
 	}
 
 	return nameField, nil
 }
 
-// subVerSchema represents the (sub)ject and the (ver)sion of a schema
+// subVerSchema represents the (sub)ject and the (ver)sion of a schema.
 type subVerSchema struct {
 	subject string
 	version int
@@ -112,11 +126,11 @@ func (s *schemaMapper) createPayloadSchema(
 	}
 
 	s.colTypes = make(map[string]avro.Type)
-	var fields []*avro.Field
+	fields := make([]*avro.Field, 0, len(mysqlCols))
 	for _, colType := range mysqlCols {
 		field, err := colTypeToAvroField(colType)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to create payload schema: %w", err)
 		}
 
 		fields = append(fields, field)
@@ -126,12 +140,12 @@ func (s *schemaMapper) createPayloadSchema(
 
 	recordSchema, err := avro.NewRecordSchema(table+"_payload", "mysql", fields)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create payload schema: %w", err)
 	}
 
 	schema, err := schema.Create(ctx, schema.TypeAvro, recordSchema.Name(), []byte(recordSchema.String()))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create payload schema: %w", err)
 	}
 
 	s.schema = &subVerSchema{
@@ -151,19 +165,19 @@ func (s *schemaMapper) createKeySchema(
 
 	field, err := colTypeToAvroField(colType)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create key schema: %w", err)
 	}
 
 	recordSchema, err := avro.NewRecordSchema(table+"_key", "mysql", []*avro.Field{field})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create key schema: %w", err)
 	}
 
 	s.colTypes[colType.Name] = field.Type().Type()
 
 	schema, err := schema.Create(ctx, schema.TypeAvro, recordSchema.Name(), []byte(recordSchema.String()))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create key schema: %w", err)
 	}
 
 	s.schema = &subVerSchema{
@@ -181,28 +195,111 @@ func (s *schemaMapper) formatValue(column string, value any) any {
 		panic(msg)
 	}
 
+	// Handle nil values
+	if value == nil {
+		return nil
+	}
+
 	switch t {
 	case avro.String:
 		switch v := value.(type) {
 		case time.Time:
-			return v.UTC()
+			return v.UTC().Format(time.RFC3339Nano)
 		case []uint8:
 			return string(v)
+		case string:
+			return v
 		}
-
-		return value
-	case avro.Int, avro.Long:
+	case avro.Int:
 		switch v := value.(type) {
+		case int8:
+			return int32(v)
+		case uint8:
+			return int32(v)
+		case int16:
+			return int32(v)
+		case uint16:
+			return int32(v)
+		case int32:
+			return v
+		case uint32:
+			if v <= math.MaxInt32 {
+				return int32(v)
+			}
+			return v
+		case int:
+			if v > math.MaxInt32 || v < math.MinInt32 {
+				return v
+			}
+			return int32(v)
+		case int64:
+			if v > math.MaxInt32 || v < math.MinInt32 {
+				return v
+			}
+			return int32(v)
+		case uint64:
+			if v > math.MaxInt32 {
+				return v
+			}
+			return int32(v)
+		}
+	case avro.Long:
+		switch v := value.(type) {
+		case int8:
+			return int64(v)
+		case uint8:
+			return int64(v)
+		case int16:
+			return int64(v)
+		case uint16:
+			return int64(v)
+		case int32:
+			return int64(v)
+		case uint32:
+			return int64(v)
+		case int:
+			return int64(v)
+		case int64:
+			return v
 		case uint64:
 			if v <= math.MaxInt64 {
 				return int64(v)
 			}
-			// this will make avro encoding fail, as it doesn't support uint64.
+			// This will make avro encoding fail as it doesn't support uint64
 			return v
 		}
-
-		return value
+	case avro.Float:
+		switch v := value.(type) {
+		case float32:
+			return v
+		case float64:
+			return float32(v)
+		}
+	case avro.Double:
+		switch v := value.(type) {
+		case float32:
+			return float64(v)
+		case float64:
+			return v
+		}
+	case avro.Boolean:
+		switch v := value.(type) {
+		case bool:
+			return v
+		case int8:
+			return v != 0
+		case uint8:
+			return v != 0
+		}
+	case avro.Bytes:
+		switch v := value.(type) {
+		case []byte:
+			return v
+		case string:
+			return []byte(v)
+		}
 	default:
 		return value
 	}
+	return value
 }

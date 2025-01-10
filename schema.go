@@ -22,7 +22,6 @@ import (
 	"strconv"
 	"time"
 
-	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/conduitio/conduit-connector-sdk/schema"
 	mysqlschema "github.com/go-mysql-org/go-mysql/schema"
 	"github.com/hamba/avro/v2"

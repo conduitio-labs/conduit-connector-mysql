@@ -49,14 +49,50 @@ type avroColType struct {
 func sqlColTypeToAvroCol(colType *sql.ColumnType) (*avroColType, error) {
 	var avroType avro.Type
 	switch typename := colType.DatabaseTypeName(); typename {
-	case "BIGINT":
-		avroType = avro.Long
+	// Numeric Types
+	case "TINYINT":
+		avroType = avro.Int
+	case "SMALLINT":
+		avroType = avro.Int
+	case "MEDIUMINT":
+		avroType = avro.Int
 	case "INT":
 		avroType = avro.Int
-	case "DATETIME":
+	case "BIGINT":
+		avroType = avro.Long
+	case "DECIMAL", "NUMERIC":
+		avroType = avro.Double
+	case "FLOAT":
+		avroType = avro.Double
+	case "DOUBLE":
+		avroType = avro.Double
+	case "BIT":
+		avroType = avro.Bytes
+
+	// String Types
+	case "CHAR", "VARCHAR":
 		avroType = avro.String
-	case "VARCHAR", "TEXT":
+	case "TINYTEXT", "TEXT", "MEDIUMTEXT", "LONGTEXT":
 		avroType = avro.String
+
+	// Binary Types
+	case "BINARY", "VARBINARY":
+		avroType = avro.Bytes
+	case "TINYBLOB", "BLOB", "MEDIUMBLOB", "LONGBLOB":
+		avroType = avro.Bytes
+
+	// Date and Time Types
+	case "DATE", "TIME", "DATETIME", "TIMESTAMP":
+		avroType = avro.String
+	case "YEAR":
+		avroType = avro.Long
+
+	// Other Types
+	case "ENUM", "SET":
+		avroType = avro.String
+	case "JSON":
+		avroType = avro.String
+
 	default:
 		return nil, fmt.Errorf("unsupported column type %s", typename)
 	}
@@ -64,7 +100,7 @@ func sqlColTypeToAvroCol(colType *sql.ColumnType) (*avroColType, error) {
 	return &avroColType{avroType, colType.Name()}, nil
 }
 
-func parseMultipleSQLColtypes(rows *sqlx.Rows) ([]*avroColType, error) {
+func sqlxRowsToAvroCol(rows *sqlx.Rows) ([]*avroColType, error) {
 	colTypes, err := rows.ColumnTypes()
 	if err != nil {
 		return nil, fmt.Errorf("failed to retrieve column types: %w", err)
@@ -87,12 +123,42 @@ func mysqlSchemaToAvroCol(tableCol mysqlschema.TableColumn) (*avroColType, error
 	var avroType avro.Type
 	switch tableCol.Type {
 	case mysqlschema.TYPE_NUMBER:
-		avroType = avro.Long
+		// Handle different numeric types
+		switch tableCol.RawType {
+		case "tinyint", "smallint", "mediumint", "int":
+			avroType = avro.Int
+		case "bigint", "year":
+			avroType = avro.Long
+		case "decimal", "numeric", "float", "double":
+			avroType = avro.Double
+		case "bit":
+			avroType = avro.Boolean
+		default:
+			avroType = avro.Long
+		}
 	case mysqlschema.TYPE_FLOAT:
-		avroType = avro.Float
+		avroType = avro.Double
+	case mysqlschema.TYPE_ENUM:
+		avroType = avro.String
+	case mysqlschema.TYPE_SET:
+		avroType = avro.String
 	case mysqlschema.TYPE_DATETIME:
 		avroType = avro.String
+	case mysqlschema.TYPE_TIMESTAMP:
+		avroType = avro.String
+	case mysqlschema.TYPE_DATE:
+		avroType = avro.String
+	case mysqlschema.TYPE_TIME:
+		avroType = avro.String
 	case mysqlschema.TYPE_STRING:
+		// Handle different string types
+		switch tableCol.RawType {
+		case "binary", "varbinary", "tinyblob", "blob", "mediumblob", "longblob":
+			avroType = avro.Bytes
+		default:
+			avroType = avro.String
+		}
+	case mysqlschema.TYPE_JSON:
 		avroType = avro.String
 	default:
 		return nil, fmt.Errorf("unsupported column type %s for column %s", tableCol.RawType, tableCol.Name)
@@ -188,9 +254,14 @@ func (s *schemaMapper) createKeySchema(
 	return s.schema, nil
 }
 
+// formatValue uses the stored avro types to format the value. This way we can
+// better control what the mysql driver returns.
 func (s *schemaMapper) formatValue(column string, value any) any {
 	t, found := s.colTypes[column]
 	if !found {
+		// In snapshot mode, this should never happen.
+		// In CDC mode, to prevent getting into here we make sure to instantiate the
+		// schema mapper for each row event.
 		msg := fmt.Sprintf("column \"%v\" not found", column)
 		panic(msg)
 	}

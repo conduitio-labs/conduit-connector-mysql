@@ -253,7 +253,7 @@ func (w *fetchWorkerByKey) selectRowsChunk(
 
 	chunk := &rowsChunk{}
 
-	chunk.mysqlAvroCols, err = parseMultipleSQLColtypes(rows)
+	chunk.mysqlAvroCols, err = sqlxRowsToAvroCol(rows)
 	if err != nil {
 		return nil, fmt.Errorf("failed to retrieve column types: %w", err)
 	}
@@ -431,7 +431,7 @@ func (w *fetchWorkerByLimit) run(ctx context.Context) (err error) {
 				err = errors.Join(err, closeErr)
 			}
 		}()
-		colTypes, err := parseMultipleSQLColtypes(sqlxRows)
+		colTypes, err := sqlxRowsToAvroCol(sqlxRows)
 		if err != nil {
 			return fmt.Errorf("failed to retrieve column types: %w", err)
 		}

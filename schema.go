@@ -124,7 +124,6 @@ func mysqlSchemaToAvroCol(tableCol mysqlschema.TableColumn) (*avroColType, error
 	var avroType avro.Type
 	switch tableCol.Type {
 	case mysqlschema.TYPE_NUMBER:
-		// Handle different numeric types
 		switch tableCol.RawType {
 		case "tinyint", "smallint", "mediumint", "int":
 			avroType = avro.Int
@@ -133,11 +132,15 @@ func mysqlSchemaToAvroCol(tableCol mysqlschema.TableColumn) (*avroColType, error
 		case "decimal", "numeric", "float", "double":
 			avroType = avro.Double
 		case "bit":
-			avroType = avro.Boolean
+			avroType = avro.Bytes
 		default:
-			avroType = avro.Long
+			avroType = avro.Int
 		}
+	case mysqlschema.TYPE_MEDIUM_INT:
+		avroType = avro.Int
 	case mysqlschema.TYPE_FLOAT:
+		avroType = avro.Double
+	case mysqlschema.TYPE_DECIMAL:
 		avroType = avro.Double
 	case mysqlschema.TYPE_ENUM:
 		avroType = avro.String
@@ -151,16 +154,21 @@ func mysqlSchemaToAvroCol(tableCol mysqlschema.TableColumn) (*avroColType, error
 		avroType = avro.String
 	case mysqlschema.TYPE_TIME:
 		avroType = avro.String
+	case mysqlschema.TYPE_BIT:
+		avroType = avro.Bytes
+	case mysqlschema.TYPE_JSON:
+		avroType = avro.String
+	case mysqlschema.TYPE_BINARY:
+		avroType = avro.Bytes
+	case mysqlschema.TYPE_POINT:
+		avroType = avro.String
 	case mysqlschema.TYPE_STRING:
-		// Handle different string types
 		switch tableCol.RawType {
 		case "binary", "varbinary", "tinyblob", "blob", "mediumblob", "longblob":
 			avroType = avro.Bytes
 		default:
 			avroType = avro.String
 		}
-	case mysqlschema.TYPE_JSON:
-		avroType = avro.String
 	default:
 		return nil, fmt.Errorf("unsupported column type %s for column %s", tableCol.RawType, tableCol.Name)
 	}
@@ -280,7 +288,20 @@ func (s *schemaMapper) formatValue(column string, value any) any {
 		case []uint8:
 			return string(v)
 		case string:
-			return v
+			t, err := time.Parse(time.DateOnly, v)
+			if err != nil {
+				return v
+			}
+			return t.UTC()
+		// Handle enum and set values from canal events
+		case int64:
+			return strconv.FormatInt(v, 10)
+		// Handle date values from canal events
+		case int32:
+			// Convert MySQL internal date representation to string
+			t := time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC).
+				AddDate(0, 0, int(v))
+			return t.Format("2006-01-02")
 		}
 	case avro.Int:
 		switch v := value.(type) {
@@ -349,6 +370,13 @@ func (s *schemaMapper) formatValue(column string, value any) any {
 		}
 	case avro.Double:
 		switch v := value.(type) {
+		case string:
+			f, err := strconv.ParseFloat(string(v), 64)
+			if err != nil {
+				return v
+			}
+
+			return f
 		case []byte:
 			f, err := strconv.ParseFloat(string(v), 64)
 			if err != nil {
@@ -372,6 +400,8 @@ func (s *schemaMapper) formatValue(column string, value any) any {
 		}
 	case avro.Bytes:
 		switch v := value.(type) {
+		case int64:
+			return []byte{uint8(v)}
 		case []byte:
 			return v
 		case string:

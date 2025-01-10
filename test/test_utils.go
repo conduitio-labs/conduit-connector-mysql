@@ -356,7 +356,7 @@ func assertSchema(ctx context.Context, is *is.I, metadata opencdc.Metadata) {
 	}
 }
 
-func NewCanal(ctx context.Context, is *is.I) *canal.Canal {
+func newCanal(ctx context.Context, is *is.I, tablename string) *canal.Canal {
 	is.Helper()
 
 	config, err := mysql.ParseDSN(DSN)
@@ -364,10 +364,67 @@ func NewCanal(ctx context.Context, is *is.I) *canal.Canal {
 
 	canal, err := common.NewCanal(ctx, common.CanalConfig{
 		Config:         config,
-		Tables:         []string{"users"},
+		Tables:         []string{tablename},
 		DisableLogging: true,
 	})
 	is.NoErr(err)
 
 	return canal
+}
+
+func TriggerRowInsertEvent(
+	ctx context.Context, is *is.I, tablename string, trigger func()) *canal.RowsEvent {
+	is.Helper()
+
+	c := newCanal(ctx, is, tablename)
+	defer c.Close()
+
+	rowsChan := make(chan *canal.RowsEvent)
+	doneChan := make(chan struct{})
+	defer close(doneChan)
+
+	handler := &testEventHandler{
+		rowsChan: rowsChan,
+		doneChan: doneChan,
+	}
+	c.SetEventHandler(handler)
+
+	pos, err := c.GetMasterPos()
+	is.NoErr(err)
+
+	go func() {
+		if err := c.RunFrom(pos); err != nil {
+			is.NoErr(err)
+		}
+	}()
+
+	trigger()
+
+	var rowsEvent *canal.RowsEvent
+	select {
+	case rowsEvent = <-rowsChan:
+	case <-time.After(1 * time.Second):
+		is.Fail()
+	}
+
+	return rowsEvent
+}
+
+type testEventHandler struct {
+	canal.DummyEventHandler
+	rowsChan chan *canal.RowsEvent
+	doneChan chan struct{}
+}
+
+func (h *testEventHandler) OnRow(e *canal.RowsEvent) error {
+	select {
+	case <-h.doneChan:
+		return nil
+	case h.rowsChan <- e:
+		return nil
+	}
+}
+
+func (h *testEventHandler) String() string {
+	return "testEventHandler"
 }

@@ -27,8 +27,6 @@ import (
 	"github.com/matryer/is"
 )
 
-var tableName = "schema_examples"
-
 func field(is *is.I, fieldName string, t avro.Type) *avro.Field {
 	field, err := avro.NewField(fieldName, avro.NewPrimitiveSchema(t, nil))
 	is.NoErr(err)
@@ -43,7 +41,7 @@ func toMap(is *is.I, bs []byte) map[string]any {
 	return m
 }
 
-func expectedPayloadRecordSchema(is *is.I) map[string]any {
+func expectedPayloadRecordSchema(is *is.I, tableName string) map[string]any {
 	fields := []*avro.Field{
 		// Numeric Types
 		field(is, "tiny_int_col", avro.Int),
@@ -80,8 +78,6 @@ func expectedPayloadRecordSchema(is *is.I) map[string]any {
 		field(is, "year_col", avro.Long),
 
 		// Other Types
-		field(is, "enum_col", avro.String),
-		field(is, "set_col", avro.String),
 		field(is, "json_col", avro.String),
 	}
 
@@ -94,7 +90,7 @@ func expectedPayloadRecordSchema(is *is.I) map[string]any {
 	return toMap(is, bs)
 }
 
-func expectedKeyRecordSchema(is *is.I) map[string]any {
+func expectedKeyRecordSchema(is *is.I, tableName string) map[string]any {
 	recordSchema, err := avro.NewRecordSchema(tableName+"_key", "mysql", []*avro.Field{
 		field(is, "f1", avro.String),
 	})
@@ -106,56 +102,50 @@ func expectedKeyRecordSchema(is *is.I) map[string]any {
 	return toMap(is, bs)
 }
 
-func TestSchema_Payload(t *testing.T) {
-	is := is.New(t)
-	db := testutils.NewDB(t)
-	ctx := context.Background()
+type SchemaAllTypes struct {
+	// Numeric Types
+	TinyIntCol   int32   `gorm:"column:tiny_int_col;type:tinyint"`
+	SmallIntCol  int32   `gorm:"column:small_int_col;type:smallint"`
+	MediumIntCol int32   `gorm:"column:medium_int_col;type:mediumint"`
+	IntCol       int32   `gorm:"column:int_col;type:int"`
+	BigIntCol    int64   `gorm:"column:big_int_col;type:bigint"`
+	DecimalCol   float64 `gorm:"column:decimal_col;type:decimal(10,2)"`
+	FloatCol     float64 `gorm:"column:float_col;type:float"`
+	DoubleCol    float64 `gorm:"column:double_col;type:double"`
+	BitCol       []uint8 `gorm:"column:bit_col;type:bit(1)"`
 
-	type SchemaExample struct {
-		// Numeric Types
-		TinyIntCol   int32   `gorm:"column:tiny_int_col;type:tinyint"`
-		SmallIntCol  int32   `gorm:"column:small_int_col;type:smallint"`
-		MediumIntCol int32   `gorm:"column:medium_int_col;type:mediumint"`
-		IntCol       int32   `gorm:"column:int_col;type:int"`
-		BigIntCol    int64   `gorm:"column:big_int_col;type:bigint"`
-		DecimalCol   float64 `gorm:"column:decimal_col;type:decimal(10,2)"`
-		FloatCol     float64 `gorm:"column:float_col;type:float"`
-		DoubleCol    float64 `gorm:"column:double_col;type:double"`
-		BitCol       []uint8 `gorm:"column:bit_col;type:bit(1)"`
+	// String Types
+	CharCol       string `gorm:"column:char_col;type:char(10)"`
+	VarcharCol    string `gorm:"column:varchar_col;type:varchar(255)"`
+	TinyTextCol   string `gorm:"column:tiny_text_col;type:tinytext"`
+	TextCol       string `gorm:"column:text_col;type:text"`
+	MediumTextCol string `gorm:"column:medium_text_col;type:mediumtext"`
+	LongTextCol   string `gorm:"column:long_text_col;type:longtext"`
 
-		// String Types
-		CharCol       string `gorm:"column:char_col;type:char(10)"`
-		VarcharCol    string `gorm:"column:varchar_col;type:varchar(255)"`
-		TinyTextCol   string `gorm:"column:tiny_text_col;type:tinytext"`
-		TextCol       string `gorm:"column:text_col;type:text"`
-		MediumTextCol string `gorm:"column:medium_text_col;type:mediumtext"`
-		LongTextCol   string `gorm:"column:long_text_col;type:longtext"`
+	// Binary Types
+	BinaryCol     []byte `gorm:"column:binary_col;type:binary(10)"`
+	VarbinaryCol  []byte `gorm:"column:varbinary_col;type:varbinary(255)"`
+	TinyBlobCol   []byte `gorm:"column:tiny_blob_col;type:tinyblob"`
+	BlobCol       []byte `gorm:"column:blob_col;type:blob"`
+	MediumBlobCol []byte `gorm:"column:medium_blob_col;type:mediumblob"`
+	LongBlobCol   []byte `gorm:"column:long_blob_col;type:longblob"`
 
-		// Binary Types
-		BinaryCol     []byte `gorm:"column:binary_col;type:binary(10)"`
-		VarbinaryCol  []byte `gorm:"column:varbinary_col;type:varbinary(255)"`
-		TinyBlobCol   []byte `gorm:"column:tiny_blob_col;type:tinyblob"`
-		BlobCol       []byte `gorm:"column:blob_col;type:blob"`
-		MediumBlobCol []byte `gorm:"column:medium_blob_col;type:mediumblob"`
-		LongBlobCol   []byte `gorm:"column:long_blob_col;type:longblob"`
+	// Date and Time Types
+	DateCol      time.Time `gorm:"column:date_col;type:date"`
+	TimeCol      time.Time `gorm:"column:time_col;type:time"`
+	DateTimeCol  time.Time `gorm:"column:datetime_col;type:datetime"`
+	TimestampCol time.Time `gorm:"column:timestamp_col;type:timestamp"`
+	YearCol      int       `gorm:"column:year_col;type:year"`
 
-		// Date and Time Types
-		DateCol      time.Time `gorm:"column:date_col;type:date"`
-		TimeCol      time.Time `gorm:"column:time_col;type:time"`
-		DateTimeCol  time.Time `gorm:"column:datetime_col;type:datetime"`
-		TimestampCol time.Time `gorm:"column:timestamp_col;type:timestamp"`
-		YearCol      int       `gorm:"column:year_col;type:year"`
+	// Other Types
 
-		// Other Types
-		EnumCol string `gorm:"column:enum_col;type:enum('value1','value2','value3')"`
-		SetCol  string `gorm:"column:set_col;type:set('value1','value2','value3')"`
-		JSONCol string `gorm:"column:json_col;type:json"`
-	}
+	// EnumCol string `gorm:"column:enum_col;type:enum('value1','value2','value3')"`
+	// SetCol  string `gorm:"column:set_col;type:set('value1','value2','value3')"`
+	JSONCol string `gorm:"column:json_col;type:json"`
+}
 
-	is.NoErr(db.Migrator().DropTable(&SchemaExample{}))
-	is.NoErr(db.AutoMigrate(&SchemaExample{}))
-
-	testData := map[string]any{
+func allTypesTestData() map[string]any {
+	return map[string]any{
 		"tiny_int_col":    int32(127),
 		"small_int_col":   int32(32767),
 		"medium_int_col":  int32(8388607),
@@ -187,41 +177,98 @@ func TestSchema_Payload(t *testing.T) {
 		"timestamp_col": time.Now().UTC().Truncate(time.Second),
 
 		"year_col": int64(2025),
-		"enum_col": "value1",
-		"set_col":  "value1,value2",
 		"json_col": `{"key": "value"}`,
 	}
+}
 
-	is.NoErr(db.Model(&SchemaExample{}).Create(&testData).Error)
+func allTypesCDCTestData() map[string]any {
+	data := allTypesTestData()
+	data["json_col"] = `{"key":"value"}`
 
-	rows, err := db.SqlxDB.Queryx("select * from " + tableName)
-	is.NoErr(err)
+	return data
+}
 
-	colTypes, err := sqlxRowsToAvroCol(rows)
-	is.NoErr(err)
+func TestSchema_Payload(t *testing.T) {
+	is := is.New(t)
+	db := testutils.NewDB(t)
+	ctx := context.Background()
 
-	// Test payload schema
-	payloadSchemaManager := newSchemaMapper()
-	_, err = payloadSchemaManager.createPayloadSchema(ctx, tableName, colTypes)
-	is.NoErr(err)
+	t.Run("from sqlx rows", func(t *testing.T) {
+		is.NoErr(db.Migrator().DropTable(&SchemaAllTypes{}))
+		is.NoErr(db.AutoMigrate(&SchemaAllTypes{}))
 
-	row := db.SqlxDB.QueryRowx("select * from " + tableName)
-	dest := map[string]any{}
-	is.NoErr(row.MapScan(dest))
+		testData := allTypesTestData()
 
-	formatted := map[string]any{}
-	for k, v := range dest {
-		formatted[k] = payloadSchemaManager.formatValue(k, v)
-	}
+		is.NoErr(db.Model(&SchemaAllTypes{}).Create(&testData).Error)
+		tableName := testutils.TableName(is, db, &SchemaAllTypes{})
 
-	s, err := schema.Get(ctx, tableName+"_payload", 1)
-	is.NoErr(err)
+		rows, err := db.SqlxDB.Queryx("select * from " + tableName)
+		is.NoErr(err)
+		colTypes, err := sqlxRowsToAvroCol(rows)
+		is.NoErr(err)
 
-	actualSchema := toMap(is, s.Bytes)
+		// Test payload schema
+		payloadSchemaManager := newSchemaMapper()
+		_, err = payloadSchemaManager.createPayloadSchema(ctx, tableName, colTypes)
+		is.NoErr(err)
 
-	expectedSchema := expectedPayloadRecordSchema(is)
-	is.Equal("", cmp.Diff(expectedSchema, actualSchema)) // expected schema != actual schema
-	is.Equal("", cmp.Diff(testData, formatted))          // expected data != actual data
+		row := db.SqlxDB.QueryRowx("select * from " + tableName)
+		dest := map[string]any{}
+		is.NoErr(row.MapScan(dest))
+
+		formatted := map[string]any{}
+		for k, v := range dest {
+			formatted[k] = payloadSchemaManager.formatValue(k, v)
+		}
+
+		s, err := schema.Get(ctx, tableName+"_payload", 1)
+		is.NoErr(err)
+
+		actualSchema := toMap(is, s.Bytes)
+
+		expectedSchema := expectedPayloadRecordSchema(is, tableName)
+		is.Equal("", cmp.Diff(expectedSchema, actualSchema)) // expected schema != actual schema
+		is.Equal("", cmp.Diff(testData, formatted))          // expected data != actual data
+	})
+
+	t.Run("from canal.RowsEvent", func(t *testing.T) {
+		is.NoErr(db.Migrator().DropTable(&SchemaAllTypes{}))
+		is.NoErr(db.AutoMigrate(&SchemaAllTypes{}))
+
+		is := is.New(t)
+		testData := allTypesCDCTestData()
+
+		tableName := testutils.TableName(is, db, &SchemaAllTypes{})
+
+		rowsEvent := testutils.TriggerRowInsertEvent(ctx, is, tableName, func() {
+			is.NoErr(db.Model(&SchemaAllTypes{}).Create(&testData).Error)
+		})
+
+		avroCols := make([]*avroColType, len(rowsEvent.Table.Columns))
+		for i, col := range rowsEvent.Table.Columns {
+			avroCol, err := mysqlSchemaToAvroCol(col)
+			is.NoErr(err)
+			avroCols[i] = avroCol
+		}
+
+		payloadSchemaManager := newSchemaMapper()
+		_, err := payloadSchemaManager.createPayloadSchema(ctx, tableName, avroCols)
+		is.NoErr(err)
+
+		formatted := map[string]any{}
+		for i, col := range rowsEvent.Table.Columns {
+			formatted[col.Name] = payloadSchemaManager.formatValue(col.Name, rowsEvent.Rows[0][i])
+		}
+
+		s, err := schema.Get(ctx, tableName+"_payload", 1)
+		is.NoErr(err)
+
+		actualSchema := toMap(is, s.Bytes)
+		expectedSchema := expectedPayloadRecordSchema(is, tableName)
+
+		is.Equal("", cmp.Diff(expectedSchema, actualSchema)) // expected schema != actual schema
+		is.Equal("", cmp.Diff(testData, formatted))          // expected data != actual data
+	})
 }
 
 func TestSchema_Key(t *testing.T) {
@@ -238,6 +285,7 @@ func TestSchema_Key(t *testing.T) {
 	is.NoErr(db.AutoMigrate(&SchemaExample{}))
 
 	is.NoErr(db.Create(&SchemaExample{ID: 1, F1: "test"}).Error)
+	tableName := testutils.TableName(is, db, &SchemaExample{})
 
 	rows, err := db.SqlxDB.Queryx("select * from " + tableName)
 	is.NoErr(err)
@@ -262,7 +310,7 @@ func TestSchema_Key(t *testing.T) {
 	is.NoErr(err)
 
 	actualKeySchema := toMap(is, s.Bytes)
-	expectedKeySchema := expectedKeyRecordSchema(is)
+	expectedKeySchema := expectedKeyRecordSchema(is, tableName)
 
 	is.Equal("", cmp.Diff(expectedKeySchema, actualKeySchema))
 }

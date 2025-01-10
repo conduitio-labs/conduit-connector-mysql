@@ -113,13 +113,13 @@ func TestSchema_Payload(t *testing.T) {
 
 	type SchemaExample struct {
 		// Numeric Types
-		TinyIntCol   int8    `gorm:"column:tiny_int_col;type:tinyint"`
-		SmallIntCol  int16   `gorm:"column:small_int_col;type:smallint"`
+		TinyIntCol   int32   `gorm:"column:tiny_int_col;type:tinyint"`
+		SmallIntCol  int32   `gorm:"column:small_int_col;type:smallint"`
 		MediumIntCol int32   `gorm:"column:medium_int_col;type:mediumint"`
 		IntCol       int32   `gorm:"column:int_col;type:int"`
 		BigIntCol    int64   `gorm:"column:big_int_col;type:bigint"`
 		DecimalCol   float64 `gorm:"column:decimal_col;type:decimal(10,2)"`
-		FloatCol     float32 `gorm:"column:float_col;type:float"`
+		FloatCol     float64 `gorm:"column:float_col;type:float"`
 		DoubleCol    float64 `gorm:"column:double_col;type:double"`
 		BitCol       []uint8 `gorm:"column:bit_col;type:bit(1)"`
 
@@ -156,13 +156,13 @@ func TestSchema_Payload(t *testing.T) {
 	is.NoErr(db.AutoMigrate(&SchemaExample{}))
 
 	testData := map[string]any{
-		"tiny_int_col":    int8(127),
-		"small_int_col":   int16(32767),
+		"tiny_int_col":    int32(127),
+		"small_int_col":   int32(32767),
 		"medium_int_col":  int32(8388607),
-		"int_col":         2147483647,
+		"int_col":         int32(2147483647),
 		"big_int_col":     int64(9223372036854775807),
 		"decimal_col":     123.45,
-		"float_col":       float32(123.45),
+		"float_col":       float64(123.45),
 		"double_col":      123.45,
 		"bit_col":         []uint8{1},
 		"char_col":        "char",
@@ -171,20 +171,25 @@ func TestSchema_Payload(t *testing.T) {
 		"text_col":        "text",
 		"medium_text_col": "medium text",
 		"long_text_col":   "long text",
-		"binary_col":      []byte("binary"),
+
+		// should be 10 bytes, as specified in the gorm struct
+		"binary_col":      []byte("binary    "),
 		"varbinary_col":   []byte("varbinary"),
 		"tiny_blob_col":   []byte("tiny blob"),
 		"blob_col":        []byte("blob"),
 		"medium_blob_col": []byte("medium blob"),
 		"long_blob_col":   []byte("long blob"),
-		"date_col":        time.Now(),
-		"time_col":        time.Now(),
-		"datetime_col":    time.Now(),
-		"timestamp_col":   time.Now(),
-		"year_col":        2024,
-		"enum_col":        "value1",
-		"set_col":         "value1,value2",
-		"json_col":        `{"key": "value"}`,
+
+		// MySQL date/time types have different precision levels - truncate to match what MySQL stores
+		"date_col":      time.Now().UTC().Truncate(24 * time.Hour),
+		"time_col":      time.Now().UTC().Truncate(time.Second),
+		"datetime_col":  time.Now().UTC().Truncate(time.Second),
+		"timestamp_col": time.Now().UTC().Truncate(time.Second),
+
+		"year_col": int64(2025),
+		"enum_col": "value1",
+		"set_col":  "value1,value2",
+		"json_col": `{"key": "value"}`,
 	}
 
 	is.NoErr(db.Model(&SchemaExample{}).Create(&testData).Error)

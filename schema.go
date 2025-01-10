@@ -19,8 +19,10 @@ import (
 	"database/sql"
 	"fmt"
 	"math"
+	"strconv"
 	"time"
 
+	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/conduitio/conduit-connector-sdk/schema"
 	mysqlschema "github.com/go-mysql-org/go-mysql/schema"
 	"github.com/hamba/avro/v2"
@@ -348,6 +350,15 @@ func (s *schemaMapper) formatValue(column string, value any) any {
 		}
 	case avro.Double:
 		switch v := value.(type) {
+		case []byte:
+			f, err := strconv.ParseFloat(string(v), 64)
+			if err != nil {
+				sdk.Logger(context.Background()).Error().Err(err).
+					Msgf("failed to format %v for column %s", v, column)
+				return v
+			}
+
+			return f
 		case float32:
 			return float64(v)
 		case float64:

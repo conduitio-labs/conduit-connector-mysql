@@ -373,7 +373,8 @@ func newCanal(ctx context.Context, is *is.I, tablename string) *canal.Canal {
 }
 
 func TriggerRowInsertEvent(
-	ctx context.Context, is *is.I, tablename string, trigger func()) *canal.RowsEvent {
+	ctx context.Context, is *is.I, tablename string, trigger func(),
+) *canal.RowsEvent {
 	is.Helper()
 
 	c := newCanal(ctx, is, tablename)

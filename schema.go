@@ -68,7 +68,7 @@ func sqlColTypeToAvroCol(colType *sql.ColumnType) (*avroColType, error) {
 	case "DOUBLE":
 		avroType = avro.Double
 	case "BIT":
-		avroType = avro.Bytes
+		avroType = avro.Long
 
 	// String Types
 	case "CHAR", "VARCHAR":
@@ -354,6 +354,20 @@ func (s *schemaMapper) formatValue(column string, value any) any {
 			return int64(v)
 		case int64:
 			return v
+		case []uint8:
+			// this handles the mysql bit datatype. When snapshotting will be
+			// represented as slice of bytes, so we manually convert it to the
+			// corresponding avro.Long datatype.
+
+			if len(v) > 0 {
+				var result int64
+				for i := 0; i < len(v); i++ {
+					result = result<<8 + int64(v[i])
+				}
+				return result
+			}
+			return int64(0)
+
 		case uint64:
 			if v <= math.MaxInt64 {
 				return int64(v)
@@ -371,7 +385,7 @@ func (s *schemaMapper) formatValue(column string, value any) any {
 	case avro.Double:
 		switch v := value.(type) {
 		case string:
-			f, err := strconv.ParseFloat(string(v), 64)
+			f, err := strconv.ParseFloat(v, 64)
 			if err != nil {
 				return v
 			}
@@ -400,8 +414,6 @@ func (s *schemaMapper) formatValue(column string, value any) any {
 		}
 	case avro.Bytes:
 		switch v := value.(type) {
-		case int64:
-			return []byte{uint8(v)}
 		case []byte:
 			return v
 		case string:

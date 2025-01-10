@@ -41,6 +41,60 @@ func toMap(is *is.I, bs []byte) map[string]any {
 	return m
 }
 
+func expectedKeyRecordSchema(is *is.I, tableName string) map[string]any {
+	recordSchema, err := avro.NewRecordSchema(tableName+"_key", "mysql", []*avro.Field{
+		field(is, "f1", avro.String),
+	})
+	is.NoErr(err)
+
+	bs, err := recordSchema.MarshalJSON()
+	is.NoErr(err)
+
+	return toMap(is, bs)
+}
+
+type SchemaAllTypes struct {
+	// Numeric Types
+	TinyIntCol   int32   `gorm:"column:tiny_int_col;type:tinyint"`
+	SmallIntCol  int32   `gorm:"column:small_int_col;type:smallint"`
+	MediumIntCol int32   `gorm:"column:medium_int_col;type:mediumint"`
+	IntCol       int32   `gorm:"column:int_col;type:int"`
+	BigIntCol    int64   `gorm:"column:big_int_col;type:bigint"`
+	DecimalCol   float64 `gorm:"column:decimal_col;type:decimal(10,2)"`
+	FloatCol     float64 `gorm:"column:float_col;type:float"`
+	DoubleCol    float64 `gorm:"column:double_col;type:double"`
+	BitCol       int64   `gorm:"column:bit_col;type:bit(1)"`
+
+	// String Types
+	CharCol       string `gorm:"column:char_col;type:char(10)"`
+	VarcharCol    string `gorm:"column:varchar_col;type:varchar(255)"`
+	TinyTextCol   string `gorm:"column:tiny_text_col;type:tinytext"`
+	TextCol       string `gorm:"column:text_col;type:text"`
+	MediumTextCol string `gorm:"column:medium_text_col;type:mediumtext"`
+	LongTextCol   string `gorm:"column:long_text_col;type:longtext"`
+
+	// Binary Types
+	BinaryCol     []byte `gorm:"column:binary_col;type:binary(10)"`
+	VarbinaryCol  []byte `gorm:"column:varbinary_col;type:varbinary(255)"`
+	TinyBlobCol   []byte `gorm:"column:tiny_blob_col;type:tinyblob"`
+	BlobCol       []byte `gorm:"column:blob_col;type:blob"`
+	MediumBlobCol []byte `gorm:"column:medium_blob_col;type:mediumblob"`
+	LongBlobCol   []byte `gorm:"column:long_blob_col;type:longblob"`
+
+	// Date and Time Types
+	DateCol      time.Time `gorm:"column:date_col;type:date"`
+	TimeCol      time.Time `gorm:"column:time_col;type:time"`
+	DateTimeCol  time.Time `gorm:"column:datetime_col;type:datetime"`
+	TimestampCol time.Time `gorm:"column:timestamp_col;type:timestamp"`
+	YearCol      int       `gorm:"column:year_col;type:year"`
+
+	// Other Types
+
+	// enum and set datatypes are omitted, as they are difficult to test on CDC mode.
+	// In the future we might want to also test those cases.
+	JSONCol string `gorm:"column:json_col;type:json"`
+}
+
 func expectedPayloadRecordSchema(is *is.I, tableName string) map[string]any {
 	fields := []*avro.Field{
 		// Numeric Types
@@ -52,7 +106,9 @@ func expectedPayloadRecordSchema(is *is.I, tableName string) map[string]any {
 		field(is, "decimal_col", avro.Double),
 		field(is, "float_col", avro.Double),
 		field(is, "double_col", avro.Double),
-		field(is, "bit_col", avro.Bytes),
+
+		// avro.Long because we don't really have uint64 in avro
+		field(is, "bit_col", avro.Long),
 
 		// String Types
 		field(is, "char_col", avro.String),
@@ -90,60 +146,6 @@ func expectedPayloadRecordSchema(is *is.I, tableName string) map[string]any {
 	return toMap(is, bs)
 }
 
-func expectedKeyRecordSchema(is *is.I, tableName string) map[string]any {
-	recordSchema, err := avro.NewRecordSchema(tableName+"_key", "mysql", []*avro.Field{
-		field(is, "f1", avro.String),
-	})
-	is.NoErr(err)
-
-	bs, err := recordSchema.MarshalJSON()
-	is.NoErr(err)
-
-	return toMap(is, bs)
-}
-
-type SchemaAllTypes struct {
-	// Numeric Types
-	TinyIntCol   int32   `gorm:"column:tiny_int_col;type:tinyint"`
-	SmallIntCol  int32   `gorm:"column:small_int_col;type:smallint"`
-	MediumIntCol int32   `gorm:"column:medium_int_col;type:mediumint"`
-	IntCol       int32   `gorm:"column:int_col;type:int"`
-	BigIntCol    int64   `gorm:"column:big_int_col;type:bigint"`
-	DecimalCol   float64 `gorm:"column:decimal_col;type:decimal(10,2)"`
-	FloatCol     float64 `gorm:"column:float_col;type:float"`
-	DoubleCol    float64 `gorm:"column:double_col;type:double"`
-	BitCol       []uint8 `gorm:"column:bit_col;type:bit(1)"`
-
-	// String Types
-	CharCol       string `gorm:"column:char_col;type:char(10)"`
-	VarcharCol    string `gorm:"column:varchar_col;type:varchar(255)"`
-	TinyTextCol   string `gorm:"column:tiny_text_col;type:tinytext"`
-	TextCol       string `gorm:"column:text_col;type:text"`
-	MediumTextCol string `gorm:"column:medium_text_col;type:mediumtext"`
-	LongTextCol   string `gorm:"column:long_text_col;type:longtext"`
-
-	// Binary Types
-	BinaryCol     []byte `gorm:"column:binary_col;type:binary(10)"`
-	VarbinaryCol  []byte `gorm:"column:varbinary_col;type:varbinary(255)"`
-	TinyBlobCol   []byte `gorm:"column:tiny_blob_col;type:tinyblob"`
-	BlobCol       []byte `gorm:"column:blob_col;type:blob"`
-	MediumBlobCol []byte `gorm:"column:medium_blob_col;type:mediumblob"`
-	LongBlobCol   []byte `gorm:"column:long_blob_col;type:longblob"`
-
-	// Date and Time Types
-	DateCol      time.Time `gorm:"column:date_col;type:date"`
-	TimeCol      time.Time `gorm:"column:time_col;type:time"`
-	DateTimeCol  time.Time `gorm:"column:datetime_col;type:datetime"`
-	TimestampCol time.Time `gorm:"column:timestamp_col;type:timestamp"`
-	YearCol      int       `gorm:"column:year_col;type:year"`
-
-	// Other Types
-
-	// EnumCol string `gorm:"column:enum_col;type:enum('value1','value2','value3')"`
-	// SetCol  string `gorm:"column:set_col;type:set('value1','value2','value3')"`
-	JSONCol string `gorm:"column:json_col;type:json"`
-}
-
 func allTypesTestData() map[string]any {
 	return map[string]any{
 		"tiny_int_col":    int32(127),
@@ -154,7 +156,7 @@ func allTypesTestData() map[string]any {
 		"decimal_col":     123.45,
 		"float_col":       float64(123.45),
 		"double_col":      123.45,
-		"bit_col":         []uint8{1},
+		"bit_col":         int64(1),
 		"char_col":        "char",
 		"varchar_col":     "varchar",
 		"tiny_text_col":   "tiny text",
@@ -183,6 +185,8 @@ func allTypesTestData() map[string]any {
 
 func allTypesCDCTestData() map[string]any {
 	data := allTypesTestData()
+
+	// existing CDC-specific modification
 	data["json_col"] = `{"key":"value"}`
 
 	return data
@@ -193,7 +197,7 @@ func TestSchema_Payload(t *testing.T) {
 	db := testutils.NewDB(t)
 	ctx := context.Background()
 
-	t.Run("from sqlx rows", func(t *testing.T) {
+	t.Run("from sqlx rows", func(_ *testing.T) {
 		is.NoErr(db.Migrator().DropTable(&SchemaAllTypes{}))
 		is.NoErr(db.AutoMigrate(&SchemaAllTypes{}))
 
@@ -231,7 +235,7 @@ func TestSchema_Payload(t *testing.T) {
 		is.Equal("", cmp.Diff(testData, formatted))          // expected data != actual data
 	})
 
-	t.Run("from canal.RowsEvent", func(t *testing.T) {
+	t.Run("from canal.RowsEvent", func(_ *testing.T) {
 		is.NoErr(db.Migrator().DropTable(&SchemaAllTypes{}))
 		is.NoErr(db.AutoMigrate(&SchemaAllTypes{}))
 

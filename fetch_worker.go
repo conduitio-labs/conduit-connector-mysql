@@ -464,7 +464,7 @@ func (w *fetchWorkerByLimit) run(ctx context.Context) (err error) {
 			//nolint:gosec // i is guaranteed to be greater than 0
 			rowNum := offset + uint64(i)
 			keyStr := fmt.Sprintf("%s_%d", w.config.table, rowNum)
-			key := opencdc.RawData([]byte(keyStr))
+			key := opencdc.RawData(keyStr)
 
 			w.data <- fetchData{
 				key:           key,

@@ -275,13 +275,12 @@ func (s *schemaMapper) formatValue(column string, value any) any {
 		panic(msg)
 	}
 
-	// Handle nil values
-	if value == nil {
-		return nil
-	}
-
 	switch t {
 	case avro.String:
+		if value == nil {
+			return ""
+		}
+
 		switch v := value.(type) {
 		case time.Time:
 			return v.UTC()
@@ -304,6 +303,10 @@ func (s *schemaMapper) formatValue(column string, value any) any {
 			return t.Format("2006-01-02")
 		}
 	case avro.Int:
+		if value == nil {
+			return int32(0)
+		}
+
 		switch v := value.(type) {
 		case int8:
 			return int32(v)
@@ -337,6 +340,10 @@ func (s *schemaMapper) formatValue(column string, value any) any {
 			return int32(v)
 		}
 	case avro.Long:
+		if value == nil {
+			return int64(0)
+		}
+
 		switch v := value.(type) {
 		case int8:
 			return int64(v)
@@ -376,6 +383,10 @@ func (s *schemaMapper) formatValue(column string, value any) any {
 			return v
 		}
 	case avro.Float:
+		if value == nil {
+			return float32(0)
+		}
+
 		switch v := value.(type) {
 		case float32:
 			return v
@@ -383,6 +394,10 @@ func (s *schemaMapper) formatValue(column string, value any) any {
 			return float32(v)
 		}
 	case avro.Double:
+		if value == nil {
+			return float64(0)
+		}
+
 		switch v := value.(type) {
 		case string:
 			f, err := strconv.ParseFloat(v, 64)
@@ -404,6 +419,10 @@ func (s *schemaMapper) formatValue(column string, value any) any {
 			return v
 		}
 	case avro.Boolean:
+		if value == nil {
+			return false
+		}
+
 		switch v := value.(type) {
 		case bool:
 			return v
@@ -413,6 +432,10 @@ func (s *schemaMapper) formatValue(column string, value any) any {
 			return v != 0
 		}
 	case avro.Bytes:
+		if value == nil {
+			return []byte{}
+		}
+
 		switch v := value.(type) {
 		case []byte:
 			return v

@@ -28,8 +28,8 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
-// schemaMapper creates conduit avro schemas from sql.ColumnTypes and formats values
-// based on those.
+// schemaMapper maps mysql schemas to conduit avro schemas, and it uses them to
+// format values.
 type schemaMapper struct {
 	schema   *schemaSubVer
 	colTypes map[string]avro.Type

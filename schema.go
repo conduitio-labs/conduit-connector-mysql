@@ -31,7 +31,7 @@ import (
 // schemaMapper creates conduit avro schemas from sql.ColumnTypes and formats values
 // based on those.
 type schemaMapper struct {
-	schema   *subVerSchema
+	schema   *schemaSubVer
 	colTypes map[string]avro.Type
 }
 
@@ -187,15 +187,15 @@ func colTypeToAvroField(avroCol *avroColType) (*avro.Field, error) {
 	return nameField, nil
 }
 
-// subVerSchema represents the (sub)ject and the (ver)sion of a schema.
-type subVerSchema struct {
+// schemaSubVer holds the schema (sub)ject and (ver)sion.
+type schemaSubVer struct {
 	subject string
 	version int
 }
 
 func (s *schemaMapper) createPayloadSchema(
 	ctx context.Context, table string, mysqlCols []*avroColType,
-) (*subVerSchema, error) {
+) (*schemaSubVer, error) {
 	if s.schema != nil {
 		return s.schema, nil
 	}
@@ -223,7 +223,7 @@ func (s *schemaMapper) createPayloadSchema(
 		return nil, fmt.Errorf("failed to create payload schema: %w", err)
 	}
 
-	s.schema = &subVerSchema{
+	s.schema = &schemaSubVer{
 		subject: schema.Subject,
 		version: schema.Version,
 	}
@@ -233,7 +233,7 @@ func (s *schemaMapper) createPayloadSchema(
 
 func (s *schemaMapper) createKeySchema(
 	ctx context.Context, table string, colType *avroColType,
-) (*subVerSchema, error) {
+) (*schemaSubVer, error) {
 	if s.schema != nil {
 		return s.schema, nil
 	}
@@ -255,7 +255,7 @@ func (s *schemaMapper) createKeySchema(
 		return nil, fmt.Errorf("failed to create key schema: %w", err)
 	}
 
-	s.schema = &subVerSchema{
+	s.schema = &schemaSubVer{
 		subject: schema.Subject,
 		version: schema.Version,
 	}

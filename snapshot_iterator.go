@@ -41,10 +41,10 @@ type (
 		payload  opencdc.StructuredData
 		position common.TablePosition
 
-		payloadSchema *subVerSchema
+		payloadSchema *schemaSubVer
 
 		// keySchema might be nil, as fetchWorkerByLimit doesn't have any key
-		keySchema *subVerSchema
+		keySchema *schemaSubVer
 	}
 	snapshotIterator struct {
 		t            *tomb.Tomb

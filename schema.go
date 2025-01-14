@@ -285,6 +285,15 @@ func (s *schemaMapper) formatValue(column string, value any) any {
 		panic(msg)
 	}
 
+	// Each of the following branches handles different datatype parsing
+	// behaviour between database/sql and go-mysql-org/go-mysql/canal
+	// dependencies. We need this to make sure that a row emitted in snapshot mode
+	// and updated in cdc mode have the same schema.
+
+	// We manually convert nil values into the go zero value equivalent so that
+	// we don't need to handle NULL complexity into the schema.
+	// However, we might want to reflect nullability of the datatype in the future.
+
 	switch t.Type {
 	case avro.String:
 		if value == nil {
@@ -292,8 +301,6 @@ func (s *schemaMapper) formatValue(column string, value any) any {
 		}
 
 		switch v := value.(type) {
-		case time.Time:
-			return v.UTC()
 		case []uint8:
 			return string(v)
 		case string:
@@ -308,9 +315,54 @@ func (s *schemaMapper) formatValue(column string, value any) any {
 			return t.UTC()
 		}
 	case avro.Int:
-		return formatInt(value)
+		if value == nil {
+			return int32(0)
+		}
+
+		switch v := value.(type) {
+		case int8:
+			return int32(v)
+		case int16:
+			return int32(v)
+		case int64:
+			if v > math.MaxInt32 || v < math.MinInt32 {
+				return v
+			}
+			return int32(v)
+		}
+
+		return value
 	case avro.Long:
-		return formatLong(value)
+		if value == nil {
+			return int64(0)
+		}
+
+		switch v := value.(type) {
+		case int:
+			return int64(v)
+		case []uint8:
+			// this handles the mysql bit datatype. When snapshotting will be
+			// represented as slice of bytes, so we manually convert it to the
+			// corresponding avro.Long datatype.
+
+			if len(v) > 0 {
+				var result int64
+				for i := 0; i < len(v); i++ {
+					result = result<<8 + int64(v[i])
+				}
+				return result
+			}
+			return int64(0)
+
+		case uint64:
+			if v <= math.MaxInt64 {
+				return int64(v)
+			}
+			// This will make avro encoding fail as it doesn't support uint64
+			return v
+		}
+
+		return value
 	case avro.Float:
 		if value == nil {
 			return float32(0)
@@ -360,7 +412,6 @@ func (s *schemaMapper) formatValue(column string, value any) any {
 		}
 
 		switch v := value.(type) {
-		// this handles bit datatype for cdc
 		case int64:
 			// canal.Canal parses mysql bit column as an int64, so to be
 			// consistent with snapshot mode we need to manually parse the int
@@ -393,92 +444,4 @@ func int64ToMysqlBit(i int64) []byte {
 	}
 
 	return bytes[start:]
-}
-
-func formatInt(value any) any {
-	if value == nil {
-		return int32(0)
-	}
-
-	switch v := value.(type) {
-	case int8:
-		return int32(v)
-	case uint8:
-		return int32(v)
-	case int16:
-		return int32(v)
-	case uint16:
-		return int32(v)
-	case int32:
-		return v
-	case uint32:
-		if v <= math.MaxInt32 {
-			return int32(v)
-		}
-		return v
-	case int:
-		if v > math.MaxInt32 || v < math.MinInt32 {
-			return v
-		}
-		return int32(v)
-	case int64:
-		if v > math.MaxInt32 || v < math.MinInt32 {
-			return v
-		}
-		return int32(v)
-	case uint64:
-		if v > math.MaxInt32 {
-			return v
-		}
-		return int32(v)
-	}
-
-	return value
-}
-
-func formatLong(value any) any {
-	if value == nil {
-		return int64(0)
-	}
-
-	switch v := value.(type) {
-	case int8:
-		return int64(v)
-	case uint8:
-		return int64(v)
-	case int16:
-		return int64(v)
-	case uint16:
-		return int64(v)
-	case int32:
-		return int64(v)
-	case uint32:
-		return int64(v)
-	case int:
-		return int64(v)
-	case int64:
-		return v
-	case []uint8:
-		// this handles the mysql bit datatype. When snapshotting will be
-		// represented as slice of bytes, so we manually convert it to the
-		// corresponding avro.Long datatype.
-
-		if len(v) > 0 {
-			var result int64
-			for i := 0; i < len(v); i++ {
-				result = result<<8 + int64(v[i])
-			}
-			return result
-		}
-		return int64(0)
-
-	case uint64:
-		if v <= math.MaxInt64 {
-			return int64(v)
-		}
-		// This will make avro encoding fail as it doesn't support uint64
-		return v
-	}
-
-	return value
 }

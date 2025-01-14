@@ -312,7 +312,7 @@ func (s *schemaMapper) formatValue(column string, value any) any {
 			if err != nil {
 				return v
 			}
-			return t.UTC()
+			return t
 		}
 	case avro.Int:
 		if value == nil {

@@ -63,7 +63,11 @@ type SchemaAllTypes struct {
 	DecimalCol   float64 `gorm:"column:decimal_col;type:decimal(10,2)"`
 	FloatCol     float64 `gorm:"column:float_col;type:float"`
 	DoubleCol    float64 `gorm:"column:double_col;type:double"`
-	BitCol       int64   `gorm:"column:bit_col;type:bit(1)"`
+
+	// Bit Types (most common)
+	Bit1Col  []byte `gorm:"column:bit1_col;type:bit(1)"`
+	Bit8Col  []byte `gorm:"column:bit8_col;type:bit(8)"`
+	Bit64Col []byte `gorm:"column:bit64_col;type:bit(64)"`
 
 	// String Types
 	CharCol       string `gorm:"column:char_col;type:char(10)"`
@@ -108,7 +112,9 @@ func expectedPayloadRecordSchema(is *is.I, tableName string) map[string]any {
 		field(is, "double_col", avro.Double),
 
 		// avro.Long because we don't really have uint64 in avro
-		field(is, "bit_col", avro.Long),
+		field(is, "bit1_col", avro.Bytes),
+		field(is, "bit8_col", avro.Bytes),
+		field(is, "bit64_col", avro.Bytes),
 
 		// String Types
 		field(is, "char_col", avro.String),
@@ -147,7 +153,7 @@ func expectedPayloadRecordSchema(is *is.I, tableName string) map[string]any {
 }
 
 func allTypesTestData() map[string]any {
-	return map[string]any{
+	testData := map[string]any{
 		"tiny_int_col":    int32(127),
 		"small_int_col":   int32(32767),
 		"medium_int_col":  int32(8388607),
@@ -156,7 +162,6 @@ func allTypesTestData() map[string]any {
 		"decimal_col":     123.45,
 		"float_col":       float64(123.45),
 		"double_col":      123.45,
-		"bit_col":         int64(1),
 		"char_col":        "char",
 		"varchar_col":     "varchar",
 		"tiny_text_col":   "tiny text",
@@ -181,12 +186,19 @@ func allTypesTestData() map[string]any {
 		"year_col": int64(2025),
 		"json_col": `{"key": "value"}`,
 	}
+
+	testData["bit1_col"] = []byte{0x01}
+	testData["bit8_col"] = []byte{0xAB}
+	testData["bit64_col"] = []byte{0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0}
+
+	return testData
 }
 
 func allTypesCDCTestData() map[string]any {
 	data := allTypesTestData()
 
-	// existing CDC-specific modification
+	// for some reason canal.Canal treats json in a different manner than sqlx,
+	// so we need to remove the space in between key an value.
 	data["json_col"] = `{"key":"value"}`
 
 	return data
@@ -235,7 +247,7 @@ func TestSchema_Payload(t *testing.T) {
 		is.Equal("", cmp.Diff(testData, formatted))          // expected data != actual data
 	})
 
-	t.Run("from canal.RowsEvent", func(_ *testing.T) {
+	t.Run("from canal.RowsEvent", func(t *testing.T) {
 		is.NoErr(db.Migrator().DropTable(&SchemaAllTypes{}))
 		is.NoErr(db.AutoMigrate(&SchemaAllTypes{}))
 

@@ -32,73 +32,79 @@ import (
 // format values.
 type schemaMapper struct {
 	schema   *schemaSubVer
-	colTypes map[string]avro.Type
+	colTypes map[string]*avroColType
 }
 
 func newSchemaMapper() *schemaMapper {
 	return &schemaMapper{
-		colTypes: make(map[string]avro.Type),
+		colTypes: make(map[string]*avroColType),
 	}
 }
 
-// avroColType represents the avro type of a mysql column.
 type avroColType struct {
-	Type avro.Type
-	Name string
+	isDate bool
+	isBit  bool
+	Type   avro.Type
+	Name   string
 }
 
 func sqlColTypeToAvroCol(colType *sql.ColumnType) (*avroColType, error) {
-	var avroType avro.Type
+	avroColType := &avroColType{
+		Name: colType.Name(),
+	}
 	switch typename := colType.DatabaseTypeName(); typename {
 	// Numeric Types
 	case "TINYINT":
-		avroType = avro.Int
+		avroColType.Type = avro.Int
 	case "SMALLINT":
-		avroType = avro.Int
+		avroColType.Type = avro.Int
 	case "MEDIUMINT":
-		avroType = avro.Int
+		avroColType.Type = avro.Int
 	case "INT":
-		avroType = avro.Int
+		avroColType.Type = avro.Int
 	case "BIGINT":
-		avroType = avro.Long
+		avroColType.Type = avro.Long
 	case "DECIMAL", "NUMERIC":
-		avroType = avro.Double
+		avroColType.Type = avro.Double
 	case "FLOAT":
-		avroType = avro.Double
+		avroColType.Type = avro.Double
 	case "DOUBLE":
-		avroType = avro.Double
+		avroColType.Type = avro.Double
 	case "BIT":
-		avroType = avro.Long
+		avroColType.isBit = true
+		avroColType.Type = avro.Bytes
 
 	// String Types
 	case "CHAR", "VARCHAR":
-		avroType = avro.String
+		avroColType.Type = avro.String
 	case "TINYTEXT", "TEXT", "MEDIUMTEXT", "LONGTEXT":
-		avroType = avro.String
+		avroColType.Type = avro.String
 
 	// Binary Types
 	case "BINARY", "VARBINARY":
-		avroType = avro.Bytes
+		avroColType.Type = avro.Bytes
 	case "TINYBLOB", "BLOB", "MEDIUMBLOB", "LONGBLOB":
-		avroType = avro.Bytes
+		avroColType.Type = avro.Bytes
 
 	// Date and Time Types
 	case "DATE", "TIME", "DATETIME", "TIMESTAMP":
-		avroType = avro.String
+		avroColType.isDate = true
+		avroColType.Type = avro.String
 	case "YEAR":
-		avroType = avro.Long
+		avroColType.isDate = true
+		avroColType.Type = avro.Long
 
 	// Other Types
 	case "ENUM", "SET":
-		avroType = avro.String
+		avroColType.Type = avro.String
 	case "JSON":
-		avroType = avro.String
+		avroColType.Type = avro.String
 
 	default:
 		return nil, fmt.Errorf("unsupported column type %s", typename)
 	}
 
-	return &avroColType{avroType, colType.Name()}, nil
+	return avroColType, nil
 }
 
 func sqlxRowsToAvroCol(rows *sqlx.Rows) ([]*avroColType, error) {
@@ -121,59 +127,64 @@ func sqlxRowsToAvroCol(rows *sqlx.Rows) ([]*avroColType, error) {
 }
 
 func mysqlSchemaToAvroCol(tableCol mysqlschema.TableColumn) (*avroColType, error) {
-	var avroType avro.Type
+	avroColType := &avroColType{Name: tableCol.Name}
 	switch tableCol.Type {
 	case mysqlschema.TYPE_NUMBER:
 		switch tableCol.RawType {
 		case "tinyint", "smallint", "mediumint", "int":
-			avroType = avro.Int
+			avroColType.Type = avro.Int
 		case "bigint", "year":
-			avroType = avro.Long
+			avroColType.Type = avro.Long
 		case "decimal", "numeric", "float", "double":
-			avroType = avro.Double
+			avroColType.Type = avro.Double
 		case "bit":
-			avroType = avro.Bytes
+			avroColType.isBit = true
+			avroColType.Type = avro.Bytes
 		default:
-			avroType = avro.Int
+			avroColType.Type = avro.Int
 		}
 	case mysqlschema.TYPE_MEDIUM_INT:
-		avroType = avro.Int
+		avroColType.Type = avro.Int
 	case mysqlschema.TYPE_FLOAT:
-		avroType = avro.Double
+		avroColType.Type = avro.Double
 	case mysqlschema.TYPE_DECIMAL:
-		avroType = avro.Double
+		avroColType.Type = avro.Double
 	case mysqlschema.TYPE_ENUM:
-		avroType = avro.String
+		avroColType.Type = avro.String
 	case mysqlschema.TYPE_SET:
-		avroType = avro.String
+		avroColType.Type = avro.String
 	case mysqlschema.TYPE_DATETIME:
-		avroType = avro.String
+		avroColType.isDate = true
+		avroColType.Type = avro.String
 	case mysqlschema.TYPE_TIMESTAMP:
-		avroType = avro.String
+		avroColType.isDate = true
+		avroColType.Type = avro.String
 	case mysqlschema.TYPE_DATE:
-		avroType = avro.String
+		avroColType.isDate = true
+		avroColType.Type = avro.String
 	case mysqlschema.TYPE_TIME:
-		avroType = avro.String
+		avroColType.isDate = true
+		avroColType.Type = avro.String
 	case mysqlschema.TYPE_BIT:
-		avroType = avro.Bytes
+		avroColType.Type = avro.Bytes
 	case mysqlschema.TYPE_JSON:
-		avroType = avro.String
+		avroColType.Type = avro.String
 	case mysqlschema.TYPE_BINARY:
-		avroType = avro.Bytes
+		avroColType.Type = avro.Bytes
 	case mysqlschema.TYPE_POINT:
-		avroType = avro.String
+		avroColType.Type = avro.String
 	case mysqlschema.TYPE_STRING:
 		switch tableCol.RawType {
 		case "binary", "varbinary", "tinyblob", "blob", "mediumblob", "longblob":
-			avroType = avro.Bytes
+			avroColType.Type = avro.Bytes
 		default:
-			avroType = avro.String
+			avroColType.Type = avro.String
 		}
 	default:
 		return nil, fmt.Errorf("unsupported column type %s for column %s", tableCol.RawType, tableCol.Name)
 	}
 
-	return &avroColType{avroType, tableCol.Name}, nil
+	return avroColType, nil
 }
 
 func colTypeToAvroField(avroCol *avroColType) (*avro.Field, error) {
@@ -200,7 +211,6 @@ func (s *schemaMapper) createPayloadSchema(
 		return s.schema, nil
 	}
 
-	s.colTypes = make(map[string]avro.Type)
 	fields := make([]*avro.Field, 0, len(mysqlCols))
 	for _, colType := range mysqlCols {
 		field, err := colTypeToAvroField(colType)
@@ -210,7 +220,7 @@ func (s *schemaMapper) createPayloadSchema(
 
 		fields = append(fields, field)
 
-		s.colTypes[colType.Name] = field.Type().Type()
+		s.colTypes[colType.Name] = colType
 	}
 
 	recordSchema, err := avro.NewRecordSchema(table+"_payload", "mysql", fields)
@@ -248,7 +258,7 @@ func (s *schemaMapper) createKeySchema(
 		return nil, fmt.Errorf("failed to create key schema: %w", err)
 	}
 
-	s.colTypes[colType.Name] = field.Type().Type()
+	s.colTypes[colType.Name] = colType
 
 	schema, err := schema.Create(ctx, schema.TypeAvro, recordSchema.Name(), []byte(recordSchema.String()))
 	if err != nil {
@@ -275,7 +285,7 @@ func (s *schemaMapper) formatValue(column string, value any) any {
 		panic(msg)
 	}
 
-	switch t {
+	switch t.Type {
 	case avro.String:
 		if value == nil {
 			return ""
@@ -287,20 +297,15 @@ func (s *schemaMapper) formatValue(column string, value any) any {
 		case []uint8:
 			return string(v)
 		case string:
+			if !t.isDate {
+				return v
+			}
+
 			t, err := time.Parse(time.DateOnly, v)
 			if err != nil {
 				return v
 			}
 			return t.UTC()
-		// Handle enum and set values from canal events
-		case int64:
-			return strconv.FormatInt(v, 10)
-		// Handle date values from canal events
-		case int32:
-			// Convert MySQL internal date representation to string
-			t := time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC).
-				AddDate(0, 0, int(v))
-			return t.Format("2006-01-02")
 		}
 	case avro.Int:
 		return formatInt(value)
@@ -337,10 +342,6 @@ func (s *schemaMapper) formatValue(column string, value any) any {
 			}
 
 			return f
-		case float32:
-			return float64(v)
-		case float64:
-			return v
 		}
 	case avro.Boolean:
 		if value == nil {
@@ -348,8 +349,6 @@ func (s *schemaMapper) formatValue(column string, value any) any {
 		}
 
 		switch v := value.(type) {
-		case bool:
-			return v
 		case int8:
 			return v != 0
 		case uint8:
@@ -361,8 +360,12 @@ func (s *schemaMapper) formatValue(column string, value any) any {
 		}
 
 		switch v := value.(type) {
-		case []byte:
-			return v
+		// this handles bit datatype for cdc
+		case int64:
+			// canal.Canal parses mysql bit column as an int64, so to be
+			// consistent with snapshot mode we need to manually parse the int
+			// into a slice of bytes.
+			return int64ToMysqlBit(v)
 		case string:
 			return []byte(v)
 		}
@@ -370,6 +373,26 @@ func (s *schemaMapper) formatValue(column string, value any) any {
 		return value
 	}
 	return value
+}
+
+func int64ToMysqlBit(i int64) []byte {
+	bytes := make([]byte, 8)
+	bytes[0] = byte(i >> 56)
+	bytes[1] = byte(i >> 48)
+	bytes[2] = byte(i >> 40)
+	bytes[3] = byte(i >> 32)
+	bytes[4] = byte(i >> 24)
+	bytes[5] = byte(i >> 16)
+	bytes[6] = byte(i >> 8)
+	bytes[7] = byte(i)
+
+	// Find first non-zero byte to trim leading zeros
+	start := 0
+	for start < 7 && bytes[start] == 0 {
+		start++
+	}
+
+	return bytes[start:]
 }
 
 func formatInt(value any) any {

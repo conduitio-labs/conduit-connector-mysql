@@ -157,8 +157,6 @@ func TestUnsafeSnapshot(t *testing.T) {
 	var err error
 
 	type TableWithoutPK struct {
-		// No id field, forcing gorm to not create a primary key
-
 		Data string `gorm:"size:100"`
 	}
 
@@ -197,4 +195,16 @@ func TestUnsafeSnapshot(t *testing.T) {
 		is.Equal(actual.Operation, opencdc.OperationSnapshot)
 		is.Equal(actual.Payload.After.(opencdc.StructuredData)["data"].(string), expectedData)
 	}
+
+	// Test CDC
+
+	db.Create(&TableWithoutPK{Data: "record C"})
+	is.NoErr(db.Error)
+
+	rec, err := source.Read(ctx)
+	is.NoErr(err)
+	is.NoErr(source.Ack(ctx, rec.Position))
+
+	is.Equal(rec.Operation, opencdc.OperationCreate)
+	is.Equal(rec.Payload.After.(opencdc.StructuredData)["data"].(string), "record C")
 }

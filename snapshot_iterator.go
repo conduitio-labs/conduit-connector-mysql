@@ -56,7 +56,7 @@ type (
 	}
 	snapshotIteratorConfig struct {
 		db               *sqlx.DB
-		tableSortColumns map[string]string
+		tableSortColumns map[string]common.PrimaryKeys
 		fetchSize        uint64
 		startPosition    *common.SnapshotPosition
 		database         string
@@ -68,7 +68,7 @@ type (
 func (config *snapshotIteratorConfig) validate() error {
 	if config.startPosition == nil {
 		config.startPosition = &common.SnapshotPosition{
-			Snapshots: common.SnapshotPositions{},
+			Snapshots: common.TablePositions{},
 		}
 	}
 
@@ -111,13 +111,13 @@ func newSnapshotIterator(config snapshotIteratorConfig) (*snapshotIterator, erro
 // starting up the workers.
 func (s *snapshotIterator) setupWorkers(ctx context.Context) error {
 	for table, sortCol := range s.config.tableSortColumns {
-		worker := newFetchWorker(s.config.db, s.data, fetchWorkerConfig{
+		worker := newFetchWorker(ctx, s.config.db, s.data, fetchWorkerConfig{
 			// the snapshot worker will update the last position, so we need to
 			// clone it to avoid dataraces
 			lastPosition: s.lastPosition.Clone(),
 			table:        table,
 			fetchSize:    s.config.fetchSize,
-			sortColName:  sortCol,
+			primaryKeys:  sortCol,
 		})
 
 		isTableEmpty, err := worker.fetchStartEnd(ctx)

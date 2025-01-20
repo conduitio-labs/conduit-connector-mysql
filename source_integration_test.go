@@ -16,6 +16,7 @@ package mysql
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
@@ -207,4 +208,117 @@ func TestUnsafeSnapshot(t *testing.T) {
 
 	is.Equal(rec.Operation, opencdc.OperationCreate)
 	is.Equal(rec.Payload.After.(opencdc.StructuredData)["data"].(string), "record C")
+}
+
+func TestCompositeKey(t *testing.T) {
+	is := is.New(t)
+	db := testutils.NewDB(t)
+	var err error
+
+	type TableWithCompositeKey struct {
+		ID1  int64  `gorm:"primaryKey"`
+		ID2  string `gorm:"primaryKey"`
+		Data string `gorm:"size:100"`
+	}
+
+	err = db.Migrator().DropTable(&TableWithCompositeKey{})
+	is.NoErr(err)
+
+	err = db.AutoMigrate(&TableWithCompositeKey{})
+	is.NoErr(err)
+
+	db.Create([]TableWithCompositeKey{
+		{ID1: 1, ID2: "a", Data: "record A"},
+		{ID1: 2, ID2: "b", Data: "record B"},
+	})
+	is.NoErr(db.Error)
+
+	ctx := testutils.TestContext(t)
+	source, teardown := testSource(ctx, is, config.Config{
+		common.SourceConfigTables: testutils.TableName(is, db, &TableWithCompositeKey{}),
+	})
+	defer teardown()
+
+	var recs []opencdc.Record
+	for i := 0; i < 2; i++ {
+		rec, err := source.Read(ctx)
+		is.NoErr(err)
+		is.NoErr(source.Ack(ctx, rec.Position))
+		recs = append(recs, rec)
+	}
+
+	expected := []opencdc.Record{
+		{
+			Operation: opencdc.OperationSnapshot,
+			Key:       opencdc.StructuredData{"id1": int64(1), "id2": "a"},
+			Payload: opencdc.Change{
+				After: opencdc.StructuredData{
+					"id1":  int64(1),
+					"id2":  "a",
+					"data": "record A",
+				},
+			},
+			Metadata: opencdc.Metadata{"table": "table_with_composite_keys"},
+		},
+		{
+			Operation: opencdc.OperationSnapshot,
+			Key:       opencdc.StructuredData{"id1": int64(2), "id2": "b"},
+			Payload: opencdc.Change{
+				Before: nil,
+				After: opencdc.StructuredData{
+					"id1":  int64(2),
+					"id2":  "b",
+					"data": "record B",
+				},
+			},
+			Metadata: opencdc.Metadata{"table": "table_with_composite_keys"},
+		},
+	}
+
+	for i, exp := range expected {
+		actual := recs[i]
+		is.Equal(actual.Operation, exp.Operation)
+		is.Equal(actual.Key, exp.Key)
+		is.Equal(actual.Payload.Before, exp.Payload.Before)
+		is.Equal(actual.Payload.After, exp.Payload.After)
+		is.Equal(actual.Metadata, exp.Metadata)
+	}
+
+	// test CDC
+	rec, err := source.Read(ctx)
+	is.True(errors.Is(err, context.DeadlineExceeded))
+	is.Equal(rec, opencdc.Record{})
+
+	// insert new record
+	err = db.Create(&TableWithCompositeKey{
+		ID1:  3,
+		ID2:  "c",
+		Data: "record C",
+	}).Error
+	is.NoErr(err)
+
+	rec, err = source.Read(ctx)
+	is.NoErr(err)
+	is.NoErr(source.Ack(ctx, rec.Position))
+
+	expected = []opencdc.Record{
+		{
+			Operation: opencdc.OperationCreate,
+			Key:       opencdc.StructuredData{"id1": int64(3), "id2": "c"},
+			Payload: opencdc.Change{
+				After: opencdc.StructuredData{
+					"id1":  int64(3),
+					"id2":  "c",
+					"data": "record C",
+				},
+			},
+			Metadata: opencdc.Metadata{"table": "table_with_composite_keys"},
+		},
+	}
+
+	is.Equal(rec.Operation, expected[0].Operation)
+	is.Equal(rec.Key, expected[0].Key)
+	is.Equal(rec.Payload.Before, expected[0].Payload.Before)
+	is.Equal(rec.Payload.After, expected[0].Payload.After)
+	is.Equal(rec.Metadata["table"], expected[0].Metadata["table"])
 }

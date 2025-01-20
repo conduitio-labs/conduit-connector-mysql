@@ -36,7 +36,7 @@ type combinedIterator struct {
 
 type combinedIteratorConfig struct {
 	db                    *sqlx.DB
-	tableSortCols         map[string]string
+	tableSortCols         map[string]common.PrimaryKeys
 	fetchSize             uint64
 	startSnapshotPosition *common.SnapshotPosition
 	startCdcPosition      *common.CdcPosition

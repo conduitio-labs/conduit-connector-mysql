@@ -41,30 +41,57 @@ type fetchWorkerConfig struct {
 	lastPosition common.SnapshotPosition
 	table        string
 	fetchSize    uint64
-	sortColName  string
+	primaryKeys  common.PrimaryKeys
 }
 
-func newFetchWorker(db *sqlx.DB, data chan fetchData, config fetchWorkerConfig) fetchWorker {
-	if config.sortColName == "" {
+func newFetchWorker(
+	ctx context.Context, db *sqlx.DB, data chan fetchData, config fetchWorkerConfig) fetchWorker {
+	switch len(config.primaryKeys) {
+	case 0:
 		return newFetchWorkerByLimit(db, data, config)
-	}
+	case 1:
+		tablePosition := config.lastPosition.Snapshots[config.table]
+		var singleKeyPosition common.SingleKeyPosition
+		if tablePosition.Type == common.TablePositionSingleKey {
+			singleKeyPosition = *tablePosition.SingleKey
+		} else {
+			sdk.Logger(ctx).Warn().
+				Str("table", config.table).
+				Msg("single key position not found in last position, defaulting to empty")
+		}
 
-	return newFetchWorkerByKey(db, data, config)
+		return newFetchWorkerByKey(db, data, fetchWorkerByKeyConfig{
+			lastPosition: singleKeyPosition,
+			table:        config.table,
+			fetchSize:    config.fetchSize,
+			primaryKey:   config.primaryKeys[0],
+		})
+	default:
+		return newFetchWorkerByKeys(db, data, config)
+	}
 }
 
-// fetchWorkerByKey will perform a snapshot using the sortColName as
+// fetchWorkerByKey will perform a snapshot using the given primary key as
 // the sorting key for fetching rows in chunks.
 type fetchWorkerByKey struct {
 	db            *sqlx.DB
 	data          chan fetchData
-	config        fetchWorkerConfig
+	config        fetchWorkerByKeyConfig
 	payloadSchema *schemaMapper
 	keySchema     *schemaMapper
 
 	start, end any
 }
 
-func newFetchWorkerByKey(db *sqlx.DB, data chan fetchData, config fetchWorkerConfig) fetchWorker {
+type fetchWorkerByKeyConfig struct {
+	lastPosition common.SingleKeyPosition
+	table        string
+	fetchSize    uint64
+	primaryKey   string
+}
+
+func newFetchWorkerByKey(
+	db *sqlx.DB, data chan fetchData, config fetchWorkerByKeyConfig) fetchWorker {
 	return &fetchWorkerByKey{
 		db:            db,
 		data:          data,
@@ -87,7 +114,7 @@ func (w *fetchWorkerByKey) fetchStartEnd(ctx context.Context) (isTableEmpty bool
 	}
 
 	w.start = row.MinValue
-	lastRead := w.config.lastPosition.Snapshots[w.config.table].LastRead
+	lastRead := w.config.lastPosition.LastRead
 	if lastRead != nil {
 		w.start = lastRead
 	}
@@ -129,7 +156,7 @@ func (w *fetchWorkerByKey) run(ctx context.Context) (err error) {
 	// If the worker has been given a starting position it means that we have already
 	// read the record in that specific position, so we can just exclude it.
 
-	discardFirst := w.config.lastPosition.Snapshots[w.config.table].LastRead != nil
+	discardFirst := w.config.lastPosition.LastRead != nil
 	chunkStart := w.start
 	for {
 		sdk.Logger(ctx).Info().
@@ -145,7 +172,7 @@ func (w *fetchWorkerByKey) run(ctx context.Context) (err error) {
 		for _, row := range rowsChunk.rows {
 			sdk.Logger(ctx).Trace().Msgf("fetched row: %+v", row)
 
-			lastRead := row[w.config.sortColName]
+			lastRead := row[w.config.primaryKey]
 			if lastRead == nil {
 				return ErrSortingKeyNotFoundInRow
 			}
@@ -181,13 +208,12 @@ type minmaxRow struct {
 
 // getMinMaxValues fetches the maximum value of the primary key from the table.
 func (w *fetchWorkerByKey) getMinMaxValues(
-	ctx context.Context,
-) (scanned *minmaxRow, isTableEmpty bool, err error) {
+	ctx context.Context) (scanned *minmaxRow, isTableEmpty bool, err error) {
 	var scannedRow minmaxRow
 
 	query := fmt.Sprintf(
 		"SELECT MIN(%s) as min_value, MAX(%s) as max_value FROM %s",
-		w.config.sortColName, w.config.sortColName, w.config.table)
+		w.config.primaryKey, w.config.primaryKey, w.config.table)
 
 	row := w.db.QueryRowxContext(ctx, query)
 	if err := row.StructScan(&scannedRow); err != nil {
@@ -221,17 +247,17 @@ func (w *fetchWorkerByKey) selectRowsChunk(
 	ctx context.Context, tx *sqlx.Tx,
 	start any, discardFirst bool,
 ) (_ *rowsChunk, err error) {
-	var whereStart any = squirrel.GtOrEq{w.config.sortColName: start}
+	var whereStart any = squirrel.GtOrEq{w.config.primaryKey: start}
 	if discardFirst {
-		whereStart = squirrel.Gt{w.config.sortColName: start}
+		whereStart = squirrel.Gt{w.config.primaryKey: start}
 	}
-	whereEnd := squirrel.LtOrEq{w.config.sortColName: w.end}
+	whereEnd := squirrel.LtOrEq{w.config.primaryKey: w.end}
 
 	query, args, err := squirrel.
 		Select("*").
 		From(w.config.table).
 		Where(whereStart).Where(whereEnd).
-		OrderBy(w.config.sortColName).
+		OrderBy(w.config.primaryKey).
 		Limit(w.config.fetchSize).
 		ToSql()
 	if err != nil {
@@ -281,8 +307,11 @@ func (w *fetchWorkerByKey) buildFetchData(
 	colTypes []*avroNamedType, lastRead any,
 ) (fetchData, error) {
 	position := common.TablePosition{
-		LastRead:    lastRead,
-		SnapshotEnd: w.end,
+		Type: common.TablePositionSingleKey,
+		SingleKey: &common.SingleKeyPosition{
+			LastRead:    lastRead,
+			SnapshotEnd: w.end,
+		},
 	}
 
 	payloadSubver, err := w.payloadSchema.createPayloadSchema(ctx, w.config.table, colTypes)
@@ -297,7 +326,7 @@ func (w *fetchWorkerByKey) buildFetchData(
 
 	var keyColType *avroNamedType
 	for _, colType := range colTypes {
-		if colType.Name == w.config.sortColName {
+		if colType.Name == w.config.primaryKey {
 			keyColType = colType
 			break
 		}
@@ -306,18 +335,18 @@ func (w *fetchWorkerByKey) buildFetchData(
 		return fetchData{}, fmt.Errorf("failed to find key schema column type for table %s", w.config.table)
 	}
 
-	keySubver, err := w.keySchema.createKeySchema(ctx, w.config.table, keyColType)
+	keySubver, err := w.keySchema.createKeySchema(ctx, w.config.table, []*avroColType{keyColType})
 	if err != nil {
 		return fetchData{}, fmt.Errorf("failed to create key schema for table %s: %w", w.config.table, err)
 	}
 
-	keyVal, ok := row[w.config.sortColName]
+	keyVal, ok := row[w.config.primaryKey]
 	if !ok {
-		return fetchData{}, fmt.Errorf("key %s not found in payload", w.config.sortColName)
+		return fetchData{}, fmt.Errorf("key %s not found in payload", w.config.primaryKey)
 	}
-	keyVal = w.keySchema.formatValue(ctx, w.config.sortColName, keyVal)
+	keyVal = w.keySchema.formatValue(ctx, w.config.primaryKey, keyVal)
 
-	key := opencdc.StructuredData{w.config.sortColName: keyVal}
+	key := opencdc.StructuredData{w.config.primaryKey: keyVal}
 	return fetchData{
 		key:           key,
 		table:         w.config.table,
@@ -326,6 +355,36 @@ func (w *fetchWorkerByKey) buildFetchData(
 		payloadSchema: payloadSubver,
 		keySchema:     keySubver,
 	}, nil
+}
+
+type fetchWorkerByKeys struct {
+	db            *sqlx.DB
+	data          chan fetchData
+	config        fetchWorkerConfig
+	payloadSchema *schemaMapper
+	keySchema     *schemaMapper
+}
+
+func newFetchWorkerByKeys(db *sqlx.DB, data chan fetchData, config fetchWorkerConfig) fetchWorker {
+	return &fetchWorkerByKeys{
+		db:            db,
+		data:          data,
+		config:        config,
+		payloadSchema: newSchemaMapper(),
+		keySchema:     newSchemaMapper(),
+	}
+}
+
+func (f fetchWorkerByKeys) table() string {
+	panic("unimplemented")
+}
+
+func (f fetchWorkerByKeys) fetchStartEnd(ctx context.Context) (tableEmpty bool, err error) {
+	panic("unimplemented")
+}
+
+func (f fetchWorkerByKeys) run(ctx context.Context) error {
+	panic("unimplemented")
 }
 
 // fetchWorkerByLimit will perform a snapshot using the LIMIT + OFFSET clauses to fetch

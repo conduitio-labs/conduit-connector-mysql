@@ -148,41 +148,42 @@ func (s *Source) Teardown(ctx context.Context) error {
 	return nil
 }
 
-func getPrimaryKey(db *sqlx.DB, database, table string) (string, error) {
-	var primaryKey struct {
+func getPrimaryKeys(db *sqlx.DB, database, table string) (common.PrimaryKeys, error) {
+	var primaryKeys []struct {
 		ColumnName string `db:"COLUMN_NAME"`
 	}
 
-	row := db.QueryRowx(`
+	err := db.Select(&primaryKeys, `
 		SELECT COLUMN_NAME
 		FROM information_schema.key_column_usage
 		WHERE constraint_name = 'PRIMARY'
 			AND table_schema = ?
 			AND table_name = ?
-		ORDER BY ORDINAL_POSITION DESC
-	`, database, table)
-
-	if err := row.StructScan(&primaryKey); err != nil {
-		return "", fmt.Errorf("failed to get primary key from table %s: %w", table, err)
-	}
-	if err := row.Err(); err != nil {
-		return "", fmt.Errorf("failed to scan primary key from table %s: %w", table, err)
+		ORDER BY ORDINAL_POSITION
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get primary key(s) from table %s: %w", table, err)
 	}
 
-	return primaryKey.ColumnName, nil
+	var keys common.PrimaryKeys
+	for _, pk := range primaryKeys {
+		keys = append(keys, pk.ColumnName)
+	}
+
+	return keys, nil
 }
 
-func (s *Source) getTableKeys(ctx context.Context) (map[string]string, error) {
-	tableKeys := make(map[string]string)
+func (s *Source) getTableKeys(ctx context.Context) (map[string]common.PrimaryKeys, error) {
+	tableKeys := make(map[string]common.PrimaryKeys)
 
 	for _, table := range s.config.Tables {
 		preconfiguredTableKey, ok := s.config.TableConfig[table]
 		if ok {
-			tableKeys[table] = preconfiguredTableKey.SortingColumn
+			tableKeys[table] = common.PrimaryKeys{preconfiguredTableKey.SortingColumn}
 			continue
 		}
 
-		primaryKey, err := getPrimaryKey(s.db, s.configFromDsn.DBName, table)
+		primaryKeys, err := getPrimaryKeys(s.db, s.configFromDsn.DBName, table)
 		if err != nil {
 			if s.config.UnsafeSnapshot {
 				sdk.Logger(ctx).Warn().Msgf(
@@ -192,7 +193,7 @@ func (s *Source) getTableKeys(ctx context.Context) (map[string]string, error) {
 				// value table key as a table where we cannot do a sorted
 				// snapshot.
 
-				tableKeys[table] = ""
+				tableKeys[table] = common.PrimaryKeys{}
 				continue
 			}
 
@@ -201,7 +202,7 @@ func (s *Source) getTableKeys(ctx context.Context) (map[string]string, error) {
 				table, err)
 		}
 
-		tableKeys[table] = primaryKey
+		tableKeys[table] = primaryKeys
 	}
 
 	return tableKeys, nil

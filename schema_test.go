@@ -362,7 +362,7 @@ func TestSchema_Key(t *testing.T) {
 		}
 	}
 
-	_, err = keySchemaManager.createKeySchema(ctx, tableName, f1Col)
+	_, err = keySchemaManager.createKeySchema(ctx, tableName, []*avroColType{f1Col})
 	is.NoErr(err)
 
 	s, err := schema.Get(ctx, tableName+"_key", 1)

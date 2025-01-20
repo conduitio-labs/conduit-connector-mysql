@@ -66,7 +66,7 @@ func testSnapshotIteratorAtPosition(
 	pos, err := common.ParseSDKPosition(sdkPos)
 	is.NoErr(err)
 
-	is.Equal(pos.Kind, common.PositionTypeSnapshot)
+	is.Equal(pos.Type, common.PositionTypeSnapshot)
 
 	iterator, err := newSnapshotIterator(snapshotIteratorConfig{
 		tableSortColumns: testutils.TableSortCols,
@@ -273,7 +273,7 @@ func TestSnapshotIterator_CustomTableKeys(t *testing.T) {
 			is.NoErr(err)
 
 			iterator, err := newSnapshotIterator(snapshotIteratorConfig{
-				tableSortColumns: map[string]string{testCase.tableName: testCase.sortingCol},
+				tableSortColumns: map[string]common.PrimaryKeys{testCase.tableName: {testCase.sortingCol}},
 				db:               db,
 				database:         "meroxadb",
 				tables:           []string{testCase.tableName},
@@ -411,7 +411,7 @@ func TestSnapshotIterator_StringSorting(t *testing.T) {
 	is.NoErr(err)
 
 	iterator, err := newSnapshotIterator(snapshotIteratorConfig{
-		tableSortColumns: map[string]string{tablename: "str"},
+		tableSortColumns: map[string]common.PrimaryKeys{tablename: {"str"}},
 		db:               db.SqlxDB,
 		database:         "meroxadb",
 		tables:           []string{tablename},
@@ -481,7 +481,7 @@ func TestSnapshotIterator_FetchByLimit(t *testing.T) {
 	is.NoErr(err)
 
 	iterator, err := newSnapshotIterator(snapshotIteratorConfig{
-		tableSortColumns: map[string]string{table1name: "", table2name: ""},
+		tableSortColumns: map[string]common.PrimaryKeys{table1name: {}, table2name: {}},
 		db:               db.SqlxDB,
 		database:         "meroxadb",
 		tables:           []string{table1name, table2name},

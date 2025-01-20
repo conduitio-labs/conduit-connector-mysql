@@ -164,8 +164,7 @@ func GetServerID(ctx context.Context, db *sqlx.DB) (string, error) {
 }
 
 // PrimaryKeys contains all possible primary keys that a table can have. The
-// keyname (the string) access order is important, so that we can build ORDER BY
-// clauses in a predictable manner.
+// order is important, so that we can properly build ORDER BY clauses.
 type PrimaryKeys []string
 
 func (p PrimaryKeys) GetValuesFromRow(row map[string]any) []any {

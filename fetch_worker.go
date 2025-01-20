@@ -67,7 +67,23 @@ func newFetchWorker(
 			primaryKey:   config.primaryKeys[0],
 		})
 	default:
-		return newFetchWorkerByKeys(db, data, config)
+		tablePosition := config.lastPosition.Snapshots[config.table]
+		var multipleKeyPosition common.MultipleKeyPosition
+		if tablePosition.Type == common.TablePositionMultipleKey {
+			multipleKeyPosition = *tablePosition.MultipleKeys
+		} else {
+			sdk.Logger(ctx).Warn().
+				Str("table", config.table).
+				Msg("multiple key position not found in last position, defaulting to fetch worker by limit iteration")
+			return newFetchWorkerByLimit(db, data, config)
+		}
+
+		return newFetchWorkerByKeys(db, data, fetchWorkerByKeysConfig{
+			lastPosition: multipleKeyPosition,
+			table:        config.table,
+			fetchSize:    config.fetchSize,
+			primaryKeys:  config.primaryKeys,
+		})
 	}
 }
 
@@ -106,7 +122,7 @@ func (w *fetchWorkerByKey) table() string {
 }
 
 func (w *fetchWorkerByKey) fetchStartEnd(ctx context.Context) (isTableEmpty bool, err error) {
-	row, isEmpty, err := w.getMinMaxValues(ctx)
+	row, isEmpty, err := getMinMaxValues(ctx, w.db, w.config.primaryKey, w.config.table)
 	if err != nil {
 		return false, err
 	} else if isEmpty {
@@ -199,42 +215,6 @@ func (w *fetchWorkerByKey) run(ctx context.Context) (err error) {
 	}
 
 	return nil
-}
-
-type minmaxRow struct {
-	MinValue any `db:"min_value"`
-	MaxValue any `db:"max_value"`
-}
-
-// getMinMaxValues fetches the maximum value of the primary key from the table.
-func (w *fetchWorkerByKey) getMinMaxValues(
-	ctx context.Context) (scanned *minmaxRow, isTableEmpty bool, err error) {
-	var scannedRow minmaxRow
-
-	query := fmt.Sprintf(
-		"SELECT MIN(%s) as min_value, MAX(%s) as max_value FROM %s",
-		w.config.primaryKey, w.config.primaryKey, w.config.table)
-
-	row := w.db.QueryRowxContext(ctx, query)
-	if err := row.StructScan(&scannedRow); err != nil {
-		return nil, false, fmt.Errorf("failed to get min value: %w", err)
-	}
-	if err := row.Err(); err != nil {
-		return nil, false, fmt.Errorf("failed to get min value: %w", err)
-	}
-
-	if scannedRow.MinValue == nil || scannedRow.MaxValue == nil {
-		return nil, true, nil
-	}
-
-	sdk.Logger(ctx).Debug().
-		Str("query", query).
-		Str("min_value_type", fmt.Sprintf("%T", scannedRow.MinValue)).
-		Str("max_value_type", fmt.Sprintf("%T", scannedRow.MaxValue)).
-		Any("scannedRow", scannedRow).
-		Send()
-
-	return &scannedRow, false, nil
 }
 
 type rowsChunk struct {
@@ -360,12 +340,22 @@ func (w *fetchWorkerByKey) buildFetchData(
 type fetchWorkerByKeys struct {
 	db            *sqlx.DB
 	data          chan fetchData
-	config        fetchWorkerConfig
+	config        fetchWorkerByKeysConfig
 	payloadSchema *schemaMapper
 	keySchema     *schemaMapper
+
+	start, end common.MultipleKeyPosition
 }
 
-func newFetchWorkerByKeys(db *sqlx.DB, data chan fetchData, config fetchWorkerConfig) fetchWorker {
+type fetchWorkerByKeysConfig struct {
+	lastPosition common.MultipleKeyPosition
+	table        string
+	fetchSize    uint64
+	primaryKeys  common.PrimaryKeys
+}
+
+func newFetchWorkerByKeys(
+	db *sqlx.DB, data chan fetchData, config fetchWorkerByKeysConfig) fetchWorker {
 	return &fetchWorkerByKeys{
 		db:            db,
 		data:          data,
@@ -375,15 +365,44 @@ func newFetchWorkerByKeys(db *sqlx.DB, data chan fetchData, config fetchWorkerCo
 	}
 }
 
-func (f fetchWorkerByKeys) table() string {
-	panic("unimplemented")
+func (w *fetchWorkerByKeys) table() string {
+	return w.config.table
 }
 
-func (f fetchWorkerByKeys) fetchStartEnd(ctx context.Context) (tableEmpty bool, err error) {
-	panic("unimplemented")
+func (w *fetchWorkerByKeys) fetchStartEnd(ctx context.Context) (tableEmpty bool, err error) {
+	for _, primaryKey := range w.config.primaryKeys {
+		scanned, isEmpty, err := getMinMaxValues(ctx, w.db, primaryKey, w.config.table)
+		if err != nil {
+			return false, fmt.Errorf("failed to get min max values: %w", err)
+		} else if isEmpty {
+			return true, nil
+		}
+
+		w.start = append(w.start, common.MultipleKeySinglePosition{
+			LastRead:    scanned.MinValue,
+			SnapshotEnd: scanned.MaxValue,
+		})
+		w.end = append(w.end, common.MultipleKeySinglePosition{
+			LastRead:    scanned.MinValue,
+			SnapshotEnd: scanned.MaxValue,
+		})
+	}
+
+	if len(w.config.primaryKeys) == len(w.config.lastPosition) {
+		w.start = w.config.lastPosition
+	}
+
+	sdk.Logger(ctx).Debug().
+		Any("start", w.start).
+		Type("start type", w.start).
+		Any("end", w.end).
+		Type("end type", w.end).
+		Msg("fetched start and end")
+
+	return false, nil
 }
 
-func (f fetchWorkerByKeys) run(ctx context.Context) error {
+func (w *fetchWorkerByKeys) run(ctx context.Context) error {
 	panic("unimplemented")
 }
 
@@ -540,4 +559,41 @@ func (w *fetchWorkerByLimit) run(ctx context.Context) (err error) {
 	}
 
 	return nil
+}
+
+type minmaxRow struct {
+	MinValue any `db:"min_value"`
+	MaxValue any `db:"max_value"`
+}
+
+// getMinMaxValues fetches the maximum value of the primary key from the table.
+func getMinMaxValues(
+	ctx context.Context, db *sqlx.DB, primaryKey, table string,
+) (scanned *minmaxRow, isTableEmpty bool, err error) {
+	var scannedRow minmaxRow
+
+	query := fmt.Sprintf(
+		"SELECT MIN(%s) as min_value, MAX(%s) as max_value FROM %s",
+		primaryKey, primaryKey, table)
+
+	row := db.QueryRowxContext(ctx, query)
+	if err := row.StructScan(&scannedRow); err != nil {
+		return nil, false, fmt.Errorf("failed to get min value: %w", err)
+	}
+	if err := row.Err(); err != nil {
+		return nil, false, fmt.Errorf("failed to get min value: %w", err)
+	}
+
+	if scannedRow.MinValue == nil || scannedRow.MaxValue == nil {
+		return nil, true, nil
+	}
+
+	sdk.Logger(ctx).Debug().
+		Str("query", query).
+		Str("min_value_type", fmt.Sprintf("%T", scannedRow.MinValue)).
+		Str("max_value_type", fmt.Sprintf("%T", scannedRow.MaxValue)).
+		Any("scannedRow", scannedRow).
+		Send()
+
+	return &scannedRow, false, nil
 }

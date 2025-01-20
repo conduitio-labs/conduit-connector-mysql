@@ -45,7 +45,8 @@ type fetchWorkerConfig struct {
 }
 
 func newFetchWorker(
-	ctx context.Context, db *sqlx.DB, data chan fetchData, config fetchWorkerConfig) fetchWorker {
+	ctx context.Context, db *sqlx.DB, data chan fetchData, config fetchWorkerConfig,
+) fetchWorker {
 	switch len(config.primaryKeys) {
 	case 0:
 		return newFetchWorkerByLimit(db, data, config)
@@ -107,7 +108,8 @@ type fetchWorkerByKeyConfig struct {
 }
 
 func newFetchWorkerByKey(
-	db *sqlx.DB, data chan fetchData, config fetchWorkerByKeyConfig) fetchWorker {
+	db *sqlx.DB, data chan fetchData, config fetchWorkerByKeyConfig,
+) fetchWorker {
 	return &fetchWorkerByKey{
 		db:            db,
 		data:          data,
@@ -355,7 +357,8 @@ type fetchWorkerByKeysConfig struct {
 }
 
 func newFetchWorkerByKeys(
-	db *sqlx.DB, data chan fetchData, config fetchWorkerByKeysConfig) fetchWorker {
+	db *sqlx.DB, data chan fetchData, config fetchWorkerByKeysConfig,
+) fetchWorker {
 	return &fetchWorkerByKeys{
 		db:            db,
 		data:          data,
@@ -402,7 +405,7 @@ func (w *fetchWorkerByKeys) fetchStartEnd(ctx context.Context) (tableEmpty bool,
 	return false, nil
 }
 
-func (w *fetchWorkerByKeys) run(ctx context.Context) error {
+func (w *fetchWorkerByKeys) run(_ context.Context) error {
 	panic("unimplemented")
 }
 

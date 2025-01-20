@@ -175,7 +175,7 @@ func (c *cdcIterator) buildRecord(ctx context.Context, e rowEvent) (opencdc.Reco
 	payloadSchema, keySchema := newSchemaMapper(), newSchemaMapper()
 	tableName := e.Table.Name
 
-	payloadSubver, err := payloadSchema.createPayloadSchema(ctx, tableName+"_payload", payloadAvroCols)
+	payloadSubver, err := payloadSchema.createPayloadSchema(ctx, tableName, payloadAvroCols)
 	if err != nil {
 		return opencdc.Record{}, fmt.Errorf("failed to create cdc payload schema for table %s: %w", tableName, err)
 	}

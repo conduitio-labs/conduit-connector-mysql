@@ -160,7 +160,7 @@ func getPrimaryKeys(db *sqlx.DB, database, table string) (common.PrimaryKeys, er
 			AND table_schema = ?
 			AND table_name = ?
 		ORDER BY ORDINAL_POSITION
-	`)
+	`, database, table)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get primary key(s) from table %s: %w", table, err)
 	}

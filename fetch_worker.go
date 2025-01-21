@@ -27,7 +27,7 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
-var ErrSortingKeyNotFoundInRow = errors.New("sorting key not found in row")
+var ErrPrimaryKeyNotFoundInRow = errors.New("primary key not found in row")
 
 type fetchWorker interface {
 	// for debug purposes
@@ -88,9 +88,9 @@ func newFetchWorker(
 	}
 }
 
-// fetchWorkerByKey will perform a snapshot using the given primary key as
+// fetchWorkerSingleKey will perform a snapshot using the given primary key as
 // the sorting key for fetching rows in chunks.
-type fetchWorkerByKey struct {
+type fetchWorkerSingleKey struct {
 	db            *sqlx.DB
 	data          chan fetchData
 	config        fetchWorkerByKeyConfig
@@ -110,7 +110,7 @@ type fetchWorkerByKeyConfig struct {
 func newFetchWorkerByKey(
 	db *sqlx.DB, data chan fetchData, config fetchWorkerByKeyConfig,
 ) fetchWorker {
-	return &fetchWorkerByKey{
+	return &fetchWorkerSingleKey{
 		db:            db,
 		data:          data,
 		payloadSchema: newSchemaMapper(),
@@ -119,11 +119,11 @@ func newFetchWorkerByKey(
 	}
 }
 
-func (w *fetchWorkerByKey) table() string {
+func (w *fetchWorkerSingleKey) table() string {
 	return w.config.table
 }
 
-func (w *fetchWorkerByKey) fetchStartEnd(ctx context.Context) (isTableEmpty bool, err error) {
+func (w *fetchWorkerSingleKey) fetchStartEnd(ctx context.Context) (isTableEmpty bool, err error) {
 	row, isEmpty, err := getMinMaxValues(ctx, w.db, w.config.primaryKey, w.config.table)
 	if err != nil {
 		return false, err
@@ -149,7 +149,7 @@ func (w *fetchWorkerByKey) fetchStartEnd(ctx context.Context) (isTableEmpty bool
 	return false, nil
 }
 
-func (w *fetchWorkerByKey) run(ctx context.Context) (err error) {
+func (w *fetchWorkerSingleKey) run(ctx context.Context) (err error) {
 	sdk.Logger(ctx).Info().Msgf("started fetch worker by key for table %q", w.config.table)
 	defer sdk.Logger(ctx).Info().Msgf("finished fetch worker by key for table %q", w.config.table)
 
@@ -160,10 +160,9 @@ func (w *fetchWorkerByKey) run(ctx context.Context) (err error) {
 	if err != nil {
 		return fmt.Errorf("failed to create transaction: %w", err)
 	}
+	defer func() { err = errors.Join(err, tx.Commit()) }()
 
 	sdk.Logger(ctx).Debug().Msgf("obtained tx for table %v", w.config.table)
-
-	defer func() { err = errors.Join(err, tx.Commit()) }()
 
 	sdk.Logger(ctx).Info().
 		Any("start", w.start).
@@ -192,7 +191,7 @@ func (w *fetchWorkerByKey) run(ctx context.Context) (err error) {
 
 			lastRead := row[w.config.primaryKey]
 			if lastRead == nil {
-				return ErrSortingKeyNotFoundInRow
+				return ErrPrimaryKeyNotFoundInRow
 			}
 
 			data, err := w.buildFetchData(ctx, row, rowsChunk.mysqlAvroCols, lastRead)
@@ -225,7 +224,7 @@ type rowsChunk struct {
 	foundEnd      bool
 }
 
-func (w *fetchWorkerByKey) selectRowsChunk(
+func (w *fetchWorkerSingleKey) selectRowsChunk(
 	ctx context.Context, tx *sqlx.Tx,
 	start any, discardFirst bool,
 ) (_ *rowsChunk, err error) {
@@ -284,7 +283,7 @@ func (w *fetchWorkerByKey) selectRowsChunk(
 	return chunk, nil
 }
 
-func (w *fetchWorkerByKey) buildFetchData(
+func (w *fetchWorkerSingleKey) buildFetchData(
 	ctx context.Context, row map[string]any,
 	colTypes []*avroNamedType, lastRead any,
 ) (fetchData, error) {
@@ -339,7 +338,7 @@ func (w *fetchWorkerByKey) buildFetchData(
 	}, nil
 }
 
-type fetchWorkerByKeys struct {
+type fetchWorkerMultipleKey struct {
 	db            *sqlx.DB
 	data          chan fetchData
 	config        fetchWorkerByKeysConfig
@@ -359,7 +358,7 @@ type fetchWorkerByKeysConfig struct {
 func newFetchWorkerByKeys(
 	db *sqlx.DB, data chan fetchData, config fetchWorkerByKeysConfig,
 ) fetchWorker {
-	return &fetchWorkerByKeys{
+	return &fetchWorkerMultipleKey{
 		db:            db,
 		data:          data,
 		config:        config,
@@ -368,11 +367,11 @@ func newFetchWorkerByKeys(
 	}
 }
 
-func (w *fetchWorkerByKeys) table() string {
+func (w *fetchWorkerMultipleKey) table() string {
 	return w.config.table
 }
 
-func (w *fetchWorkerByKeys) fetchStartEnd(ctx context.Context) (tableEmpty bool, err error) {
+func (w *fetchWorkerMultipleKey) fetchStartEnd(ctx context.Context) (tableEmpty bool, err error) {
 	for _, primaryKey := range w.config.primaryKeys {
 		scanned, isEmpty, err := getMinMaxValues(ctx, w.db, primaryKey, w.config.table)
 		if err != nil {
@@ -382,10 +381,12 @@ func (w *fetchWorkerByKeys) fetchStartEnd(ctx context.Context) (tableEmpty bool,
 		}
 
 		w.start = append(w.start, common.MultipleKeySinglePosition{
+			KeyName:     primaryKey,
 			LastRead:    scanned.MinValue,
 			SnapshotEnd: scanned.MaxValue,
 		})
 		w.end = append(w.end, common.MultipleKeySinglePosition{
+			KeyName:     primaryKey,
 			LastRead:    scanned.MinValue,
 			SnapshotEnd: scanned.MaxValue,
 		})
@@ -405,8 +406,203 @@ func (w *fetchWorkerByKeys) fetchStartEnd(ctx context.Context) (tableEmpty bool,
 	return false, nil
 }
 
-func (w *fetchWorkerByKeys) run(_ context.Context) error {
-	panic("unimplemented")
+func (w *fetchWorkerMultipleKey) run(ctx context.Context) error {
+	sdk.Logger(ctx).Info().Msgf("started fetch worker by keys for table %q", w.config.table)
+	defer sdk.Logger(ctx).Info().Msgf("finished fetch worker by keys for table %q", w.config.table)
+
+	tx, err := w.db.BeginTxx(ctx, &sql.TxOptions{
+		Isolation: sql.LevelRepeatableRead,
+		ReadOnly:  true,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create transaction: %w", err)
+	}
+	defer func() { err = errors.Join(err, tx.Commit()) }()
+
+	sdk.Logger(ctx).Debug().Msgf("obtained tx for table %v", w.config.table)
+	sdk.Logger(ctx).Info().
+		Any("start", w.start).
+		Any("end", w.end).
+		Uint64("fetchSize", w.config.fetchSize).
+		Msg("fetching rows")
+
+	// If the worker has been given a starting position it means that we have already
+	// read the record in that specific position, so we can just exclude it.
+
+	discardFirst := len(w.config.lastPosition) > 0
+	chunkStart := w.start
+	for {
+		sdk.Logger(ctx).Info().
+			Any("chunk start", chunkStart).
+			Any("end", w.end).Msg("fetching chunk")
+
+		rowsChunk, err := w.selectRowsChunk(ctx, tx, chunkStart, discardFirst)
+		if err != nil {
+			return fmt.Errorf("failed to select rows chunk: %w", err)
+		}
+		discardFirst = true
+
+		for _, row := range rowsChunk.rows {
+			sdk.Logger(ctx).Trace().Msgf("fetched row: %+v", row)
+
+			lastRead, found := w.getKeyPos(row)
+			if !found {
+				return ErrPrimaryKeyNotFoundInRow
+			}
+
+			data, err := w.buildFetchData(ctx, row, rowsChunk.mysqlAvroCols, lastRead)
+			if err != nil {
+				return fmt.Errorf("failed to build fetch data: %w", err)
+			}
+
+			select {
+			case w.data <- data:
+			case <-ctx.Done():
+				return fmt.Errorf(
+					"fetch worker context done while waiting for data: %w", ctx.Err(),
+				)
+			}
+
+			chunkStart = lastRead
+		}
+
+		if rowsChunk.foundEnd {
+			break
+		}
+	}
+
+	return nil
+}
+
+func (w *fetchWorkerMultipleKey) getKeyPos(
+	row map[string]any,
+) (pos common.MultipleKeyPosition, found bool) {
+	for _, key := range w.config.primaryKeys {
+		val, ok := row[key]
+		if !ok {
+			return nil, false
+		}
+
+		pos = append(pos, common.MultipleKeySinglePosition{LastRead: val})
+	}
+
+	return pos, true
+}
+
+func (w *fetchWorkerMultipleKey) selectRowsChunk(
+	ctx context.Context, tx *sqlx.Tx,
+	start common.MultipleKeyPosition, discardFirst bool,
+) (*rowsChunk, error) {
+	stmt := squirrel.Select("*").From(w.config.table)
+
+	// build where
+	for _, keyPos := range start {
+		if discardFirst {
+			stmt = stmt.Where(squirrel.Gt{keyPos.KeyName: keyPos.LastRead})
+		} else {
+			stmt = stmt.Where(squirrel.GtOrEq{keyPos.KeyName: keyPos.LastRead})
+		}
+	}
+
+	query, args, err := stmt.
+		OrderBy(w.config.primaryKeys...).
+		Limit(w.config.fetchSize).
+		ToSql()
+	if err != nil {
+		return nil, fmt.Errorf("failed to build query: %w", err)
+	}
+
+	sdk.Logger(ctx).Debug().Str("query", query).Any("args", args).Msg("created query")
+
+	rows, err := tx.QueryxContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query rows: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			closeErr = fmt.Errorf("failed to close rows: %w", closeErr)
+			err = errors.Join(err, closeErr)
+		}
+	}()
+
+	chunk := &rowsChunk{}
+
+	chunk.mysqlAvroCols, err = sqlxRowsToAvroCol(rows)
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve column types: %w", err)
+	}
+
+	for rows.Next() {
+		row := map[string]any{}
+		if err := rows.MapScan(row); err != nil {
+			return nil, fmt.Errorf("failed to map scan row: %w", err)
+		}
+
+		chunk.rows = append(chunk.rows, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to close rows: %w", err)
+	}
+
+	//nolint:gosec // fetchSize is already checked for being a sane int value
+	chunk.foundEnd = len(chunk.rows) < int(w.config.fetchSize)
+
+	return chunk, nil
+}
+
+func (w *fetchWorkerMultipleKey) buildFetchData(
+	ctx context.Context, row map[string]any,
+	colTypes []*avroColType, lastRead common.MultipleKeyPosition,
+) (fetchData, error) {
+	position := common.TablePosition{
+		Type:         common.TablePositionMultipleKey,
+		MultipleKeys: &lastRead,
+	}
+
+	payloadSubver, err := w.payloadSchema.createPayloadSchema(ctx, w.config.table, colTypes)
+	if err != nil {
+		return fetchData{}, fmt.Errorf("failed to create payload schema for table %s: %w", w.config.table, err)
+	}
+
+	payload := make(opencdc.StructuredData)
+	for key, val := range row {
+		payload[key] = w.payloadSchema.formatValue(key, val)
+	}
+
+	var keyColTypes []*avroColType
+keyColLoop:
+	for _, primaryKey := range w.config.primaryKeys {
+		for _, colType := range colTypes {
+			if primaryKey == colType.Name {
+				keyColTypes = append(keyColTypes, colType)
+				continue keyColLoop
+			}
+		}
+		return fetchData{}, fmt.Errorf("failed to find key schema column type for table %s", w.config.table)
+	}
+
+	keySubver, err := w.keySchema.createKeySchema(ctx, w.config.table, keyColTypes)
+	if err != nil {
+		return fetchData{}, fmt.Errorf("failed to create key schema for table %s: %w", w.config.table, err)
+	}
+
+	key := opencdc.StructuredData{}
+	for _, primaryKey := range w.config.primaryKeys {
+		keyVal, ok := row[primaryKey]
+		if !ok {
+			return fetchData{}, fmt.Errorf("key %s not found in payload", primaryKey)
+		}
+		key[primaryKey] = w.keySchema.formatValue(primaryKey, keyVal)
+	}
+
+	return fetchData{
+		key:           key,
+		table:         w.config.table,
+		payload:       payload,
+		position:      position,
+		payloadSchema: payloadSubver,
+		keySchema:     keySubver,
+	}, nil
 }
 
 // fetchWorkerByLimit will perform a snapshot using the LIMIT + OFFSET clauses to fetch

@@ -68,23 +68,29 @@ func newFetchWorker(
 			primaryKey:   config.primaryKeys[0],
 		})
 	default:
-		tablePosition := config.lastPosition.Snapshots[config.table]
-		var multipleKeyPosition common.MultipleKeyPosition
-		if tablePosition.Type == common.TablePositionMultipleKey {
-			multipleKeyPosition = *tablePosition.MultipleKeys
-		} else {
+		tablePosition, ok := config.lastPosition.Snapshots[config.table]
+		switch {
+		case !ok:
+			return newFetchWorkerByKeys(db, data, fetchWorkerByKeysConfig{
+				// omit lastPosition, we'll use the zero value of it
+				table:       config.table,
+				fetchSize:   config.fetchSize,
+				primaryKeys: config.primaryKeys,
+			})
+		case tablePosition.Type == common.TablePositionMultipleKey:
+			return newFetchWorkerByKeys(db, data, fetchWorkerByKeysConfig{
+				lastPosition: *tablePosition.MultipleKeys,
+				table:        config.table,
+				fetchSize:    config.fetchSize,
+				primaryKeys:  config.primaryKeys,
+			})
+		default:
 			sdk.Logger(ctx).Warn().
 				Str("table", config.table).
 				Msg("multiple key position not found in last position, defaulting to fetch worker by limit iteration")
+
 			return newFetchWorkerByLimit(db, data, config)
 		}
-
-		return newFetchWorkerByKeys(db, data, fetchWorkerByKeysConfig{
-			lastPosition: multipleKeyPosition,
-			table:        config.table,
-			fetchSize:    config.fetchSize,
-			primaryKeys:  config.primaryKeys,
-		})
 	}
 }
 
@@ -351,8 +357,8 @@ type fetchWorkerMultipleKey struct {
 type fetchWorkerByKeysConfig struct {
 	lastPosition common.MultipleKeyPosition
 	table        string
-	fetchSize    uint64
 	primaryKeys  common.PrimaryKeys
+	fetchSize    uint64
 }
 
 func newFetchWorkerByKeys(

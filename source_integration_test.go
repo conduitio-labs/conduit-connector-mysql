@@ -16,7 +16,6 @@ package mysql
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
@@ -247,47 +246,42 @@ func TestCompositeKey(t *testing.T) {
 		recs = append(recs, rec)
 	}
 
-	expected := []opencdc.Record{
-		{
-			Operation: opencdc.OperationSnapshot,
-			Key:       opencdc.StructuredData{"id1": int64(1), "id2": "a"},
-			Payload: opencdc.Change{
-				After: opencdc.StructuredData{
-					"id1":  int64(1),
-					"id2":  "a",
-					"data": "record A",
-				},
-			},
-			Metadata: opencdc.Metadata{"table": "table_with_composite_keys"},
-		},
-		{
-			Operation: opencdc.OperationSnapshot,
-			Key:       opencdc.StructuredData{"id1": int64(2), "id2": "b"},
-			Payload: opencdc.Change{
-				Before: nil,
-				After: opencdc.StructuredData{
-					"id1":  int64(2),
-					"id2":  "b",
-					"data": "record B",
-				},
-			},
-			Metadata: opencdc.Metadata{"table": "table_with_composite_keys"},
-		},
+	expectedMetadata := opencdc.Metadata{
+		"mysql.serverID":                 "1",
+		"opencdc.collection":             "table_with_composite_keys",
+		"opencdc.key.schema.subject":     "table_with_composite_keys_key",
+		"opencdc.key.schema.version":     "1",
+		"opencdc.payload.schema.subject": "table_with_composite_keys_payload",
+		"opencdc.payload.schema.version": "1",
 	}
+
+	expected := []opencdc.Record{{
+		Operation: opencdc.OperationSnapshot,
+		Key:       opencdc.StructuredData{"id1": int64(1), "id2": "a"},
+		Payload: opencdc.Change{
+			After: opencdc.StructuredData{"id1": int64(1), "id2": "a", "data": "record A"},
+		},
+		Metadata: expectedMetadata,
+	}, {
+		Operation: opencdc.OperationSnapshot,
+		Key:       opencdc.StructuredData{"id1": int64(2), "id2": "b"},
+		Payload: opencdc.Change{
+			Before: nil,
+			After:  opencdc.StructuredData{"id1": int64(2), "id2": "b", "data": "record B"},
+		},
+		Metadata: expectedMetadata,
+	}}
 
 	for i, exp := range expected {
 		actual := recs[i]
 		is.Equal(actual.Operation, exp.Operation)
-		is.Equal(actual.Key, exp.Key)
-		is.Equal(actual.Payload.Before, exp.Payload.Before)
-		is.Equal(actual.Payload.After, exp.Payload.After)
-		is.Equal(actual.Metadata, exp.Metadata)
-	}
+		testutils.IsDataEqual(is, actual.Key, exp.Key)
+		testutils.IsDataEqual(is, actual.Payload.Before, exp.Payload.Before)
+		testutils.IsDataEqual(is, actual.Payload.After, exp.Payload.After)
 
-	// test CDC
-	rec, err := source.Read(ctx)
-	is.True(errors.Is(err, context.DeadlineExceeded))
-	is.Equal(rec, opencdc.Record{})
+		delete(actual.Metadata, "opencdc.readAt")
+		testutils.IsDataEqual(is, actual.Metadata, exp.Metadata)
+	}
 
 	// insert new record
 	err = db.Create(&TableWithCompositeKey{
@@ -297,28 +291,25 @@ func TestCompositeKey(t *testing.T) {
 	}).Error
 	is.NoErr(err)
 
-	rec, err = source.Read(ctx)
+	rec, err := source.Read(ctx)
 	is.NoErr(err)
 	is.NoErr(source.Ack(ctx, rec.Position))
 
-	expected = []opencdc.Record{
-		{
-			Operation: opencdc.OperationCreate,
-			Key:       opencdc.StructuredData{"id1": int64(3), "id2": "c"},
-			Payload: opencdc.Change{
-				After: opencdc.StructuredData{
-					"id1":  int64(3),
-					"id2":  "c",
-					"data": "record C",
-				},
-			},
-			Metadata: opencdc.Metadata{"table": "table_with_composite_keys"},
+	expectedCDCRecord := opencdc.Record{
+		Operation: opencdc.OperationCreate,
+		Key:       opencdc.StructuredData{"id1": int64(3), "id2": "c"},
+		Payload: opencdc.Change{
+			After: opencdc.StructuredData{"id1": int64(3), "id2": "c", "data": "record C"},
 		},
 	}
 
-	is.Equal(rec.Operation, expected[0].Operation)
-	is.Equal(rec.Key, expected[0].Key)
-	is.Equal(rec.Payload.Before, expected[0].Payload.Before)
-	is.Equal(rec.Payload.After, expected[0].Payload.After)
-	is.Equal(rec.Metadata["table"], expected[0].Metadata["table"])
+	is.Equal(rec.Operation, expectedCDCRecord.Operation)
+	testutils.IsDataEqual(is, rec.Key, expectedCDCRecord.Key)
+	testutils.IsDataEqual(is, rec.Payload.Before, expectedCDCRecord.Payload.Before)
+	testutils.IsDataEqual(is, rec.Payload.After, expectedCDCRecord.Payload.After)
+
+	delete(rec.Metadata, "opencdc.readAt")
+	delete(rec.Metadata, "opencdc.createdAt")
+
+	testutils.IsDataEqual(is, rec.Metadata, expectedMetadata)
 }

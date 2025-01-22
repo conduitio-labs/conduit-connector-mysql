@@ -143,6 +143,36 @@ type AvroSchemaField struct {
 	Type string `json:"type"`
 }
 
+func (avroSchema AvroSchema) AssertPayloadSchema(ctx context.Context, is *is.I, metadata opencdc.Metadata) {
+	ver, err := metadata.GetPayloadSchemaVersion()
+	is.NoErr(err)
+	sub, err := metadata.GetPayloadSchemaSubject()
+	is.NoErr(err)
+
+	s, err := schema.Get(ctx, sub, ver)
+	is.NoErr(err)
+
+	var actualSchema AvroSchema
+	is.NoErr(json.Unmarshal(s.Bytes, &actualSchema))
+
+	IsDataEqual(is, actualSchema, avroSchema)
+}
+
+func (avroSchema AvroSchema) AssertKeySchema(ctx context.Context, is *is.I, metadata opencdc.Metadata) {
+	ver, err := metadata.GetKeySchemaVersion()
+	is.NoErr(err)
+	sub, err := metadata.GetKeySchemaSubject()
+	is.NoErr(err)
+
+	s, err := schema.Get(ctx, sub, ver)
+	is.NoErr(err)
+
+	var actualSchema AvroSchema
+	is.NoErr(json.Unmarshal(s.Bytes, &actualSchema))
+
+	IsDataEqual(is, actualSchema, avroSchema)
+}
+
 func (u User) Update() User {
 	u.Username = fmt.Sprintf("%v-updated", u.Username)
 	u.Email = fmt.Sprintf("%v-updated@example.com", u.Email)
@@ -305,35 +335,8 @@ func assertMetadata(ctx context.Context, is *is.I, metadata opencdc.Metadata) {
 }
 
 func assertSchema(ctx context.Context, is *is.I, metadata opencdc.Metadata) {
-	{ // payload schema
-		ver, err := metadata.GetPayloadSchemaVersion()
-		is.NoErr(err)
-		sub, err := metadata.GetPayloadSchemaSubject()
-		is.NoErr(err)
-
-		s, err := schema.Get(ctx, sub, ver)
-		is.NoErr(err)
-
-		var actualSchema AvroSchema
-		is.NoErr(json.Unmarshal(s.Bytes, &actualSchema))
-
-		IsDataEqual(is, actualSchema, userPayloadSchema)
-	}
-
-	{ // key schema
-		ver, err := metadata.GetKeySchemaVersion()
-		is.NoErr(err)
-		sub, err := metadata.GetKeySchemaSubject()
-		is.NoErr(err)
-
-		s, err := schema.Get(ctx, sub, ver)
-		is.NoErr(err)
-
-		var actualSchema AvroSchema
-		is.NoErr(json.Unmarshal(s.Bytes, &actualSchema))
-
-		IsDataEqual(is, actualSchema, userKeySchema)
-	}
+	userPayloadSchema.AssertPayloadSchema(ctx, is, metadata)
+	userKeySchema.AssertKeySchema(ctx, is, metadata)
 }
 
 func newCanal(ctx context.Context, is *is.I, tablename string) *canal.Canal {

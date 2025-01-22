@@ -220,11 +220,27 @@ func TestCompositeKey(t *testing.T) {
 		Data string `gorm:"size:100"`
 	}
 
-	err = db.Migrator().DropTable(&TableWithCompositeKey{})
-	is.NoErr(err)
+	expectedPayloadSchema := testutils.AvroSchema{
+		Name: "mysql.table_with_composite_keys_payload",
+		Type: "record",
+		Fields: []testutils.AvroSchemaField{
+			{Name: "id1", Type: "long"},
+			{Name: "id2", Type: "string"},
+			{Name: "data", Type: "string"},
+		},
+	}
 
-	err = db.AutoMigrate(&TableWithCompositeKey{})
-	is.NoErr(err)
+	expectedKeySchema := testutils.AvroSchema{
+		Name: "mysql.table_with_composite_keys_key",
+		Type: "record",
+		Fields: []testutils.AvroSchemaField{
+			{Name: "id1", Type: "long"},
+			{Name: "id2", Type: "string"},
+		},
+	}
+
+	is.NoErr(db.Migrator().DropTable(&TableWithCompositeKey{}))
+	is.NoErr(db.AutoMigrate(&TableWithCompositeKey{}))
 
 	db.Create([]TableWithCompositeKey{
 		{ID1: 1, ID2: "a", Data: "record A"},
@@ -246,13 +262,9 @@ func TestCompositeKey(t *testing.T) {
 		recs = append(recs, rec)
 	}
 
-	expectedMetadata := opencdc.Metadata{
-		"mysql.serverID":                 "1",
-		"opencdc.collection":             "table_with_composite_keys",
-		"opencdc.key.schema.subject":     "table_with_composite_keys_key",
-		"opencdc.key.schema.version":     "1",
-		"opencdc.payload.schema.subject": "table_with_composite_keys_payload",
-		"opencdc.payload.schema.version": "1",
+	assertMetadata := func(m opencdc.Metadata) {
+		is.Equal(m["mysql.serverID"], "1")
+		is.Equal(m["opencdc.collection"], "table_with_composite_keys")
 	}
 
 	expected := []opencdc.Record{{
@@ -261,7 +273,6 @@ func TestCompositeKey(t *testing.T) {
 		Payload: opencdc.Change{
 			After: opencdc.StructuredData{"id1": int64(1), "id2": "a", "data": "record A"},
 		},
-		Metadata: expectedMetadata,
 	}, {
 		Operation: opencdc.OperationSnapshot,
 		Key:       opencdc.StructuredData{"id1": int64(2), "id2": "b"},
@@ -269,7 +280,6 @@ func TestCompositeKey(t *testing.T) {
 			Before: nil,
 			After:  opencdc.StructuredData{"id1": int64(2), "id2": "b", "data": "record B"},
 		},
-		Metadata: expectedMetadata,
 	}}
 
 	for i, exp := range expected {
@@ -279,8 +289,9 @@ func TestCompositeKey(t *testing.T) {
 		testutils.IsDataEqual(is, actual.Payload.Before, exp.Payload.Before)
 		testutils.IsDataEqual(is, actual.Payload.After, exp.Payload.After)
 
-		delete(actual.Metadata, "opencdc.readAt")
-		testutils.IsDataEqual(is, actual.Metadata, exp.Metadata)
+		expectedPayloadSchema.AssertPayloadSchema(ctx, is, actual.Metadata)
+		expectedKeySchema.AssertKeySchema(ctx, is, actual.Metadata)
+		assertMetadata(actual.Metadata)
 	}
 
 	// insert new record
@@ -308,8 +319,7 @@ func TestCompositeKey(t *testing.T) {
 	testutils.IsDataEqual(is, rec.Payload.Before, expectedCDCRecord.Payload.Before)
 	testutils.IsDataEqual(is, rec.Payload.After, expectedCDCRecord.Payload.After)
 
-	delete(rec.Metadata, "opencdc.readAt")
-	delete(rec.Metadata, "opencdc.createdAt")
-
-	testutils.IsDataEqual(is, rec.Metadata, expectedMetadata)
+	assertMetadata(rec.Metadata)
+	expectedPayloadSchema.AssertPayloadSchema(ctx, is, rec.Metadata)
+	expectedKeySchema.AssertKeySchema(ctx, is, rec.Metadata)
 }

@@ -553,7 +553,7 @@ func (w *fetchWorkerMultipleKey) buildFetchData(
 
 	payload := make(opencdc.StructuredData)
 	for key, val := range row {
-		payload[key] = w.payloadSchema.formatValue(key, val)
+		payload[key] = w.payloadSchema.formatValue(ctx, key, val)
 	}
 
 	var keyColTypes []*avroColType
@@ -579,7 +579,7 @@ keyColLoop:
 		if !ok {
 			return fetchData{}, fmt.Errorf("key %s not found in payload", primaryKey)
 		}
-		key[primaryKey] = w.keySchema.formatValue(primaryKey, keyVal)
+		key[primaryKey] = w.keySchema.formatValue(ctx, primaryKey, keyVal)
 	}
 
 	return fetchData{

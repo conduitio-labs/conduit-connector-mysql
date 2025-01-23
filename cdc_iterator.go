@@ -45,7 +45,7 @@ type cdcIteratorConfig struct {
 	db                  *sqlx.DB
 	tables              []string
 	mysqlConfig         *mysqldriver.Config
-	tableSortCols       map[string]common.PrimaryKeys
+	primaryKeys         map[string]common.PrimaryKeys
 	disableCanalLogging bool
 	startPosition       *common.CdcPosition
 }
@@ -197,7 +197,7 @@ func (c *cdcIterator) buildRecord(ctx context.Context, e rowEvent) (opencdc.Reco
 	// payload really is just an alias, but makes buildRecord easier to understand.
 	payload = payloadBefore
 
-	keyCol := c.config.tableSortCols[tableName]
+	keyCol := c.config.primaryKeys[tableName]
 	var key opencdc.Data
 
 	if len(keyCol) == 0 {

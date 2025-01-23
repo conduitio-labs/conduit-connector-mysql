@@ -34,7 +34,7 @@ func testCdcIterator(ctx context.Context, t *testing.T, is *is.I) (common.Iterat
 	iterator, err := newCdcIterator(ctx, cdcIteratorConfig{
 		mysqlConfig:         config,
 		tables:              []string{"users"},
-		tableSortCols:       testutils.TableSortCols,
+		primaryKeys:         testutils.TablePrimaryKeys,
 		db:                  db,
 		disableCanalLogging: true,
 	})
@@ -63,7 +63,7 @@ func testCdcIteratorAtPosition(
 		db:                  db,
 		mysqlConfig:         config,
 		tables:              []string{"users"},
-		tableSortCols:       testutils.TableSortCols,
+		primaryKeys:         testutils.TablePrimaryKeys,
 		startPosition:       pos.CdcPosition,
 		disableCanalLogging: true,
 	})

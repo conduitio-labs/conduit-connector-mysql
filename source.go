@@ -103,7 +103,7 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 
 	s.iterator, err = newCombinedIterator(ctx, combinedIteratorConfig{
 		db:                    s.db,
-		tableSortCols:         tableKeys,
+		primaryKeys:           tableKeys,
 		startSnapshotPosition: pos.SnapshotPosition,
 		startCdcPosition:      pos.CdcPosition,
 		database:              s.configFromDsn.DBName,

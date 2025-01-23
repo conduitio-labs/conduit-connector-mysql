@@ -115,52 +115,32 @@ type User struct {
 }
 
 var (
-	userPayloadSchema = newUserPayloadSchema()
-	userKeySchema     = newUserKeySchema()
+	userPayloadSchema = AvroSchema{
+		Name: "mysql.users_payload",
+		Type: "record",
+		Fields: []AvroSchemaField{
+			{Name: "id", Type: "long"},
+			{Name: "username", Type: "string"},
+			{Name: "email", Type: "string"},
+			{Name: "created_at", Type: "string"},
+		},
+	}
+	userKeySchema = AvroSchema{
+		Name:   "mysql.users_key",
+		Type:   "record",
+		Fields: []AvroSchemaField{{Name: "id", Type: "long"}},
+	}
 )
 
 type AvroSchema struct {
-	Name   string `json:"name"`
-	Type   string `json:"type"`
-	Fields []struct {
-		Name string `json:"name"`
-		Type string `json:"type"`
-	} `json:"fields"`
+	Name   string            `json:"name"`
+	Type   string            `json:"type"`
+	Fields []AvroSchemaField `json:"fields"`
 }
 
-func newUserPayloadSchema() AvroSchema {
-	userSchema := []byte(`{
-		"name": "mysql.users_payload",
-		"type": "record",
-		"fields": [
-			{"name": "id", "type": "long"},
-			{"name": "username", "type": "string"},
-			{"name": "email", "type": "string"},
-			{"name": "created_at", "type": "string"}
-		]
-	}`)
-	var schema AvroSchema
-	if err := json.Unmarshal(userSchema, &schema); err != nil {
-		panic(err)
-	}
-
-	return schema
-}
-
-func newUserKeySchema() AvroSchema {
-	userSchema := []byte(`{
-		"name": "mysql.users_key",
-		"type": "record",
-		"fields": [
-			{"name": "id", "type": "long"}
-		]
-	}`)
-	var schema AvroSchema
-	if err := json.Unmarshal(userSchema, &schema); err != nil {
-		panic(err)
-	}
-
-	return schema
+type AvroSchemaField struct {
+	Name string `json:"name"`
+	Type string `json:"type"`
 }
 
 func (u User) Update() User {

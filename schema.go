@@ -102,7 +102,7 @@ func sqlColTypeToAvroCol(colType *sql.ColumnType) (*avroColType, error) {
 		avroColType.Type = avro.String
 
 	default:
-		return nil, fmt.Errorf("unsupported column type %s", typename)
+		return nil, fmt.Errorf("unsupported column type %q for column %q", typename, colType.Name())
 	}
 
 	return avroColType, nil

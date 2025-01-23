@@ -292,7 +292,7 @@ func (w *fetchWorkerByKey) buildFetchData(
 
 	payload := make(opencdc.StructuredData)
 	for key, val := range row {
-		payload[key] = w.payloadSchema.formatValue(key, val)
+		payload[key] = w.payloadSchema.formatValue(ctx, key, val)
 	}
 
 	var keyColType *avroColType
@@ -315,7 +315,7 @@ func (w *fetchWorkerByKey) buildFetchData(
 	if !ok {
 		return fetchData{}, fmt.Errorf("key %s not found in payload", w.config.sortColName)
 	}
-	keyVal = w.keySchema.formatValue(w.config.sortColName, keyVal)
+	keyVal = w.keySchema.formatValue(ctx, w.config.sortColName, keyVal)
 
 	key := opencdc.StructuredData{w.config.sortColName: keyVal}
 	return fetchData{
@@ -458,7 +458,7 @@ func (w *fetchWorkerByLimit) run(ctx context.Context) (err error) {
 
 			payload := make(opencdc.StructuredData)
 			for key, val := range row {
-				payload[key] = w.payloadSchema.formatValue(key, val)
+				payload[key] = w.payloadSchema.formatValue(ctx, key, val)
 			}
 
 			//nolint:gosec // i is guaranteed to be greater than 0

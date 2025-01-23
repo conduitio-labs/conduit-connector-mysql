@@ -234,7 +234,7 @@ func TestSchema_Payload(t *testing.T) {
 
 		formatted := map[string]any{}
 		for k, v := range dest {
-			formatted[k] = payloadSchemaManager.formatValue(k, v)
+			formatted[k] = payloadSchemaManager.formatValue(ctx, k, v)
 		}
 
 		s, err := schema.Get(ctx, tableName+"_payload", 1)
@@ -273,7 +273,7 @@ func TestSchema_Payload(t *testing.T) {
 
 		formatted := map[string]any{}
 		for i, col := range rowsEvent.Table.Columns {
-			formatted[col.Name] = payloadSchemaManager.formatValue(col.Name, rowsEvent.Rows[0][i])
+			formatted[col.Name] = payloadSchemaManager.formatValue(ctx, col.Name, rowsEvent.Rows[0][i])
 		}
 
 		s, err := schema.Get(ctx, tableName+"_payload", 1)

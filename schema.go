@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"time"
 
+	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/conduitio/conduit-connector-sdk/schema"
 	mysqlschema "github.com/go-mysql-org/go-mysql/schema"
 	"github.com/hamba/avro/v2"
@@ -274,15 +275,16 @@ func (s *schemaMapper) createKeySchema(
 }
 
 // formatValue uses the stored avro types to format the value. This way we can
-// better control what the mysql driver returns.
-func (s *schemaMapper) formatValue(column string, value any) any {
+// better control what the mysql driver returns. It should be called after creating
+// the schema, otherwise it won't do anything.
+func (s *schemaMapper) formatValue(ctx context.Context, column string, value any) any {
 	t, found := s.colTypes[column]
 	if !found {
 		// In snapshot mode, this should never happen.
 		// In CDC mode, to prevent getting into here we make sure to instantiate the
 		// schema mapper for each row event.
-		msg := fmt.Sprintf("column \"%v\" not found", column)
-		panic(msg)
+		sdk.Logger(ctx).Warn().Msgf("column \"%v\" not found", column)
+		return value
 	}
 
 	// Each of the following branches handles different datatype parsing

@@ -189,9 +189,9 @@ func (c *cdcIterator) buildRecord(ctx context.Context, e rowEvent) (opencdc.Reco
 	metadata.SetPayloadSchemaVersion(payloadSubver.version)
 
 	var payloadBefore, payloadAfter, payload opencdc.StructuredData
-	payloadBefore = c.buildPayload(payloadSchema, e.Table.Columns, e.Rows[0])
+	payloadBefore = c.buildPayload(ctx, payloadSchema, e.Table.Columns, e.Rows[0])
 	if len(e.Rows) > 1 {
-		payloadAfter = c.buildPayload(payloadSchema, e.Table.Columns, e.Rows[1])
+		payloadAfter = c.buildPayload(ctx, payloadSchema, e.Table.Columns, e.Rows[1])
 	}
 
 	// payload really is just an alias, but makes buildRecord easier to understand.
@@ -222,7 +222,7 @@ func (c *cdcIterator) buildRecord(ctx context.Context, e rowEvent) (opencdc.Reco
 			keyVal = payloadAfter[keyCol]
 		}
 
-		keyVal = keySchema.formatValue(keyCol, keyVal)
+		keyVal = keySchema.formatValue(ctx, keyCol, keyVal)
 		key = opencdc.StructuredData{keyCol: keyVal}
 
 		metadata.SetKeySchemaSubject(keySubver.subject)
@@ -251,12 +251,13 @@ func findKeyColType(avroCols []*avroColType, keyCol string) (*avroColType, bool)
 }
 
 func (c *cdcIterator) buildPayload(
+	ctx context.Context,
 	payloadSchema *schemaMapper,
 	columns []schema.TableColumn, rows []any,
 ) opencdc.StructuredData {
 	payload := opencdc.StructuredData{}
 	for i, col := range columns {
-		payload[col.Name] = payloadSchema.formatValue(col.Name, rows[i])
+		payload[col.Name] = payloadSchema.formatValue(ctx, col.Name, rows[i])
 	}
 	return payload
 }

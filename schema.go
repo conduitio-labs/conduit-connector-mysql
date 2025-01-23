@@ -44,7 +44,6 @@ func newSchemaMapper() *schemaMapper {
 
 type avroColType struct {
 	isDate bool
-	isBit  bool
 	Type   avro.Type
 	Name   string
 }
@@ -72,7 +71,6 @@ func sqlColTypeToAvroCol(colType *sql.ColumnType) (*avroColType, error) {
 	case "DOUBLE":
 		avroColType.Type = avro.Double
 	case "BIT":
-		avroColType.isBit = true
 		avroColType.Type = avro.Bytes
 
 	// String Types
@@ -139,7 +137,6 @@ func mysqlSchemaToAvroCol(tableCol mysqlschema.TableColumn) (*avroColType, error
 		case "decimal", "numeric", "float", "double":
 			avroColType.Type = avro.Double
 		case "bit":
-			avroColType.isBit = true
 			avroColType.Type = avro.Bytes
 		default:
 			avroColType.Type = avro.Int

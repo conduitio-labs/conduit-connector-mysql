@@ -292,13 +292,12 @@ func (s *schemaMapper) formatValue(ctx context.Context, column string, value any
 	// We manually convert nil values into the go zero value equivalent so that
 	// we don't need to handle NULL complexity into the schema.
 	// However, we might want to reflect nullability of the datatype in the future.
+	if value == nil {
+		return defaultValueForType(t.Type)
+	}
 
 	switch t.Type {
 	case avro.String:
-		if value == nil {
-			return ""
-		}
-
 		switch v := value.(type) {
 		case []uint8:
 			return string(v)
@@ -314,10 +313,6 @@ func (s *schemaMapper) formatValue(ctx context.Context, column string, value any
 			return t
 		}
 	case avro.Int:
-		if value == nil {
-			return int32(0)
-		}
-
 		switch v := value.(type) {
 		case int8:
 			return int32(v)
@@ -332,10 +327,6 @@ func (s *schemaMapper) formatValue(ctx context.Context, column string, value any
 
 		return value
 	case avro.Long:
-		if value == nil {
-			return int64(0)
-		}
-
 		switch v := value.(type) {
 		case int:
 			return int64(v)
@@ -363,10 +354,6 @@ func (s *schemaMapper) formatValue(ctx context.Context, column string, value any
 
 		return value
 	case avro.Float:
-		if value == nil {
-			return float32(0)
-		}
-
 		switch v := value.(type) {
 		case float32:
 			return v
@@ -374,10 +361,6 @@ func (s *schemaMapper) formatValue(ctx context.Context, column string, value any
 			return float32(v)
 		}
 	case avro.Double:
-		if value == nil {
-			return float64(0)
-		}
-
 		switch v := value.(type) {
 		case string:
 			f, err := strconv.ParseFloat(v, 64)
@@ -395,10 +378,6 @@ func (s *schemaMapper) formatValue(ctx context.Context, column string, value any
 			return f
 		}
 	case avro.Boolean:
-		if value == nil {
-			return false
-		}
-
 		switch v := value.(type) {
 		case int8:
 			return v != 0
@@ -406,10 +385,6 @@ func (s *schemaMapper) formatValue(ctx context.Context, column string, value any
 			return v != 0
 		}
 	case avro.Bytes:
-		if value == nil {
-			return []byte{}
-		}
-
 		switch v := value.(type) {
 		case int64:
 			// canal.Canal parses mysql bit column as an int64, so to be
@@ -423,6 +398,35 @@ func (s *schemaMapper) formatValue(ctx context.Context, column string, value any
 		return value
 	}
 	return value
+}
+
+func defaultValueForType(t avro.Type) any {
+	switch t {
+	case avro.Array:
+		return []any{}
+	case avro.Map:
+		return map[string]any{}
+	case avro.String:
+		return ""
+	case avro.Bytes:
+		return []byte{}
+	case avro.Int:
+		return int32(0)
+	case avro.Long:
+		return int64(0)
+	case avro.Float:
+		return float32(0)
+	case avro.Double:
+		return float64(0)
+	case avro.Boolean:
+		return false
+	case avro.Null:
+		return nil
+	case avro.Record, avro.Error, avro.Ref, avro.Enum, avro.Fixed, avro.Union:
+		return nil
+	default:
+		return nil
+	}
 }
 
 func int64ToMysqlBit(i int64) []byte {

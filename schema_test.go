@@ -152,7 +152,7 @@ func expectedPayloadRecordSchema(is *is.I, tableName string) map[string]any {
 	return toMap(is, bs)
 }
 
-func allTypesTestData() map[string]any {
+func allTypesSnapshotTestData() map[string]any {
 	testData := map[string]any{
 		"tiny_int_col":    int32(127),
 		"small_int_col":   int32(32767),
@@ -195,7 +195,7 @@ func allTypesTestData() map[string]any {
 }
 
 func allTypesCDCTestData() map[string]any {
-	data := allTypesTestData()
+	data := allTypesSnapshotTestData()
 
 	// for some reason canal.Canal treats json in a different manner than sqlx,
 	// so we need to remove the space in between key an value.
@@ -204,87 +204,90 @@ func allTypesCDCTestData() map[string]any {
 	return data
 }
 
-func TestSchema_Payload(t *testing.T) {
+func TestSchema_Payload_SQLX_Rows(t *testing.T) {
 	is := is.New(t)
 	db := testutils.NewDB(t)
 	ctx := context.Background()
 
-	t.Run("from sqlx rows", func(_ *testing.T) {
-		is.NoErr(db.Migrator().DropTable(&SchemaAllTypes{}))
-		is.NoErr(db.AutoMigrate(&SchemaAllTypes{}))
+	is.NoErr(db.Migrator().DropTable(&SchemaAllTypes{}))
+	is.NoErr(db.AutoMigrate(&SchemaAllTypes{}))
 
-		testData := allTypesTestData()
+	testData := allTypesSnapshotTestData()
 
+	is.NoErr(db.Model(&SchemaAllTypes{}).Create(&testData).Error)
+	tableName := testutils.TableName(is, db, &SchemaAllTypes{})
+
+	rows, err := db.SqlxDB.Queryx("select * from " + tableName)
+	is.NoErr(err)
+	colTypes, err := sqlxRowsToAvroCol(rows)
+	is.NoErr(err)
+
+	// Test payload schema
+	payloadSchemaManager := newSchemaMapper()
+	_, err = payloadSchemaManager.createPayloadSchema(ctx, tableName, colTypes)
+	is.NoErr(err)
+
+	row := db.SqlxDB.QueryRowx("select * from " + tableName)
+	dest := map[string]any{}
+	is.NoErr(row.MapScan(dest))
+
+	formatted := map[string]any{}
+	for k, v := range dest {
+		formatted[k] = payloadSchemaManager.formatValue(ctx, k, v)
+	}
+
+	s, err := schema.Get(ctx, tableName+"_payload", 1)
+	is.NoErr(err)
+
+	actualSchema := toMap(is, s.Bytes)
+	expectedSchema := expectedPayloadRecordSchema(is, tableName)
+
+	is.Equal("", cmp.Diff(expectedSchema, actualSchema)) // expected schema != actual schema
+	is.Equal("", cmp.Diff(testData, formatted))          // expected data != actual data
+
+}
+
+func TestSchema_Payload_canal_RowsEvent(t *testing.T) {
+	is := is.New(t)
+	db := testutils.NewDB(t)
+	ctx := context.Background()
+
+	is.NoErr(db.Migrator().DropTable(&SchemaAllTypes{}))
+	is.NoErr(db.AutoMigrate(&SchemaAllTypes{}))
+
+	testData := allTypesCDCTestData()
+
+	tableName := testutils.TableName(is, db, &SchemaAllTypes{})
+
+	rowsEvent := testutils.TriggerRowInsertEvent(ctx, is, tableName, func() {
 		is.NoErr(db.Model(&SchemaAllTypes{}).Create(&testData).Error)
-		tableName := testutils.TableName(is, db, &SchemaAllTypes{})
-
-		rows, err := db.SqlxDB.Queryx("select * from " + tableName)
-		is.NoErr(err)
-		colTypes, err := sqlxRowsToAvroCol(rows)
-		is.NoErr(err)
-
-		// Test payload schema
-		payloadSchemaManager := newSchemaMapper()
-		_, err = payloadSchemaManager.createPayloadSchema(ctx, tableName, colTypes)
-		is.NoErr(err)
-
-		row := db.SqlxDB.QueryRowx("select * from " + tableName)
-		dest := map[string]any{}
-		is.NoErr(row.MapScan(dest))
-
-		formatted := map[string]any{}
-		for k, v := range dest {
-			formatted[k] = payloadSchemaManager.formatValue(ctx, k, v)
-		}
-
-		s, err := schema.Get(ctx, tableName+"_payload", 1)
-		is.NoErr(err)
-
-		actualSchema := toMap(is, s.Bytes)
-
-		expectedSchema := expectedPayloadRecordSchema(is, tableName)
-		is.Equal("", cmp.Diff(expectedSchema, actualSchema)) // expected schema != actual schema
-		is.Equal("", cmp.Diff(testData, formatted))          // expected data != actual data
 	})
 
-	t.Run("from canal.RowsEvent", func(t *testing.T) {
-		is.NoErr(db.Migrator().DropTable(&SchemaAllTypes{}))
-		is.NoErr(db.AutoMigrate(&SchemaAllTypes{}))
-
-		is := is.New(t)
-		testData := allTypesCDCTestData()
-
-		tableName := testutils.TableName(is, db, &SchemaAllTypes{})
-
-		rowsEvent := testutils.TriggerRowInsertEvent(ctx, is, tableName, func() {
-			is.NoErr(db.Model(&SchemaAllTypes{}).Create(&testData).Error)
-		})
-
-		avroCols := make([]*avroColType, len(rowsEvent.Table.Columns))
-		for i, col := range rowsEvent.Table.Columns {
-			avroCol, err := mysqlSchemaToAvroCol(col)
-			is.NoErr(err)
-			avroCols[i] = avroCol
-		}
-
-		payloadSchemaManager := newSchemaMapper()
-		_, err := payloadSchemaManager.createPayloadSchema(ctx, tableName, avroCols)
+	avroCols := make([]*avroColType, len(rowsEvent.Table.Columns))
+	for i, col := range rowsEvent.Table.Columns {
+		avroCol, err := mysqlSchemaToAvroCol(col)
 		is.NoErr(err)
+		avroCols[i] = avroCol
+	}
 
-		formatted := map[string]any{}
-		for i, col := range rowsEvent.Table.Columns {
-			formatted[col.Name] = payloadSchemaManager.formatValue(ctx, col.Name, rowsEvent.Rows[0][i])
-		}
+	payloadSchemaManager := newSchemaMapper()
+	_, err := payloadSchemaManager.createPayloadSchema(ctx, tableName, avroCols)
+	is.NoErr(err)
 
-		s, err := schema.Get(ctx, tableName+"_payload", 1)
-		is.NoErr(err)
+	formatted := map[string]any{}
+	for i, col := range rowsEvent.Table.Columns {
+		formatted[col.Name] = payloadSchemaManager.formatValue(ctx, col.Name, rowsEvent.Rows[0][i])
+	}
 
-		actualSchema := toMap(is, s.Bytes)
-		expectedSchema := expectedPayloadRecordSchema(is, tableName)
+	s, err := schema.Get(ctx, tableName+"_payload", 1)
+	is.NoErr(err)
 
-		is.Equal("", cmp.Diff(expectedSchema, actualSchema)) // expected schema != actual schema
-		is.Equal("", cmp.Diff(testData, formatted))          // expected data != actual data
-	})
+	actualSchema := toMap(is, s.Bytes)
+	expectedSchema := expectedPayloadRecordSchema(is, tableName)
+
+	is.Equal("", cmp.Diff(expectedSchema, actualSchema)) // expected schema != actual schema
+	is.Equal("", cmp.Diff(testData, formatted))          // expected data != actual data
+
 }
 
 func TestSchema_Key(t *testing.T) {

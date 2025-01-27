@@ -8,6 +8,7 @@ require (
 	github.com/conduitio/conduit-connector-sdk v0.12.0
 	github.com/go-mysql-org/go-mysql v1.11.0
 	github.com/go-sql-driver/mysql v1.8.1
+	github.com/golangci/golangci-lint v1.61.0
 	github.com/google/go-cmp v0.6.0
 	github.com/hamba/avro/v2 v2.27.0
 	github.com/jmoiron/sqlx v1.4.0
@@ -87,7 +88,6 @@ require (
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/golangci/dupl v0.0.0-20180902072040-3e9179ac440a // indirect
 	github.com/golangci/gofmt v0.0.0-20240816233607-d8596aa466a9 // indirect
-	github.com/golangci/golangci-lint v1.61.0 // indirect
 	github.com/golangci/misspell v0.6.0 // indirect
 	github.com/golangci/modinfo v0.3.4 // indirect
 	github.com/golangci/plugin-module-register v0.1.1 // indirect

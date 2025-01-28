@@ -415,7 +415,10 @@ func defaultValueForType(t avro.Type) any {
 // int64ToBytes transforms an int64 to a slice of bytes without leading zeros.
 func int64ToBytes(i int64) []byte {
 	bs := [8]byte{}
-	binary.BigEndian.PutUint64(bs[:], uint64(i))
+
+	//nolint:gosec // the overflow that can happen here in this case is fine.
+	v := uint64(i)
+	binary.BigEndian.PutUint64(bs[:], v)
 
 	// Find first non-zero byte to trim leading zeros
 	start := 0

@@ -115,21 +115,30 @@ func sqlxRowsToAvroCol(rows *sqlx.Rows) ([]*avroColType, error) {
 }
 
 var mysqlschemaTypeToAvroDatedTypeMap = map[int]avroDatedType{
+	// Numeric types
 	mysqlschema.TYPE_NUMBER:     {Type: avro.Int},
 	mysqlschema.TYPE_FLOAT:      {Type: avro.Double},
 	mysqlschema.TYPE_DECIMAL:    {Type: avro.Double},
-	mysqlschema.TYPE_ENUM:       {Type: avro.String},
-	mysqlschema.TYPE_SET:        {Type: avro.String},
-	mysqlschema.TYPE_DATETIME:   {Type: avro.String, isDate: true},
-	mysqlschema.TYPE_TIMESTAMP:  {Type: avro.String, isDate: true},
-	mysqlschema.TYPE_DATE:       {Type: avro.String, isDate: true},
-	mysqlschema.TYPE_TIME:       {Type: avro.String, isDate: true},
-	mysqlschema.TYPE_BIT:        {Type: avro.Bytes},
-	mysqlschema.TYPE_JSON:       {Type: avro.String},
-	mysqlschema.TYPE_BINARY:     {Type: avro.Bytes},
-	mysqlschema.TYPE_POINT:      {Type: avro.String},
-	mysqlschema.TYPE_STRING:     {Type: avro.String},
 	mysqlschema.TYPE_MEDIUM_INT: {Type: avro.Int},
+
+	// String types
+	mysqlschema.TYPE_STRING: {Type: avro.String},
+	mysqlschema.TYPE_ENUM:   {Type: avro.String},
+	mysqlschema.TYPE_SET:    {Type: avro.String},
+
+	// Binary types
+	mysqlschema.TYPE_BINARY: {Type: avro.Bytes},
+	mysqlschema.TYPE_BIT:    {Type: avro.Bytes},
+
+	// Date and time types
+	mysqlschema.TYPE_DATETIME:  {Type: avro.String, isDate: true},
+	mysqlschema.TYPE_TIMESTAMP: {Type: avro.String, isDate: true},
+	mysqlschema.TYPE_DATE:      {Type: avro.String, isDate: true},
+	mysqlschema.TYPE_TIME:      {Type: avro.String, isDate: true},
+
+	// Misc
+	mysqlschema.TYPE_JSON:  {Type: avro.String},
+	mysqlschema.TYPE_POINT: {Type: avro.String},
 }
 
 var rawTypeToAvroTypeMap = map[string]avro.Type{
@@ -146,11 +155,7 @@ func mysqlSchemaToAvroCol(tableCol mysqlschema.TableColumn) (*avroColType, error
 		return nil, fmt.Errorf("unsupported column type %s for column %s", tableCol.RawType, tableCol.Name)
 	}
 
-	avroColType := &avroColType{
-		avroDatedType: datedType,
-		Name:          tableCol.Name,
-	}
-
+	avroColType := &avroColType{avroDatedType: datedType, Name: tableCol.Name}
 	rawType, ok := rawTypeToAvroTypeMap[tableCol.RawType]
 	if ok {
 		avroColType.Type = rawType

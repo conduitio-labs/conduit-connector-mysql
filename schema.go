@@ -373,7 +373,7 @@ func (s *schemaMapper) formatValue(ctx context.Context, column string, value any
 			// canal.Canal parses mysql bit column as an int64, so to be
 			// consistent with snapshot mode we need to manually parse the int
 			// into a slice of bytes.
-			return int64ToMysqlBit(v)
+			return int64ToBytes(v)
 		case string:
 			return []byte(v)
 		}
@@ -412,7 +412,8 @@ func defaultValueForType(t avro.Type) any {
 	}
 }
 
-func int64ToMysqlBit(i int64) []byte {
+// int64ToBytes transforms an int64 to a slice of bytes without leading zeros.
+func int64ToBytes(i int64) []byte {
 	bs := [8]byte{}
 	binary.BigEndian.PutUint64(bs[:], uint64(i))
 

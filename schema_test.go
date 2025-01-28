@@ -137,7 +137,7 @@ func expectedPayloadRecordSchema(is *is.I, tableName string) map[string]any {
 		field(is, "time_col", avro.String),
 		field(is, "datetime_col", avro.String),
 		field(is, "timestamp_col", avro.String),
-		field(is, "year_col", avro.Long),
+		field(is, "year_col", avro.Int),
 
 		// Other Types
 		field(is, "json_col", avro.String),
@@ -183,7 +183,7 @@ func allTypesSnapshotTestData() map[string]any {
 		"datetime_col":  time.Now().UTC().Truncate(time.Second),
 		"timestamp_col": time.Now().UTC().Truncate(time.Second),
 
-		"year_col": int64(2025),
+		"year_col": int32(2025),
 		"json_col": `{"key": "value"}`,
 	}
 

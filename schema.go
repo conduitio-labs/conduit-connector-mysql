@@ -16,6 +16,7 @@ package mysql
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"math"
 	"strconv"
@@ -412,21 +413,14 @@ func defaultValueForType(t avro.Type) any {
 }
 
 func int64ToMysqlBit(i int64) []byte {
-	bytes := make([]byte, 8)
-	bytes[0] = byte(i >> 56)
-	bytes[1] = byte(i >> 48)
-	bytes[2] = byte(i >> 40)
-	bytes[3] = byte(i >> 32)
-	bytes[4] = byte(i >> 24)
-	bytes[5] = byte(i >> 16)
-	bytes[6] = byte(i >> 8)
-	bytes[7] = byte(i)
+	bs := [8]byte{}
+	binary.BigEndian.PutUint64(bs[:], uint64(i))
 
 	// Find first non-zero byte to trim leading zeros
 	start := 0
-	for start < 7 && bytes[start] == 0 {
+	for start < 7 && bs[start] == 0 {
 		start++
 	}
 
-	return bytes[start:]
+	return bs[start:]
 }

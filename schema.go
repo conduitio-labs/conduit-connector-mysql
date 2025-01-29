@@ -58,7 +58,7 @@ var sqlColtypeToAvroDatedTypeMap = map[string]avroDatedType{
 	"NUMERIC":   {Type: avro.Double},
 	"FLOAT":     {Type: avro.Double},
 	"DOUBLE":    {Type: avro.Double},
-	"BIT":       {Type: avro.Bytes},
+	"BIT":       {Type: avro.Fixed},
 
 	// String types
 	"CHAR":       {Type: avro.String},
@@ -91,7 +91,8 @@ var sqlColtypeToAvroDatedTypeMap = map[string]avroDatedType{
 
 type avroColType struct {
 	avroDatedType
-	Name string
+	isBit bool
+	Name  string
 }
 
 func sqlxRowsToAvroCol(rows *sqlx.Rows) ([]*avroColType, error) {
@@ -109,7 +110,12 @@ func sqlxRowsToAvroCol(rows *sqlx.Rows) ([]*avroColType, error) {
 				colType.DatabaseTypeName(), colType.Name())
 		}
 
-		avroCols[i] = &avroColType{avroDatedType: avroDatedType, Name: colType.Name()}
+		avroCol := &avroColType{avroDatedType: avroDatedType, Name: colType.Name()}
+		if colType.DatabaseTypeName() == "BIT" {
+			avroCol.isBit = true
+		}
+
+		avroCols[i] = avroCol
 	}
 
 	return avroCols, nil
@@ -129,7 +135,7 @@ var mysqlschemaTypeToAvroDatedTypeMap = map[int]avroDatedType{
 
 	// Binary types
 	mysqlschema.TYPE_BINARY: {Type: avro.Bytes},
-	mysqlschema.TYPE_BIT:    {Type: avro.Bytes},
+	mysqlschema.TYPE_BIT:    {Type: avro.Fixed},
 
 	// Date and time types
 	mysqlschema.TYPE_DATETIME:  {Type: avro.String, isDate: true},
@@ -166,6 +172,25 @@ func mysqlSchemaToAvroCol(tableCol mysqlschema.TableColumn) (*avroColType, error
 }
 
 func colTypeToAvroField(avroCol *avroColType) (*avro.Field, error) {
+	if avroCol.isBit {
+		// Current limitations in the mysql driver that we use don't allow use
+		// to get the N from BIT(N) mysql columns. To track support for this
+		// feature refer to https://github.com/go-sql-driver/mysql/issues/1672
+		fixed8Size := 8
+
+		fixed, err := avro.NewFixedSchema(avroCol.Name+"_fixed", "", fixed8Size, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create fixed schema for bit column %s: %w", avroCol.Name, err)
+		}
+
+		field, err := avro.NewField(avroCol.Name, fixed)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create avro field for bit column %s: %w", avroCol.Name, err)
+		}
+
+		return field, nil
+	}
+
 	primitive := avro.NewPrimitiveSchema(avroCol.Type, nil)
 
 	nameField, err := avro.NewField(avroCol.Name, primitive)
@@ -367,14 +392,32 @@ func (s *schemaMapper) formatValue(ctx context.Context, column string, value any
 		case uint8:
 			return v != 0
 		}
-	case avro.Bytes:
+	case avro.Fixed:
 		switch v := value.(type) {
 		case int64:
 			// canal.Canal parses mysql bit column as an int64, so to be
 			// consistent with snapshot mode we need to manually parse the int
 			// into a slice of bytes.
 			return int64ToBytes(v)
-		case string:
+		case []byte:
+			if t.isBit {
+				// Because of our current limitation at
+				// https://github.com/go-sql-driver/mysql/issues/1672
+				// we map BIT(N) columns to avro fixed[8] data type, so we need to
+				// do this.
+				byte8Table := [8]byte{}
+
+				// Should never happen, but just in case.
+				if len(v) > 8 {
+					v = v[len(v)-8:]
+				}
+				copy(byte8Table[8-len(v):], v)
+
+				return byte8Table[:]
+			}
+		}
+	case avro.Bytes:
+		if v, ok := value.(string); ok {
 			return []byte(v)
 		}
 	default:
@@ -419,12 +462,5 @@ func int64ToBytes(i int64) []byte {
 	//nolint:gosec // the overflow that can happen here in this case is fine.
 	v := uint64(i)
 	binary.BigEndian.PutUint64(bs[:], v)
-
-	// Find first non-zero byte to trim leading zeros
-	start := 0
-	for start < 7 && bs[start] == 0 {
-		start++
-	}
-
-	return bs[start:]
+	return bs[:]
 }

@@ -34,6 +34,16 @@ func field(is *is.I, fieldName string, t avro.Type) *avro.Field {
 	return field
 }
 
+func fixed8ByteField(is *is.I, fieldName string) *avro.Field {
+	fixed, err := avro.NewFixedSchema(fieldName+"_fixed", "", 8, nil)
+	is.NoErr(err)
+
+	field, err := avro.NewField(fieldName, fixed)
+	is.NoErr(err)
+
+	return field
+}
+
 func toMap(is *is.I, bs []byte) map[string]any {
 	m := map[string]any{}
 	is.NoErr(json.Unmarshal(bs, &m))
@@ -111,10 +121,9 @@ func expectedPayloadRecordSchema(is *is.I, tableName string) map[string]any {
 		field(is, "float_col", avro.Double),
 		field(is, "double_col", avro.Double),
 
-		// avro.Long because we don't really have uint64 in avro
-		field(is, "bit1_col", avro.Bytes),
-		field(is, "bit8_col", avro.Bytes),
-		field(is, "bit64_col", avro.Bytes),
+		fixed8ByteField(is, "bit1_col"),
+		fixed8ByteField(is, "bit8_col"),
+		fixed8ByteField(is, "bit64_col"),
 
 		// String Types
 		field(is, "char_col", avro.String),
@@ -187,8 +196,8 @@ func allTypesSnapshotTestData() map[string]any {
 		"json_col": `{"key": "value"}`,
 	}
 
-	testData["bit1_col"] = []byte{0x01}
-	testData["bit8_col"] = []byte{0xAB}
+	testData["bit1_col"] = []byte{0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x01}
+	testData["bit8_col"] = []byte{0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xAB}
 	testData["bit64_col"] = []byte{0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0}
 
 	return testData

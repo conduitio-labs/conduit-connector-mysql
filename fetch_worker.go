@@ -331,8 +331,6 @@ func (w *fetchWorkerSingleKey) buildFetchData(
 }
 
 type fetchWorkerMultipleKey struct {
-	db            *sqlx.DB
-	data          chan fetchData
 	config        fetchWorkerByKeysConfig
 	payloadSchema *schemaMapper
 	keySchema     *schemaMapper
@@ -360,7 +358,7 @@ func (w *fetchWorkerMultipleKey) table() string {
 
 func (w *fetchWorkerMultipleKey) fetchStartEnd(ctx context.Context) (tableEmpty bool, err error) {
 	for _, primaryKey := range w.config.primaryKeys {
-		scanned, isEmpty, err := getMinMaxValues(ctx, w.db, primaryKey, w.config.table)
+		scanned, isEmpty, err := getMinMaxValues(ctx, w.config.db, primaryKey, w.config.table)
 		if err != nil {
 			return false, fmt.Errorf("failed to get min max values: %w", err)
 		} else if isEmpty {
@@ -397,7 +395,7 @@ func (w *fetchWorkerMultipleKey) run(ctx context.Context) error {
 	sdk.Logger(ctx).Info().Msgf("started fetch worker by keys for table %q", w.config.table)
 	defer sdk.Logger(ctx).Info().Msgf("finished fetch worker by keys for table %q", w.config.table)
 
-	tx, err := w.db.BeginTxx(ctx, &sql.TxOptions{
+	tx, err := w.config.db.BeginTxx(ctx, &sql.TxOptions{
 		Isolation: sql.LevelRepeatableRead,
 		ReadOnly:  true,
 	})
@@ -443,7 +441,7 @@ func (w *fetchWorkerMultipleKey) run(ctx context.Context) error {
 			}
 
 			select {
-			case w.data <- data:
+			case w.config.data <- data:
 			case <-ctx.Done():
 				return fmt.Errorf(
 					"fetch worker context done while waiting for data: %w", ctx.Err(),

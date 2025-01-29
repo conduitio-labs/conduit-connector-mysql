@@ -294,7 +294,6 @@ func TestCompositeKey(t *testing.T) {
 		assertMetadata(actual.Metadata)
 	}
 
-	// insert new record
 	err = db.Create(&TableWithCompositeKey{
 		ID1:  3,
 		ID2:  "c",

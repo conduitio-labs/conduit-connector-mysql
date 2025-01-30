@@ -223,17 +223,20 @@ type schemaSubjectVersion struct {
 }
 
 func (s *schemaMapper) createPayloadSchema(
-	ctx context.Context, schemaName string, colTypes []*avroNamedType) (*schemaSubjectVersion, error) {
+	ctx context.Context, schemaName string, colTypes []*avroNamedType,
+) (*schemaSubjectVersion, error) {
 	return s.createSchema(ctx, schemaName+"_payload", colTypes)
 }
 
 func (s *schemaMapper) createKeySchema(
-	ctx context.Context, schemaName string, colTypes []*avroNamedType) (*schemaSubjectVersion, error) {
+	ctx context.Context, schemaName string, colTypes []*avroNamedType,
+) (*schemaSubjectVersion, error) {
 	return s.createSchema(ctx, schemaName+"_key", colTypes)
 }
 
 func (s *schemaMapper) createSchema(
-	ctx context.Context, schemaName string, colTypes []*avroNamedType) (*schemaSubjectVersion, error) {
+	ctx context.Context, schemaName string, colTypes []*avroNamedType,
+) (*schemaSubjectVersion, error) {
 	if s.schema != nil {
 		return s.schema, nil
 	}

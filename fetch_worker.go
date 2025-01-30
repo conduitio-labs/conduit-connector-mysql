@@ -308,7 +308,7 @@ func (w *fetchWorkerSingleKey) buildFetchData(
 		return fetchData{}, fmt.Errorf("failed to find key schema column type for table %s", w.config.table)
 	}
 
-	keySubver, err := w.keySchema.createKeySchema(ctx, w.config.table, []*avroColType{keyColType})
+	keySubver, err := w.keySchema.createKeySchema(ctx, w.config.table, []*avroNamedType{keyColType})
 	if err != nil {
 		return fetchData{}, fmt.Errorf("failed to create key schema for table %s: %w", w.config.table, err)
 	}
@@ -537,7 +537,7 @@ func (w *fetchWorkerMultipleKey) selectRowsChunk(
 
 func (w *fetchWorkerMultipleKey) buildFetchData(
 	ctx context.Context, row map[string]any,
-	colTypes []*avroColType, lastRead common.MultipleKeyPosition,
+	colTypes []*avroNamedType, lastRead common.MultipleKeyPosition,
 ) (fetchData, error) {
 	position := common.TablePosition{
 		Type:         common.TablePositionMultipleKey,
@@ -554,7 +554,7 @@ func (w *fetchWorkerMultipleKey) buildFetchData(
 		payload[key] = w.payloadSchema.formatValue(ctx, key, val)
 	}
 
-	var keyColTypes []*avroColType
+	var keyColTypes []*avroNamedType
 keyColLoop:
 	for _, primaryKey := range w.config.primaryKeys {
 		for _, colType := range colTypes {

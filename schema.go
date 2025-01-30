@@ -345,7 +345,7 @@ func (s *schemaMapper) formatValue(ctx context.Context, column string, value any
 		case int16:
 			return int32(v)
 		case int64:
-			if v <= math.MaxInt32 {
+			if v >= math.MinInt32 && v <= math.MaxInt32 {
 				return int32(v)
 			}
 

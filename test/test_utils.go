@@ -103,8 +103,8 @@ func TestContext(t *testing.T) context.Context {
 	return logger.WithContext(context.Background())
 }
 
-var TableSortCols = map[string]string{
-	"users": "id",
+var TablePrimaryKeys = map[string]common.PrimaryKeys{
+	"users": {"id"},
 }
 
 type User struct {
@@ -141,6 +141,36 @@ type AvroSchema struct {
 type AvroSchemaField struct {
 	Name string `json:"name"`
 	Type string `json:"type"`
+}
+
+func (avroSchema AvroSchema) AssertPayloadSchema(ctx context.Context, is *is.I, metadata opencdc.Metadata) {
+	ver, err := metadata.GetPayloadSchemaVersion()
+	is.NoErr(err)
+	sub, err := metadata.GetPayloadSchemaSubject()
+	is.NoErr(err)
+
+	s, err := schema.Get(ctx, sub, ver)
+	is.NoErr(err)
+
+	var actualSchema AvroSchema
+	is.NoErr(json.Unmarshal(s.Bytes, &actualSchema))
+
+	IsDataEqual(is, actualSchema, avroSchema)
+}
+
+func (avroSchema AvroSchema) AssertKeySchema(ctx context.Context, is *is.I, metadata opencdc.Metadata) {
+	ver, err := metadata.GetKeySchemaVersion()
+	is.NoErr(err)
+	sub, err := metadata.GetKeySchemaSubject()
+	is.NoErr(err)
+
+	s, err := schema.Get(ctx, sub, ver)
+	is.NoErr(err)
+
+	var actualSchema AvroSchema
+	is.NoErr(json.Unmarshal(s.Bytes, &actualSchema))
+
+	IsDataEqual(is, actualSchema, avroSchema)
 }
 
 func (u User) Update() User {
@@ -220,8 +250,8 @@ func ReadAndAssertCreate(
 
 	assertMetadata(ctx, is, rec.Metadata)
 
-	isDataEqual(is, rec.Key, opencdc.StructuredData{"id": user.ID})
-	isDataEqual(is, rec.Payload.After, user.StructuredData())
+	IsDataEqual(is, rec.Key, opencdc.StructuredData{"id": user.ID})
+	IsDataEqual(is, rec.Payload.After, user.StructuredData())
 
 	return rec
 }
@@ -239,11 +269,11 @@ func ReadAndAssertUpdate(
 
 	assertMetadata(ctx, is, rec.Metadata)
 
-	isDataEqual(is, rec.Key, opencdc.StructuredData{"id": prev.ID})
-	isDataEqual(is, rec.Key, opencdc.StructuredData{"id": next.ID})
+	IsDataEqual(is, rec.Key, opencdc.StructuredData{"id": prev.ID})
+	IsDataEqual(is, rec.Key, opencdc.StructuredData{"id": next.ID})
 
-	isDataEqual(is, rec.Payload.Before, prev.StructuredData())
-	isDataEqual(is, rec.Payload.After, next.StructuredData())
+	IsDataEqual(is, rec.Payload.Before, prev.StructuredData())
+	IsDataEqual(is, rec.Payload.After, next.StructuredData())
 
 	return rec
 }
@@ -262,12 +292,12 @@ func ReadAndAssertDelete(
 
 	assertMetadata(ctx, is, rec.Metadata)
 
-	isDataEqual(is, rec.Key, opencdc.StructuredData{"id": user.ID})
+	IsDataEqual(is, rec.Key, opencdc.StructuredData{"id": user.ID})
 
 	return rec
 }
 
-func isDataEqual(is *is.I, actual, expected any) {
+func IsDataEqual(is *is.I, actual, expected any) {
 	is.Equal("", cmp.Diff(actual, expected)) // actual (-) != expected (+)
 }
 
@@ -290,8 +320,8 @@ func AssertUserSnapshot(ctx context.Context, is *is.I, user User, rec opencdc.Re
 
 	assertMetadata(ctx, is, rec.Metadata)
 
-	isDataEqual(is, rec.Key, opencdc.StructuredData{"id": user.ID})
-	isDataEqual(is, rec.Payload.After, user.StructuredData())
+	IsDataEqual(is, rec.Key, opencdc.StructuredData{"id": user.ID})
+	IsDataEqual(is, rec.Payload.After, user.StructuredData())
 }
 
 func assertMetadata(ctx context.Context, is *is.I, metadata opencdc.Metadata) {
@@ -305,35 +335,8 @@ func assertMetadata(ctx context.Context, is *is.I, metadata opencdc.Metadata) {
 }
 
 func assertSchema(ctx context.Context, is *is.I, metadata opencdc.Metadata) {
-	{ // payload schema
-		ver, err := metadata.GetPayloadSchemaVersion()
-		is.NoErr(err)
-		sub, err := metadata.GetPayloadSchemaSubject()
-		is.NoErr(err)
-
-		s, err := schema.Get(ctx, sub, ver)
-		is.NoErr(err)
-
-		var actualSchema AvroSchema
-		is.NoErr(json.Unmarshal(s.Bytes, &actualSchema))
-
-		isDataEqual(is, actualSchema, userPayloadSchema)
-	}
-
-	{ // key schema
-		ver, err := metadata.GetKeySchemaVersion()
-		is.NoErr(err)
-		sub, err := metadata.GetKeySchemaSubject()
-		is.NoErr(err)
-
-		s, err := schema.Get(ctx, sub, ver)
-		is.NoErr(err)
-
-		var actualSchema AvroSchema
-		is.NoErr(json.Unmarshal(s.Bytes, &actualSchema))
-
-		isDataEqual(is, actualSchema, userKeySchema)
-	}
+	userPayloadSchema.AssertPayloadSchema(ctx, is, metadata)
+	userKeySchema.AssertKeySchema(ctx, is, metadata)
 }
 
 func newCanal(ctx context.Context, is *is.I, tablename string) *canal.Canal {

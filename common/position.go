@@ -30,18 +30,18 @@ const (
 )
 
 type Position struct {
-	Kind             PositionType      `json:"kind"`
-	SnapshotPosition *SnapshotPosition `json:"snapshot_position,omitempty"`
+	Type             PositionType      `json:"type"`
+	SnapshotPosition *SnapshotPosition `json:"snapshot_single_key_position,omitempty"`
 	CdcPosition      *CdcPosition      `json:"cdc_position,omitempty"`
 }
 
 type SnapshotPosition struct {
-	Snapshots SnapshotPositions `json:"snapshots,omitempty"`
+	Snapshots TablePositions `json:"snapshots,omitempty"`
 }
 
 func (p SnapshotPosition) ToSDKPosition() opencdc.Position {
 	v, err := json.Marshal(Position{
-		Kind:             PositionTypeSnapshot,
+		Type:             PositionTypeSnapshot,
 		SnapshotPosition: &p,
 	})
 	if err != nil {
@@ -53,7 +53,7 @@ func (p SnapshotPosition) ToSDKPosition() opencdc.Position {
 
 func (p SnapshotPosition) Clone() SnapshotPosition {
 	var newPosition SnapshotPosition
-	newPosition.Snapshots = make(SnapshotPositions)
+	newPosition.Snapshots = make(TablePositions)
 	for k, v := range p.Snapshots {
 		newPosition.Snapshots[k] = v
 	}
@@ -68,13 +68,34 @@ func ParseSDKPosition(p opencdc.Position) (Position, error) {
 	return pos, nil
 }
 
-// SnapshotPositions represents the current snapshot status of every table
+// TablePositions represents the current snapshot status of every table
 // that has been snapshotted.
-type SnapshotPositions map[string]TablePosition
+type TablePositions map[string]TablePosition
+
+type TablePositionType string
+
+const (
+	TablePositionSingleKey   TablePositionType = "single_key"
+	TablePositionMultipleKey TablePositionType = "multiple_keys"
+)
 
 type TablePosition struct {
+	Type         TablePositionType    `json:"type"`
+	SingleKey    *SingleKeyPosition   `json:"single_key_position"`
+	MultipleKeys *MultipleKeyPosition `json:"multiple_keys_position"`
+}
+
+type SingleKeyPosition struct {
 	LastRead    any `json:"last_read"`
 	SnapshotEnd any `json:"snapshot_end"`
+}
+
+type MultipleKeyPosition []MultipleKeySinglePosition
+
+type MultipleKeySinglePosition struct {
+	KeyName     string `json:"key_name"`
+	LastRead    any    `json:"last_read"`
+	SnapshotEnd any    `json:"snapshot_end"`
 }
 
 type CdcPosition struct {
@@ -92,7 +113,7 @@ func (p CdcPosition) ToMysqlPos() mysql.Position {
 
 func (p CdcPosition) ToSDKPosition() opencdc.Position {
 	v, err := json.Marshal(Position{
-		Kind:        PositionTypeCDC,
+		Type:        PositionTypeCDC,
 		CdcPosition: &p,
 	})
 	if err != nil {

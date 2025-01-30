@@ -157,8 +157,6 @@ func TestUnsafeSnapshot(t *testing.T) {
 	var err error
 
 	type TableWithoutPK struct {
-		// No id field, forcing gorm to not create a primary key
-
 		Data string `gorm:"size:100"`
 	}
 
@@ -197,4 +195,130 @@ func TestUnsafeSnapshot(t *testing.T) {
 		is.Equal(actual.Operation, opencdc.OperationSnapshot)
 		is.Equal(actual.Payload.After.(opencdc.StructuredData)["data"].(string), expectedData)
 	}
+
+	// Test CDC
+
+	db.Create(&TableWithoutPK{Data: "record C"})
+	is.NoErr(db.Error)
+
+	rec, err := source.Read(ctx)
+	is.NoErr(err)
+	is.NoErr(source.Ack(ctx, rec.Position))
+
+	is.Equal(rec.Operation, opencdc.OperationCreate)
+	is.Equal(rec.Payload.After.(opencdc.StructuredData)["data"].(string), "record C")
+}
+
+func TestCompositeKey(t *testing.T) {
+	is := is.New(t)
+	db := testutils.NewDB(t)
+	var err error
+
+	type TableWithCompositeKey struct {
+		ID1  int64  `gorm:"primaryKey"`
+		ID2  string `gorm:"primaryKey"`
+		Data string `gorm:"size:100"`
+	}
+
+	expectedPayloadSchema := testutils.AvroSchema{
+		Name: "mysql.table_with_composite_keys_payload",
+		Type: "record",
+		Fields: []testutils.AvroSchemaField{
+			{Name: "id1", Type: "long"},
+			{Name: "id2", Type: "string"},
+			{Name: "data", Type: "string"},
+		},
+	}
+
+	expectedKeySchema := testutils.AvroSchema{
+		Name: "mysql.table_with_composite_keys_key",
+		Type: "record",
+		Fields: []testutils.AvroSchemaField{
+			{Name: "id1", Type: "long"},
+			{Name: "id2", Type: "string"},
+		},
+	}
+
+	is.NoErr(db.Migrator().DropTable(&TableWithCompositeKey{}))
+	is.NoErr(db.AutoMigrate(&TableWithCompositeKey{}))
+
+	db.Create([]TableWithCompositeKey{
+		{ID1: 1, ID2: "a", Data: "record A"},
+		{ID1: 2, ID2: "b", Data: "record B"},
+	})
+	is.NoErr(db.Error)
+
+	ctx := testutils.TestContext(t)
+	source, teardown := testSource(ctx, is, config.Config{
+		common.SourceConfigTables: testutils.TableName(is, db, &TableWithCompositeKey{}),
+	})
+	defer teardown()
+
+	var recs []opencdc.Record
+	for i := 0; i < 2; i++ {
+		rec, err := source.Read(ctx)
+		is.NoErr(err)
+		is.NoErr(source.Ack(ctx, rec.Position))
+		recs = append(recs, rec)
+	}
+
+	assertMetadata := func(m opencdc.Metadata) {
+		is.Equal(m["mysql.serverID"], "1")
+		is.Equal(m["opencdc.collection"], "table_with_composite_keys")
+	}
+
+	expected := []opencdc.Record{{
+		Operation: opencdc.OperationSnapshot,
+		Key:       opencdc.StructuredData{"id1": int64(1), "id2": "a"},
+		Payload: opencdc.Change{
+			After: opencdc.StructuredData{"id1": int64(1), "id2": "a", "data": "record A"},
+		},
+	}, {
+		Operation: opencdc.OperationSnapshot,
+		Key:       opencdc.StructuredData{"id1": int64(2), "id2": "b"},
+		Payload: opencdc.Change{
+			Before: nil,
+			After:  opencdc.StructuredData{"id1": int64(2), "id2": "b", "data": "record B"},
+		},
+	}}
+
+	for i, exp := range expected {
+		actual := recs[i]
+		is.Equal(actual.Operation, exp.Operation)
+		testutils.IsDataEqual(is, actual.Key, exp.Key)
+		testutils.IsDataEqual(is, actual.Payload.Before, exp.Payload.Before)
+		testutils.IsDataEqual(is, actual.Payload.After, exp.Payload.After)
+
+		expectedPayloadSchema.AssertPayloadSchema(ctx, is, actual.Metadata)
+		expectedKeySchema.AssertKeySchema(ctx, is, actual.Metadata)
+		assertMetadata(actual.Metadata)
+	}
+
+	err = db.Create(&TableWithCompositeKey{
+		ID1:  3,
+		ID2:  "c",
+		Data: "record C",
+	}).Error
+	is.NoErr(err)
+
+	rec, err := source.Read(ctx)
+	is.NoErr(err)
+	is.NoErr(source.Ack(ctx, rec.Position))
+
+	expectedCDCRecord := opencdc.Record{
+		Operation: opencdc.OperationCreate,
+		Key:       opencdc.StructuredData{"id1": int64(3), "id2": "c"},
+		Payload: opencdc.Change{
+			After: opencdc.StructuredData{"id1": int64(3), "id2": "c", "data": "record C"},
+		},
+	}
+
+	is.Equal(rec.Operation, expectedCDCRecord.Operation)
+	testutils.IsDataEqual(is, rec.Key, expectedCDCRecord.Key)
+	testutils.IsDataEqual(is, rec.Payload.Before, expectedCDCRecord.Payload.Before)
+	testutils.IsDataEqual(is, rec.Payload.After, expectedCDCRecord.Payload.After)
+
+	assertMetadata(rec.Metadata)
+	expectedPayloadSchema.AssertPayloadSchema(ctx, is, rec.Metadata)
+	expectedKeySchema.AssertKeySchema(ctx, is, rec.Metadata)
 }

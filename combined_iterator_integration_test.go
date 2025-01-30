@@ -33,7 +33,7 @@ func testCombinedIterator(ctx context.Context, t *testing.T, is *is.I) (common.I
 
 	iterator, err := newCombinedIterator(ctx, combinedIteratorConfig{
 		db:                  db,
-		tableSortCols:       testutils.TableSortCols,
+		primaryKeys:         testutils.TablePrimaryKeys,
 		database:            "meroxadb",
 		tables:              []string{"users"},
 		serverID:            testutils.ServerID,

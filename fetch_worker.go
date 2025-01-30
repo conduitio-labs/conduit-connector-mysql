@@ -213,7 +213,7 @@ func (w *fetchWorkerByKey) getMinMaxValues(
 
 type rowsChunk struct {
 	rows          []map[string]any
-	mysqlAvroCols []*avroColType
+	mysqlAvroCols []*avroNamedType
 	foundEnd      bool
 }
 
@@ -278,7 +278,7 @@ func (w *fetchWorkerByKey) selectRowsChunk(
 
 func (w *fetchWorkerByKey) buildFetchData(
 	ctx context.Context, row map[string]any,
-	colTypes []*avroColType, lastRead any,
+	colTypes []*avroNamedType, lastRead any,
 ) (fetchData, error) {
 	position := common.TablePosition{
 		LastRead:    lastRead,
@@ -295,7 +295,7 @@ func (w *fetchWorkerByKey) buildFetchData(
 		payload[key] = w.payloadSchema.formatValue(ctx, key, val)
 	}
 
-	var keyColType *avroColType
+	var keyColType *avroNamedType
 	for _, colType := range colTypes {
 		if colType.Name == w.config.sortColName {
 			keyColType = colType

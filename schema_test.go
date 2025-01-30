@@ -64,15 +64,27 @@ func expectedKeyRecordSchema(is *is.I, tableName string) map[string]any {
 }
 
 type SchemaAllTypes struct {
-	// Numeric Types
-	TinyIntCol   int32   `gorm:"column:tiny_int_col;type:tinyint"`
-	SmallIntCol  int32   `gorm:"column:small_int_col;type:smallint"`
-	MediumIntCol int32   `gorm:"column:medium_int_col;type:mediumint"`
-	IntCol       int32   `gorm:"column:int_col;type:int"`
-	BigIntCol    int64   `gorm:"column:big_int_col;type:bigint"`
-	DecimalCol   float64 `gorm:"column:decimal_col;type:decimal(10,2)"`
-	FloatCol     float64 `gorm:"column:float_col;type:float"`
-	DoubleCol    float64 `gorm:"column:double_col;type:double"`
+	// Note: the go types specified here for each column aren't really relevant for
+	// the schema tests, we just need the gorm struct tags. We use the avro
+	// equivalent in go though to be consistent.
+
+	// Signed Numeric Types
+	TinyIntCol   int32 `gorm:"column:tiny_int_col;type:tinyint"`
+	SmallIntCol  int32 `gorm:"column:small_int_col;type:smallint"`
+	MediumIntCol int32 `gorm:"column:medium_int_col;type:mediumint"`
+	IntCol       int32 `gorm:"column:int_col;type:int"`
+	BigIntCol    int64 `gorm:"column:big_int_col;type:bigint"`
+
+	// Unsigned Numeric Types
+	UTinyIntCol   int32 `gorm:"column:utiny_int_col;type:tinyint unsigned"`
+	USmallIntCol  int32 `gorm:"column:usmall_int_col;type:smallint unsigned"`
+	UMediumIntCol int32 `gorm:"column:umedium_int_col;type:mediumint unsigned"`
+	UIntCol       int32 `gorm:"column:uint_col;type:int unsigned"`
+	UBigIntCol    int64 `gorm:"column:ubig_int_col;type:bigint unsigned"`
+
+	DecimalCol float64 `gorm:"column:decimal_col;type:decimal(10,2)"`
+	FloatCol   float32 `gorm:"column:float_col;type:float(24)"`
+	DoubleCol  float64 `gorm:"column:double_col;type:double"`
 
 	// Bit Types (most common)
 	Bit1Col  []byte `gorm:"column:bit1_col;type:bit(1)"`
@@ -111,14 +123,22 @@ type SchemaAllTypes struct {
 
 func expectedPayloadRecordSchema(is *is.I, tableName string) map[string]any {
 	fields := []*avro.Field{
-		// Numeric Types
+		// Signed Numeric Types
 		field(is, "tiny_int_col", avro.Int),
 		field(is, "small_int_col", avro.Int),
 		field(is, "medium_int_col", avro.Int),
 		field(is, "int_col", avro.Int),
 		field(is, "big_int_col", avro.Long),
+
+		// Unsigned Numeric Types
+		field(is, "utiny_int_col", avro.Int),
+		field(is, "usmall_int_col", avro.Int),
+		field(is, "umedium_int_col", avro.Int),
+		field(is, "uint_col", avro.Long),
+		field(is, "ubig_int_col", avro.Long),
+
 		field(is, "decimal_col", avro.Double),
-		field(is, "float_col", avro.Double),
+		field(is, "float_col", avro.Float),
 		field(is, "double_col", avro.Double),
 
 		fixed8ByteField(is, "bit1_col"),
@@ -162,15 +182,28 @@ func expectedPayloadRecordSchema(is *is.I, tableName string) map[string]any {
 }
 
 func allTypesSnapshotTestData() map[string]any {
+	// The column test values are written in the avro equivalent type, and not in
+	// the mysql equivalent type, so that we can properly assert that formatting
+	// works as expected.
+
 	testData := map[string]any{
-		"tiny_int_col":    int32(127),
-		"small_int_col":   int32(32767),
-		"medium_int_col":  int32(8388607),
-		"int_col":         int32(2147483647),
-		"big_int_col":     int64(9223372036854775807),
-		"decimal_col":     123.45,
-		"float_col":       float64(123.45),
-		"double_col":      123.45,
+		// Signed max values
+		"tiny_int_col":   int32(127),
+		"small_int_col":  int32(32767),
+		"medium_int_col": int32(8388607),
+		"int_col":        int32(2147483647),
+		"big_int_col":    int64(9223372036854775807),
+
+		// Unsigned max values
+		"utiny_int_col":   int32(255),
+		"usmall_int_col":  int32(65535),
+		"umedium_int_col": int32(16777215),
+		"uint_col":        int64(429496729),
+		"ubig_int_col":    int64(1844674407370955161),
+
+		"float_col":       float32(123.5),
+		"decimal_col":     123.5,
+		"double_col":      123.5,
 		"char_col":        "char",
 		"varchar_col":     "varchar",
 		"tiny_text_col":   "tiny text",
@@ -271,7 +304,7 @@ func TestSchema_Payload_canal_RowsEvent(t *testing.T) {
 		is.NoErr(db.Model(&SchemaAllTypes{}).Create(&testData).Error)
 	})
 
-	avroCols := make([]*avroColType, len(rowsEvent.Table.Columns))
+	avroCols := make([]*avroNamedType, len(rowsEvent.Table.Columns))
 	for i, col := range rowsEvent.Table.Columns {
 		avroCol, err := mysqlSchemaToAvroCol(col)
 		is.NoErr(err)
@@ -321,7 +354,7 @@ func TestSchema_Key(t *testing.T) {
 
 	keySchemaManager := newSchemaMapper()
 
-	var f1Col *avroColType
+	var f1Col *avroNamedType
 	for _, colType := range colTypes {
 		if colType.Name == "f1" {
 			f1Col = colType

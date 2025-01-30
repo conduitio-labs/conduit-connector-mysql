@@ -33,32 +33,40 @@ import (
 // format values.
 type schemaMapper struct {
 	schema   *schemaSubjectVersion
-	colTypes map[string]*avroColType
+	colTypes map[string]*avroNamedType
 }
 
 func newSchemaMapper() *schemaMapper {
 	return &schemaMapper{
-		colTypes: make(map[string]*avroColType),
+		colTypes: make(map[string]*avroNamedType),
 	}
 }
 
-type avroDatedType struct {
+type avroType struct {
 	Type   avro.Type
+	isBit  bool
 	isDate bool
 }
 
-var sqlColtypeToAvroDatedTypeMap = map[string]avroDatedType{
+var sqlColtypeToAvroTypeMap = map[string]avroType{
 	// Numeric types
 	"TINYINT":   {Type: avro.Int},
 	"SMALLINT":  {Type: avro.Int},
 	"MEDIUMINT": {Type: avro.Int},
 	"INT":       {Type: avro.Int},
 	"BIGINT":    {Type: avro.Long},
-	"DECIMAL":   {Type: avro.Double},
-	"NUMERIC":   {Type: avro.Double},
-	"FLOAT":     {Type: avro.Double},
-	"DOUBLE":    {Type: avro.Double},
-	"BIT":       {Type: avro.Fixed},
+
+	"UNSIGNED TINYINT":   {Type: avro.Int},
+	"UNSIGNED SMALLINT":  {Type: avro.Int},
+	"UNSIGNED MEDIUMINT": {Type: avro.Int},
+	"UNSIGNED INT":       {Type: avro.Long},
+	"UNSIGNED BIGINT":    {Type: avro.Long},
+
+	"FLOAT":   {Type: avro.Float},
+	"DECIMAL": {Type: avro.Double},
+	"NUMERIC": {Type: avro.Double},
+	"DOUBLE":  {Type: avro.Double},
+	"BIT":     {Type: avro.Fixed, isBit: true},
 
 	// String types
 	"CHAR":       {Type: avro.String},
@@ -89,28 +97,27 @@ var sqlColtypeToAvroDatedTypeMap = map[string]avroDatedType{
 	"JSON": {Type: avro.String},
 }
 
-type avroColType struct {
-	avroDatedType
-	isBit bool
-	Name  string
+type avroNamedType struct {
+	avroType
+	Name string
 }
 
-func sqlxRowsToAvroCol(rows *sqlx.Rows) ([]*avroColType, error) {
+func sqlxRowsToAvroCol(rows *sqlx.Rows) ([]*avroNamedType, error) {
 	colTypes, err := rows.ColumnTypes()
 	if err != nil {
 		return nil, fmt.Errorf("failed to retrieve column types: %w", err)
 	}
 
-	avroCols := make([]*avroColType, len(colTypes))
+	avroCols := make([]*avroNamedType, len(colTypes))
 	for i, colType := range colTypes {
-		avroDatedType, ok := sqlColtypeToAvroDatedTypeMap[colType.DatabaseTypeName()]
+		avroType, ok := sqlColtypeToAvroTypeMap[colType.DatabaseTypeName()]
 		if !ok {
 			return nil, fmt.Errorf(
 				"failed to retrieve column type %s for %s",
 				colType.DatabaseTypeName(), colType.Name())
 		}
 
-		avroCol := &avroColType{avroDatedType: avroDatedType, Name: colType.Name()}
+		avroCol := &avroNamedType{avroType: avroType, Name: colType.Name()}
 		if colType.DatabaseTypeName() == "BIT" {
 			avroCol.isBit = true
 		}
@@ -121,10 +128,10 @@ func sqlxRowsToAvroCol(rows *sqlx.Rows) ([]*avroColType, error) {
 	return avroCols, nil
 }
 
-var mysqlschemaTypeToAvroDatedTypeMap = map[int]avroDatedType{
+var mysqlschemaTypeToAvroTypeMap = map[int]avroType{
 	// Numeric types
 	mysqlschema.TYPE_NUMBER:     {Type: avro.Int},
-	mysqlschema.TYPE_FLOAT:      {Type: avro.Double},
+	mysqlschema.TYPE_FLOAT:      {Type: avro.Float},
 	mysqlschema.TYPE_DECIMAL:    {Type: avro.Double},
 	mysqlschema.TYPE_MEDIUM_INT: {Type: avro.Int},
 
@@ -135,7 +142,7 @@ var mysqlschemaTypeToAvroDatedTypeMap = map[int]avroDatedType{
 
 	// Binary types
 	mysqlschema.TYPE_BINARY: {Type: avro.Bytes},
-	mysqlschema.TYPE_BIT:    {Type: avro.Fixed},
+	mysqlschema.TYPE_BIT:    {Type: avro.Fixed, isBit: true},
 
 	// Date and time types
 	mysqlschema.TYPE_DATETIME:  {Type: avro.String, isDate: true},
@@ -149,20 +156,29 @@ var mysqlschemaTypeToAvroDatedTypeMap = map[int]avroDatedType{
 }
 
 var rawTypeToAvroTypeMap = map[string]avro.Type{
-	"bigint":     avro.Long,
-	"tinyblob":   avro.Bytes,
-	"blob":       avro.Bytes,
-	"mediumblob": avro.Bytes,
-	"longblob":   avro.Bytes,
+	"bigint":          avro.Long,
+	"bigint unsigned": avro.Long,
+	"tinyblob":        avro.Bytes,
+	"blob":            avro.Bytes,
+	"mediumblob":      avro.Bytes,
+	"longblob":        avro.Bytes,
 }
 
-func mysqlSchemaToAvroCol(tableCol mysqlschema.TableColumn) (*avroColType, error) {
-	datedType, ok := mysqlschemaTypeToAvroDatedTypeMap[tableCol.Type]
+func mysqlSchemaToAvroCol(tableCol mysqlschema.TableColumn) (*avroNamedType, error) {
+	avroType, ok := mysqlschemaTypeToAvroTypeMap[tableCol.Type]
 	if !ok {
 		return nil, fmt.Errorf("unsupported column type %s for column %s", tableCol.RawType, tableCol.Name)
 	}
 
-	avroColType := &avroColType{avroDatedType: datedType, Name: tableCol.Name}
+	if tableCol.RawType == "int unsigned" {
+		avroType.Type = avro.Long
+	}
+
+	if tableCol.Type == mysqlschema.TYPE_FLOAT && tableCol.RawType == "double" {
+		avroType.Type = avro.Double
+	}
+
+	avroColType := &avroNamedType{avroType: avroType, Name: tableCol.Name}
 	rawType, ok := rawTypeToAvroTypeMap[tableCol.RawType]
 	if ok {
 		avroColType.Type = rawType
@@ -171,7 +187,7 @@ func mysqlSchemaToAvroCol(tableCol mysqlschema.TableColumn) (*avroColType, error
 	return avroColType, nil
 }
 
-func colTypeToAvroField(avroCol *avroColType) (*avro.Field, error) {
+func colTypeToAvroField(avroCol *avroNamedType) (*avro.Field, error) {
 	if avroCol.isBit {
 		// Current limitations in the mysql driver that we use don't allow use
 		// to get the N from BIT(N) mysql columns. To track support for this
@@ -207,7 +223,7 @@ type schemaSubjectVersion struct {
 }
 
 func (s *schemaMapper) createPayloadSchema(
-	ctx context.Context, table string, mysqlCols []*avroColType,
+	ctx context.Context, table string, mysqlCols []*avroNamedType,
 ) (*schemaSubjectVersion, error) {
 	if s.schema != nil {
 		return s.schema, nil
@@ -244,7 +260,7 @@ func (s *schemaMapper) createPayloadSchema(
 }
 
 func (s *schemaMapper) createKeySchema(
-	ctx context.Context, table string, colType *avroColType,
+	ctx context.Context, table string, colType *avroNamedType,
 ) (*schemaSubjectVersion, error) {
 	if s.schema != nil {
 		return s.schema, nil
@@ -275,9 +291,9 @@ func (s *schemaMapper) createKeySchema(
 	return s.schema, nil
 }
 
-// formatValue uses the stored avro types to format the value. This way we can
-// better control what the mysql driver returns. It should be called after creating
-// the schema, otherwise it won't do anything.
+// formatValue uses the stored avro types to format the incoming value as an
+// avro type. This way we can better control what the mysql driver returns. It
+// should be called after creating the schema, otherwise it won't do anything.
 func (s *schemaMapper) formatValue(ctx context.Context, column string, value any) any {
 	t, found := s.colTypes[column]
 	if !found {
@@ -319,18 +335,37 @@ func (s *schemaMapper) formatValue(ctx context.Context, column string, value any
 	case avro.Int:
 		switch v := value.(type) {
 		case int:
-			if v < math.MaxInt32 && v > math.MinInt32 {
+			if v <= math.MaxInt32 && v >= math.MinInt32 {
 				return int32(v)
 			}
+			sdk.Logger(ctx).Warn().Msgf("value %v for column %s cannot be encoded in avro int", v, t.Name)
+
 		case int8:
 			return int32(v)
 		case int16:
 			return int32(v)
 		case int64:
-			if v > math.MaxInt32 || v < math.MinInt32 {
-				return v
+			if v <= math.MaxInt32 {
+				return int32(v)
 			}
+
+			sdk.Logger(ctx).Warn().Msgf("value %v for column %s cannot be encoded in avro int", v, t.Name)
+		case uint8:
 			return int32(v)
+		case uint16:
+			return int32(v)
+		case uint32:
+			if v <= math.MaxInt32 {
+				return int32(v)
+			}
+
+			sdk.Logger(ctx).Warn().Msgf("value %v for column %s cannot be encoded in avro int", v, t.Name)
+		case uint64:
+			if v <= math.MaxInt32 {
+				return int32(v)
+			}
+
+			sdk.Logger(ctx).Warn().Msgf("value %v for column %s cannot be encoded in avro int", v, t.Name)
 		}
 
 		return value
@@ -352,22 +387,17 @@ func (s *schemaMapper) formatValue(ctx context.Context, column string, value any
 			}
 			return int64(0)
 
+		case uint32:
+			return int64(v)
 		case uint64:
 			if v <= math.MaxInt64 {
 				return int64(v)
 			}
-			// This will make avro encoding fail as it doesn't support uint64
-			return v
+
+			sdk.Logger(ctx).Warn().Msgf("value %v for column %s cannot be encoded in avro int", v, t.Name)
 		}
 
 		return value
-	case avro.Float:
-		switch v := value.(type) {
-		case float32:
-			return v
-		case float64:
-			return float32(v)
-		}
 	case avro.Double:
 		switch v := value.(type) {
 		case string:

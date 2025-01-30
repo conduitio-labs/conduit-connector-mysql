@@ -163,7 +163,7 @@ func (c *cdcIterator) buildRecord(ctx context.Context, e rowEvent) (opencdc.Reco
 		Pos:  e.Header.LogPos,
 	}.ToSDKPosition()
 
-	avroCols := make([]*avroColType, len(e.Table.Columns))
+	avroCols := make([]*avroNamedType, len(e.Table.Columns))
 	for i, col := range e.Table.Columns {
 		avroCol, err := mysqlSchemaToAvroCol(col)
 		if err != nil {
@@ -241,7 +241,7 @@ func (c *cdcIterator) buildRecord(ctx context.Context, e rowEvent) (opencdc.Reco
 	}
 }
 
-func findKeyColType(avroCols []*avroColType, keyCol string) (*avroColType, bool) {
+func findKeyColType(avroCols []*avroNamedType, keyCol string) (*avroNamedType, bool) {
 	for _, avroCol := range avroCols {
 		if keyCol == avroCol.Name {
 			return avroCol, true

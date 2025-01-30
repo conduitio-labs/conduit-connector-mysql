@@ -17,8 +17,6 @@ package mysql
 import (
 	"context"
 	"database/sql"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -57,17 +55,22 @@ func newFetchWorker(db *sqlx.DB, data chan fetchData, config fetchWorkerConfig) 
 // fetchWorkerByKey will perform a snapshot using the sortColName as
 // the sorting key for fetching rows in chunks.
 type fetchWorkerByKey struct {
-	db         *sqlx.DB
-	data       chan fetchData
-	config     fetchWorkerConfig
+	db            *sqlx.DB
+	data          chan fetchData
+	config        fetchWorkerConfig
+	payloadSchema *schemaMapper
+	keySchema     *schemaMapper
+
 	start, end any
 }
 
 func newFetchWorkerByKey(db *sqlx.DB, data chan fetchData, config fetchWorkerConfig) fetchWorker {
 	return &fetchWorkerByKey{
-		db:     db,
-		data:   data,
-		config: config,
+		db:            db,
+		data:          data,
+		payloadSchema: newSchemaMapper(),
+		keySchema:     newSchemaMapper(),
+		config:        config,
 	}
 }
 
@@ -133,13 +136,13 @@ func (w *fetchWorkerByKey) run(ctx context.Context) (err error) {
 			Any("chunk start", chunkStart).
 			Any("end", w.end).Msg("fetching chunk")
 
-		rows, foundEnd, err := w.selectRowsChunk(ctx, tx, chunkStart, discardFirst)
+		rowsChunk, err := w.selectRowsChunk(ctx, tx, chunkStart, discardFirst)
 		if err != nil {
 			return fmt.Errorf("failed to select rows chunk: %w", err)
 		}
 		discardFirst = true
 
-		for _, row := range rows {
+		for _, row := range rowsChunk.rows {
 			sdk.Logger(ctx).Trace().Msgf("fetched row: %+v", row)
 
 			lastRead := row[w.config.sortColName]
@@ -147,11 +150,7 @@ func (w *fetchWorkerByKey) run(ctx context.Context) (err error) {
 				return ErrSortingKeyNotFoundInRow
 			}
 
-			position := common.TablePosition{
-				LastRead:    lastRead,
-				SnapshotEnd: w.end,
-			}
-			data, err := w.buildFetchData(row, position)
+			data, err := w.buildFetchData(ctx, row, rowsChunk.mysqlAvroCols, lastRead)
 			if err != nil {
 				return fmt.Errorf("failed to build fetch data: %w", err)
 			}
@@ -167,7 +166,7 @@ func (w *fetchWorkerByKey) run(ctx context.Context) (err error) {
 			chunkStart = lastRead
 		}
 
-		if foundEnd {
+		if rowsChunk.foundEnd {
 			break
 		}
 	}
@@ -212,77 +211,121 @@ func (w *fetchWorkerByKey) getMinMaxValues(
 	return &scannedRow, false, nil
 }
 
+type rowsChunk struct {
+	rows          []map[string]any
+	mysqlAvroCols []*avroNamedType
+	foundEnd      bool
+}
+
 func (w *fetchWorkerByKey) selectRowsChunk(
 	ctx context.Context, tx *sqlx.Tx,
 	start any, discardFirst bool,
-) (scannedRows []opencdc.StructuredData, foundEnd bool, err error) {
-	var wherePred any = squirrel.GtOrEq{w.config.sortColName: start}
+) (_ *rowsChunk, err error) {
+	var whereStart any = squirrel.GtOrEq{w.config.sortColName: start}
 	if discardFirst {
-		wherePred = squirrel.Gt{w.config.sortColName: start}
+		whereStart = squirrel.Gt{w.config.sortColName: start}
 	}
+	whereEnd := squirrel.LtOrEq{w.config.sortColName: w.end}
 
 	query, args, err := squirrel.
 		Select("*").
 		From(w.config.table).
-		Where(wherePred).
-		Where(squirrel.LtOrEq{w.config.sortColName: w.end}).
+		Where(whereStart).Where(whereEnd).
 		OrderBy(w.config.sortColName).
 		Limit(w.config.fetchSize).
 		ToSql()
 	if err != nil {
-		return nil, false, fmt.Errorf("failed to build query: %w", err)
+		return nil, fmt.Errorf("failed to build query: %w", err)
 	}
 
 	sdk.Logger(ctx).Debug().Str("query", query).Any("args", args).Msg("created query")
 
 	rows, err := tx.QueryxContext(ctx, query, args...)
 	if err != nil {
-		return nil, false, fmt.Errorf("failed to query rows: %w", err)
+		return nil, fmt.Errorf("failed to query rows: %w", err)
 	}
 	defer func() {
-		if closeErr := rows.Close(); err != nil {
-			if err == nil {
-				err = fmt.Errorf("failed to close rows: %w", closeErr)
-			} else {
-				err = errors.Join(err, fmt.Errorf("failed to close rows: %w", closeErr))
-			}
+		if closeErr := rows.Close(); closeErr != nil {
+			closeErr = fmt.Errorf("failed to close rows: %w", closeErr)
+			err = errors.Join(err, closeErr)
 		}
 	}()
 
+	chunk := &rowsChunk{}
+
+	chunk.mysqlAvroCols, err = sqlxRowsToAvroCol(rows)
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve column types: %w", err)
+	}
+
 	for rows.Next() {
-		row := opencdc.StructuredData{}
+		row := map[string]any{}
 		if err := rows.MapScan(row); err != nil {
-			return nil, false, fmt.Errorf("failed to map scan row: %w", err)
+			return nil, fmt.Errorf("failed to map scan row: %w", err)
 		}
 
-		// convert the values so that they can be easily serialized
-		for key, val := range row {
-			row[key] = common.FormatValue(val)
-		}
-
-		scannedRows = append(scannedRows, row)
+		chunk.rows = append(chunk.rows, row)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, false, fmt.Errorf("failed to close rows: %w", err)
+		return nil, fmt.Errorf("failed to close rows: %w", err)
 	}
 
 	//nolint:gosec // fetchSize is already checked for being a sane int value
-	foundEnd = len(scannedRows) < int(w.config.fetchSize)
+	chunk.foundEnd = len(chunk.rows) < int(w.config.fetchSize)
 
-	return scannedRows, foundEnd, nil
+	return chunk, nil
 }
 
 func (w *fetchWorkerByKey) buildFetchData(
-	payload opencdc.StructuredData,
-	position common.TablePosition,
+	ctx context.Context, row map[string]any,
+	colTypes []*avroNamedType, lastRead any,
 ) (fetchData, error) {
-	keyVal, ok := payload[w.config.sortColName]
+	position := common.TablePosition{
+		LastRead:    lastRead,
+		SnapshotEnd: w.end,
+	}
+
+	payloadSubver, err := w.payloadSchema.createPayloadSchema(ctx, w.config.table, colTypes)
+	if err != nil {
+		return fetchData{}, fmt.Errorf("failed to create payload schema for table %s: %w", w.config.table, err)
+	}
+
+	payload := make(opencdc.StructuredData)
+	for key, val := range row {
+		payload[key] = w.payloadSchema.formatValue(ctx, key, val)
+	}
+
+	var keyColType *avroNamedType
+	for _, colType := range colTypes {
+		if colType.Name == w.config.sortColName {
+			keyColType = colType
+			break
+		}
+	}
+	if keyColType == nil {
+		return fetchData{}, fmt.Errorf("failed to find key schema column type for table %s", w.config.table)
+	}
+
+	keySubver, err := w.keySchema.createKeySchema(ctx, w.config.table, keyColType)
+	if err != nil {
+		return fetchData{}, fmt.Errorf("failed to create key schema for table %s: %w", w.config.table, err)
+	}
+
+	keyVal, ok := row[w.config.sortColName]
 	if !ok {
 		return fetchData{}, fmt.Errorf("key %s not found in payload", w.config.sortColName)
 	}
+	keyVal = w.keySchema.formatValue(ctx, w.config.sortColName, keyVal)
 
-	key := snapshotKey{w.config.sortColName, keyVal}
-	return fetchData{key, w.config.table, payload, position}, nil
+	key := opencdc.StructuredData{w.config.sortColName: keyVal}
+	return fetchData{
+		key:           key,
+		table:         w.config.table,
+		payload:       payload,
+		position:      position,
+		payloadSchema: payloadSubver,
+		keySchema:     keySubver,
+	}, nil
 }
 
 // fetchWorkerByLimit will perform a snapshot using the LIMIT + OFFSET clauses to fetch
@@ -292,15 +335,18 @@ type fetchWorkerByLimit struct {
 	db     *sqlx.DB
 	data   chan fetchData
 	end    uint64
+
+	payloadSchema *schemaMapper
 }
 
 func newFetchWorkerByLimit(
 	db *sqlx.DB, data chan fetchData, config fetchWorkerConfig,
 ) fetchWorker {
 	return &fetchWorkerByLimit{
-		db:     db,
-		data:   data,
-		config: config,
+		payloadSchema: newSchemaMapper(),
+		db:            db,
+		data:          data,
+		config:        config,
 	}
 }
 
@@ -375,49 +421,62 @@ func (w *fetchWorkerByLimit) run(ctx context.Context) (err error) {
 
 		sdk.Logger(ctx).Debug().Str("query", query).Any("args", args).Msg("created query")
 
-		rows, err := tx.QueryxContext(ctx, query, args...)
+		sqlxRows, err := tx.QueryxContext(ctx, query, args...)
 		if err != nil {
 			return fmt.Errorf("failed to query rows: %w", err)
 		}
-		defer rows.Close()
+		defer func() {
+			if closeErr := sqlxRows.Close(); closeErr != nil {
+				closeErr = fmt.Errorf("failed to close rows: %w", closeErr)
+				err = errors.Join(err, closeErr)
+			}
+		}()
+		colTypes, err := sqlxRowsToAvroCol(sqlxRows)
+		if err != nil {
+			return fmt.Errorf("failed to retrieve column types: %w", err)
+		}
 
-		for rows.Next() {
-			row := opencdc.StructuredData{}
-			if err := rows.MapScan(row); err != nil {
+		rows := []map[string]any{}
+		for sqlxRows.Next() {
+			row := map[string]any{}
+			if err := sqlxRows.MapScan(row); err != nil {
 				return fmt.Errorf("failed to map scan row: %w", err)
 			}
+			rows = append(rows, row)
+		}
+		if err := sqlxRows.Err(); err != nil {
+			return fmt.Errorf("failed to close rows: %w", err)
+		}
 
-			// convert the values so that they can be easily serialized
-			for key, val := range row {
-				row[key] = common.FormatValue(val)
-			}
+		for i, row := range rows {
+			sdk.Logger(ctx).Trace().Msgf("fetched row: %+v", row)
 
-			keyBytes, err := json.Marshal(row)
+			payloadSubver, err := w.payloadSchema.createPayloadSchema(ctx, w.config.table, colTypes)
 			if err != nil {
-				return fmt.Errorf("failed to marshal row: %w", err)
+				return fmt.Errorf("failed to create payload schema for table %s: %w", w.config.table, err)
 			}
-			encodedKey := base64.StdEncoding.EncodeToString(keyBytes)
 
-			// we don't really have any way to get the key from the table, so we
-			// make up for one
-			key := snapshotKey{
-				Key:   "",
-				Value: encodedKey,
+			payload := make(opencdc.StructuredData)
+			for key, val := range row {
+				payload[key] = w.payloadSchema.formatValue(ctx, key, val)
 			}
+
+			//nolint:gosec // i is guaranteed to be greater than 0
+			rowNum := offset + uint64(i)
+			keyStr := fmt.Sprintf("%s_%d", w.config.table, rowNum)
+			key := opencdc.RawData(keyStr)
 
 			w.data <- fetchData{
-				key:     key,
-				table:   w.config.table,
-				payload: row,
+				key:           key,
+				table:         w.config.table,
+				payload:       payload,
+				payloadSchema: payloadSubver,
 
 				// ignoring position, we start from 0 each time
 				// TODO: we could save the offset as a position, we might want
 				// to do it in the future.
 				position: common.TablePosition{},
 			}
-		}
-		if err := rows.Err(); err != nil {
-			return fmt.Errorf("failed to close rows: %w", err)
 		}
 	}
 

@@ -16,6 +16,7 @@ package testutils
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"sync"
@@ -24,6 +25,7 @@ import (
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	"github.com/conduitio/conduit-commons/opencdc"
+	"github.com/conduitio/conduit-connector-sdk/schema"
 	"github.com/go-mysql-org/go-mysql/canal"
 	"github.com/go-sql-driver/mysql"
 	"github.com/google/go-cmp/cmp"
@@ -33,7 +35,7 @@ import (
 	gormmysql "gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
-	"gorm.io/gorm/schema"
+	gormschema "gorm.io/gorm/schema"
 )
 
 const DSN = "root:meroxaadmin@tcp(127.0.0.1:3306)/meroxadb"
@@ -78,7 +80,7 @@ func TableName(is *is.I, db DB, model any) string {
 	err := stmt.Parse(model)
 	is.NoErr(err)
 
-	s, err := schema.Parse(model, &sync.Map{}, schema.NamingStrategy{})
+	s, err := gormschema.Parse(model, &sync.Map{}, gormschema.NamingStrategy{})
 	is.NoErr(err)
 
 	return s.Table
@@ -110,6 +112,35 @@ type User struct {
 	Username  string    `db:"username"`
 	Email     string    `db:"email"`
 	CreatedAt time.Time `db:"created_at"`
+}
+
+var (
+	userPayloadSchema = AvroSchema{
+		Name: "mysql.users_payload",
+		Type: "record",
+		Fields: []AvroSchemaField{
+			{Name: "id", Type: "long"},
+			{Name: "username", Type: "string"},
+			{Name: "email", Type: "string"},
+			{Name: "created_at", Type: "string"},
+		},
+	}
+	userKeySchema = AvroSchema{
+		Name:   "mysql.users_key",
+		Type:   "record",
+		Fields: []AvroSchemaField{{Name: "id", Type: "long"}},
+	}
+)
+
+type AvroSchema struct {
+	Name   string            `json:"name"`
+	Type   string            `json:"type"`
+	Fields []AvroSchemaField `json:"fields"`
+}
+
+type AvroSchemaField struct {
+	Name string `json:"name"`
+	Type string `json:"type"`
 }
 
 func (u User) Update() User {
@@ -187,10 +218,10 @@ func ReadAndAssertCreate(
 
 	is.Equal(rec.Operation, opencdc.OperationCreate)
 
-	assertMetadata(is, rec.Metadata)
+	assertMetadata(ctx, is, rec.Metadata)
 
-	IsDataEqual(is, rec.Key, opencdc.StructuredData{"id": user.ID})
-	IsDataEqual(is, rec.Payload.After, user.StructuredData())
+	isDataEqual(is, rec.Key, opencdc.StructuredData{"id": user.ID})
+	isDataEqual(is, rec.Payload.After, user.StructuredData())
 
 	return rec
 }
@@ -206,13 +237,13 @@ func ReadAndAssertUpdate(
 
 	is.Equal(rec.Operation, opencdc.OperationUpdate)
 
-	assertMetadata(is, rec.Metadata)
+	assertMetadata(ctx, is, rec.Metadata)
 
-	IsDataEqual(is, rec.Key, opencdc.StructuredData{"id": prev.ID})
-	IsDataEqual(is, rec.Key, opencdc.StructuredData{"id": next.ID})
+	isDataEqual(is, rec.Key, opencdc.StructuredData{"id": prev.ID})
+	isDataEqual(is, rec.Key, opencdc.StructuredData{"id": next.ID})
 
-	IsDataEqual(is, rec.Payload.Before, prev.StructuredData())
-	IsDataEqual(is, rec.Payload.After, next.StructuredData())
+	isDataEqual(is, rec.Payload.Before, prev.StructuredData())
+	isDataEqual(is, rec.Payload.After, next.StructuredData())
 
 	return rec
 }
@@ -229,14 +260,14 @@ func ReadAndAssertDelete(
 
 	is.Equal(rec.Operation, opencdc.OperationDelete)
 
-	assertMetadata(is, rec.Metadata)
+	assertMetadata(ctx, is, rec.Metadata)
 
-	IsDataEqual(is, rec.Key, opencdc.StructuredData{"id": user.ID})
+	isDataEqual(is, rec.Key, opencdc.StructuredData{"id": user.ID})
 
 	return rec
 }
 
-func IsDataEqual(is *is.I, actual, expected opencdc.Data) {
+func isDataEqual(is *is.I, actual, expected any) {
 	is.Equal("", cmp.Diff(actual, expected)) // actual (-) != expected (+)
 }
 
@@ -249,29 +280,63 @@ func ReadAndAssertSnapshot(
 	is.NoErr(err)
 	is.NoErr(iterator.Ack(ctx, rec.Position))
 
-	AssertUserSnapshot(is, user, rec)
+	AssertUserSnapshot(ctx, is, user, rec)
 	return rec
 }
 
-func AssertUserSnapshot(is *is.I, user User, rec opencdc.Record) {
+func AssertUserSnapshot(ctx context.Context, is *is.I, user User, rec opencdc.Record) {
 	is.Helper()
 	is.Equal(rec.Operation, opencdc.OperationSnapshot)
 
-	assertMetadata(is, rec.Metadata)
+	assertMetadata(ctx, is, rec.Metadata)
 
-	IsDataEqual(is, rec.Key, opencdc.StructuredData{"id": user.ID})
-	IsDataEqual(is, rec.Payload.After, user.StructuredData())
+	isDataEqual(is, rec.Key, opencdc.StructuredData{"id": user.ID})
+	isDataEqual(is, rec.Payload.After, user.StructuredData())
 }
 
-func assertMetadata(is *is.I, metadata opencdc.Metadata) {
+func assertMetadata(ctx context.Context, is *is.I, metadata opencdc.Metadata) {
 	col, err := metadata.GetCollection()
 	is.NoErr(err)
 	is.Equal(col, "users")
 
 	is.Equal(metadata[common.ServerIDKey], ServerID)
+
+	assertSchema(ctx, is, metadata)
 }
 
-func NewCanal(ctx context.Context, is *is.I) *canal.Canal {
+func assertSchema(ctx context.Context, is *is.I, metadata opencdc.Metadata) {
+	{ // payload schema
+		ver, err := metadata.GetPayloadSchemaVersion()
+		is.NoErr(err)
+		sub, err := metadata.GetPayloadSchemaSubject()
+		is.NoErr(err)
+
+		s, err := schema.Get(ctx, sub, ver)
+		is.NoErr(err)
+
+		var actualSchema AvroSchema
+		is.NoErr(json.Unmarshal(s.Bytes, &actualSchema))
+
+		isDataEqual(is, actualSchema, userPayloadSchema)
+	}
+
+	{ // key schema
+		ver, err := metadata.GetKeySchemaVersion()
+		is.NoErr(err)
+		sub, err := metadata.GetKeySchemaSubject()
+		is.NoErr(err)
+
+		s, err := schema.Get(ctx, sub, ver)
+		is.NoErr(err)
+
+		var actualSchema AvroSchema
+		is.NoErr(json.Unmarshal(s.Bytes, &actualSchema))
+
+		isDataEqual(is, actualSchema, userKeySchema)
+	}
+}
+
+func newCanal(ctx context.Context, is *is.I, tablename string) *canal.Canal {
 	is.Helper()
 
 	config, err := mysql.ParseDSN(DSN)
@@ -279,10 +344,68 @@ func NewCanal(ctx context.Context, is *is.I) *canal.Canal {
 
 	canal, err := common.NewCanal(ctx, common.CanalConfig{
 		Config:         config,
-		Tables:         []string{"users"},
+		Tables:         []string{tablename},
 		DisableLogging: true,
 	})
 	is.NoErr(err)
 
 	return canal
+}
+
+func TriggerRowInsertEvent(
+	ctx context.Context, is *is.I, tablename string, trigger func(),
+) *canal.RowsEvent {
+	is.Helper()
+
+	c := newCanal(ctx, is, tablename)
+	defer c.Close()
+
+	rowsChan := make(chan *canal.RowsEvent)
+	doneChan := make(chan struct{})
+	defer close(doneChan)
+
+	handler := &testEventHandler{
+		rowsChan: rowsChan,
+		doneChan: doneChan,
+	}
+	c.SetEventHandler(handler)
+
+	pos, err := c.GetMasterPos()
+	is.NoErr(err)
+
+	go func() {
+		if err := c.RunFrom(pos); err != nil {
+			is.NoErr(err)
+		}
+	}()
+
+	trigger()
+
+	var rowsEvent *canal.RowsEvent
+	select {
+	case rowsEvent = <-rowsChan:
+	case <-time.After(1 * time.Second):
+		is.Fail()
+	}
+
+	return rowsEvent
+}
+
+type testEventHandler struct {
+	canal.DummyEventHandler
+	rowsChan chan *canal.RowsEvent
+	doneChan chan struct{}
+}
+
+func (h *testEventHandler) OnRow(e *canal.RowsEvent) error {
+	select {
+	case <-h.doneChan:
+		return nil
+	case h.rowsChan <- e:
+		return nil
+	}
+}
+
+func (h *testEventHandler) String() string {
+	return "testEventHandler"
 }

@@ -53,6 +53,43 @@ The position of the table is currently not recorded, so the unsafe snapshot will
 
 (\*): you can use any ordinal mysql datatype.
 
+### Schema
+
+The source connector uses [avro](https://avro.apache.org/docs/1.11.1/specification/) to decode mysql rows. Here's the MySQL datatype to avro datatype equivalence that the connector uses:
+
+| MySQL Type | Avro Type |
+| ---------- | --------- |
+| TINYINT    | int       |
+| SMALLINT   | int       |
+| MEDIUMINT  | int       |
+| INT        | int       |
+| BIGINT     | long      |
+| DECIMAL    | double    |
+| NUMERIC    | double    |
+| FLOAT      | double    |
+| DOUBLE     | double    |
+| BIT        | bytes     |
+| CHAR       | string    |
+| VARCHAR    | string    |
+| TINYTEXT   | string    |
+| TEXT       | string    |
+| MEDIUMTEXT | string    |
+| LONGTEXT   | string    |
+| BINARY     | bytes     |
+| VARBINARY  | bytes     |
+| TINYBLOB   | bytes     |
+| BLOB       | bytes     |
+| MEDIUMBLOB | bytes     |
+| LONGBLOB   | bytes     |
+| DATE       | string    |
+| TIME       | string    |
+| DATETIME   | string    |
+| TIMESTAMP  | string    |
+| YEAR       | long      |
+| ENUM       | string    |
+| SET        | string    |
+| JSON       | string    |
+
 ## Requirements and compatibility
 
 The connector is tested against MySQL v8.0. Compatibility with older versions isn't guaranteed.

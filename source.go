@@ -40,7 +40,11 @@ type Source struct {
 
 func NewSource() sdk.Source {
 	// Create Source and wrap it in the default middleware.
-	return sdk.SourceWithMiddleware(&Source{}, sdk.DefaultSourceMiddleware()...)
+	return sdk.SourceWithMiddleware(&Source{})
+}
+
+func (s *Source) Config() sdk.SourceConfig {
+	return &s.config
 }
 
 func (s *Source) Parameters() config.Parameters {

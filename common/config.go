@@ -14,6 +14,14 @@
 
 package common
 
+import (
+	"context"
+	"fmt"
+
+	sdk "github.com/conduitio/conduit-connector-sdk"
+	"github.com/go-sql-driver/mysql"
+)
+
 type Config struct {
 	// DSN is the connection string for the MySQL database.
 	DSN string `json:"dsn" validate:"required"`
@@ -22,6 +30,8 @@ type Config struct {
 //go:generate paramgen -output=paramgen_src.go SourceConfig
 
 type SourceConfig struct {
+	sdk.DefaultSourceMiddleware
+
 	Config
 
 	// TableConfig holds the custom configuration that each table can have.
@@ -42,6 +52,13 @@ type SourceConfig struct {
 	UnsafeSnapshot bool `json:"unsafeSnapshot"`
 }
 
+func (c SourceConfig) Validate(_ context.Context) error {
+	if _, err := mysql.ParseDSN(c.DSN); err != nil {
+		return fmt.Errorf("failed to parse DSN: %w", err)
+	}
+	return nil
+}
+
 type TableConfig struct {
 	// SortingColumn allows to force using a custom column to sort the snapshot.
 	SortingColumn string `json:"sortingColumn"`
@@ -52,6 +69,8 @@ const DefaultFetchSize = 50000
 //go:generate paramgen -output=paramgen_dest.go DestinationConfig
 
 type DestinationConfig struct {
+	sdk.DefaultDestinationMiddleware
+
 	Config
 
 	// Table is used as the target table into which records are inserted.
@@ -59,4 +78,11 @@ type DestinationConfig struct {
 
 	// Key is the primary key of the specified table.
 	Key string `json:"key" validate:"required"`
+}
+
+func (c DestinationConfig) Validate(_ context.Context) error {
+	if _, err := mysql.ParseDSN(c.DSN); err != nil {
+		return fmt.Errorf("failed to parse DSN: %w", err)
+	}
+	return nil
 }

@@ -5,7 +5,7 @@ go 1.23.2
 require (
 	github.com/Masterminds/squirrel v1.5.4
 	github.com/conduitio/conduit-commons v0.5.1
-	github.com/conduitio/conduit-connector-sdk v0.13.0
+	github.com/conduitio/conduit-connector-sdk v0.13.1
 	github.com/go-sql-driver/mysql v1.8.1
 	github.com/golangci/golangci-lint v1.63.4
 	github.com/jmoiron/sqlx v1.4.0

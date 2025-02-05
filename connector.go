@@ -12,13 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//go:generate conn-sdk-cli specgen
+
 package mysql
 
-import sdk "github.com/conduitio/conduit-connector-sdk"
+import (
+	_ "embed"
+
+	sdk "github.com/conduitio/conduit-connector-sdk"
+)
+
+//go:embed connector.yaml
+var specs string
+
+var version = "(devel)"
 
 // Connector combines all constructors for each plugin in one struct.
 var Connector = sdk.Connector{
-	NewSpecification: Specification,
+	NewSpecification: sdk.YAMLSpecification(specs, version),
 	NewSource:        NewSource,
 	NewDestination:   NewDestination,
 }

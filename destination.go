@@ -46,15 +46,6 @@ func (d *Destination) Parameters() config.Parameters {
 	return d.config.Parameters()
 }
 
-func (d *Destination) Configure(ctx context.Context, cfg config.Config) error {
-	sdk.Logger(ctx).Info().Msg("Configuring Destination...")
-	err := sdk.Util.ParseConfig(ctx, cfg, &d.config, d.config.Parameters())
-	if err != nil {
-		return fmt.Errorf("invalid config: %w", err)
-	}
-	return nil
-}
-
 func (d *Destination) Open(_ context.Context) (err error) {
 	d.db, err = sqlx.Open("mysql", d.config.DSN)
 	if err != nil {

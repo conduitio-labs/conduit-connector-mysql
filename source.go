@@ -17,7 +17,6 @@ package mysql
 import (
 	"context"
 	"fmt"
-	"math"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	"github.com/conduitio/conduit-commons/config"
@@ -53,33 +52,11 @@ func (s *Source) Parameters() config.Parameters {
 	return s.config.Parameters()
 }
 
-func (s *Source) Configure(ctx context.Context, cfg config.Config) (err error) {
-	if err := sdk.Util.ParseConfig(ctx, cfg, &s.config, s.config.Parameters()); err != nil {
-		return fmt.Errorf("invalid config: %w", err)
-	}
-
-	s.configFromDsn, err = mysql.ParseDSN(s.config.DSN)
-	if err != nil {
-		return fmt.Errorf("failed to parse given URL: %w", err)
-	}
-
-	if s.config.FetchSize > math.MaxInt64 {
-		return fmt.Errorf("given fetch size is too large")
-	}
-
+func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) {
 	// force parse time to true, as we need to take control over how do we
 	// handle time.Time values
 	s.configFromDsn.ParseTime = true
 
-	if s.config.FetchSize > math.MaxInt64 {
-		return fmt.Errorf("given fetch size %v is too large", s.config.FetchSize)
-	}
-
-	sdk.Logger(ctx).Info().Msg("configured source connector")
-	return nil
-}
-
-func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) {
 	s.db, err = sqlx.Open("mysql", s.configFromDsn.FormatDSN())
 	if err != nil {
 		return fmt.Errorf("failed to connect to mysql: %w", err)

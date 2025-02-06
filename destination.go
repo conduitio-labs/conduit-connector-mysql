@@ -30,13 +30,16 @@ import (
 
 type Destination struct {
 	sdk.UnimplementedDestination
-
 	db     *sqlx.DB
 	config common.DestinationConfig
 }
 
 func NewDestination() sdk.Destination {
-	return sdk.DestinationWithMiddleware(&Destination{}, sdk.DefaultDestinationMiddleware()...)
+	return sdk.DestinationWithMiddleware(&Destination{})
+}
+
+func (d *Destination) Config() sdk.DestinationConfig {
+	return &d.config
 }
 
 func (d *Destination) Parameters() config.Parameters {

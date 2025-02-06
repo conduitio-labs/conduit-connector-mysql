@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"regexp"
 	"testing"
 	"time"
 
@@ -191,7 +192,7 @@ func TestSnapshotIterator_RestartOnPosition(t *testing.T) {
 
 	is.Equal(len(recs), 100)
 	for i, rec := range recs {
-		testutils.AssertUserSnapshot(is, users[i], rec)
+		testutils.AssertUserSnapshot(ctx, is, users[i], rec)
 	}
 }
 
@@ -218,10 +219,7 @@ func TestSnapshotIterator_CustomTableKeys(t *testing.T) {
 		Data      string    `gorm:"size:100"`
 	}
 
-	is.NoErr(db.Migrator().DropTable(&CompositeWithAutoInc{}))
-	is.NoErr(db.Migrator().DropTable(&UlidPk{}))
-	is.NoErr(db.Migrator().DropTable(&TimestampOrdered{}))
-
+	is.NoErr(db.Migrator().DropTable(&CompositeWithAutoInc{}, &UlidPk{}, &TimestampOrdered{}))
 	is.NoErr(db.AutoMigrate(&CompositeWithAutoInc{}, &UlidPk{}, &TimestampOrdered{}))
 
 	compositeWithAutoIncData := []CompositeWithAutoInc{
@@ -361,7 +359,7 @@ func TestSnapshotIterator_DeleteEndWhileSnapshotting(t *testing.T) {
 		is.NoErr(err)
 		is.NoErr(iterator.Ack(ctx, rec.Position))
 
-		testutils.AssertUserSnapshot(is, user, rec)
+		testutils.AssertUserSnapshot(ctx, is, user, rec)
 	}
 
 	_, err = iterator.Read(ctx)
@@ -445,6 +443,96 @@ func TestSnapshotIterator_StringSorting(t *testing.T) {
 		is.Equal(actual.Operation, opencdc.OperationSnapshot)
 		is.Equal(actual.Payload.After.(opencdc.StructuredData)["str"].(string), expectedData.Str)
 	}
+
+	is.NoErr(iterator.Teardown(ctx))
+}
+
+func TestSnapshotIterator_FetchByLimit(t *testing.T) {
+	ctx := testutils.TestContext(t)
+	is := is.New(t)
+	db := testutils.NewDB(t)
+
+	type Table1 struct {
+		ID   int    `gorm:"primaryKey;autoIncrement"`
+		Data string `gorm:"size:100"`
+	}
+	type Table2 struct {
+		ID   int    `gorm:"primaryKey;autoIncrement"`
+		Data string `gorm:"size:100"`
+	}
+
+	table1name := testutils.TableName(is, db, &Table1{})
+	table2name := testutils.TableName(is, db, &Table2{})
+
+	is.NoErr(db.Migrator().DropTable(&Table1{}, &Table2{}))
+	is.NoErr(db.AutoMigrate(&Table1{}, &Table2{}))
+
+	var table1Data []Table1
+	var table2Data []Table2
+	for i := 1; i <= 50; i++ {
+		table1Data = append(table1Data, Table1{Data: fmt.Sprintf("table 1 record %d", i)})
+		table2Data = append(table2Data, Table2{Data: fmt.Sprintf("table 2 record %d", i)})
+	}
+
+	is.NoErr(db.Create(&table1Data).Error)
+	is.NoErr(db.Create(&table2Data).Error)
+
+	serverID, err := common.GetServerID(ctx, db.SqlxDB)
+	is.NoErr(err)
+
+	iterator, err := newSnapshotIterator(snapshotIteratorConfig{
+		tableSortColumns: map[string]string{table1name: "", table2name: ""},
+		db:               db.SqlxDB,
+		database:         "meroxadb",
+		tables:           []string{table1name, table2name},
+		serverID:         serverID,
+		fetchSize:        5, // small fetch size to test pagination
+	})
+	is.NoErr(err)
+
+	is.NoErr(iterator.setupWorkers(ctx))
+	iterator.start(ctx)
+
+	var recs []opencdc.Record
+	for {
+		rec, err := iterator.Read(ctx)
+		if errors.Is(err, ErrSnapshotIteratorDone) {
+			break
+		}
+		is.NoErr(err)
+
+		err = iterator.Ack(ctx, rec.Position)
+		is.NoErr(err)
+
+		recs = append(recs, rec)
+	}
+
+	is.Equal(len(recs), len(table1Data)+len(table2Data))
+
+	var table1Recs, table2Recs int
+	expectedRecordPattern := regexp.MustCompile(`table (1|2) record \d+`)
+
+	for _, rec := range recs {
+		is.Equal(rec.Operation, opencdc.OperationSnapshot)
+
+		collection, err := rec.Metadata.GetCollection()
+		is.NoErr(err)
+		data := rec.Payload.After.(opencdc.StructuredData)["data"].(string)
+
+		is.True(expectedRecordPattern.MatchString(data))
+
+		switch collection {
+		case table1name:
+			table1Recs++
+		case table2name:
+			table2Recs++
+		default:
+			is.Fail() // unexpected table name
+		}
+	}
+
+	is.Equal(table1Recs, len(table1Data))
+	is.Equal(table2Recs, len(table2Data))
 
 	is.NoErr(iterator.Teardown(ctx))
 }

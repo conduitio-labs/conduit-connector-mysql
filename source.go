@@ -19,7 +19,6 @@ import (
 	"fmt"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
-	"github.com/conduitio/conduit-commons/config"
 	"github.com/conduitio/conduit-commons/opencdc"
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/go-sql-driver/mysql"
@@ -43,12 +42,6 @@ func NewSource() sdk.Source {
 
 func (s *Source) Config() sdk.SourceConfig {
 	return &s.config
-}
-
-func (s *Source) Parameters() config.Parameters {
-	// Parameters is a map of named Parameters that describe how to configure
-	// the Source. Parameters can be generated from SourceConfig with paramgen.
-	return s.config.Parameters()
 }
 
 func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) {

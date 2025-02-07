@@ -22,7 +22,6 @@ import (
 
 	"github.com/Masterminds/squirrel"
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
-	"github.com/conduitio/conduit-commons/config"
 	"github.com/conduitio/conduit-commons/opencdc"
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/jmoiron/sqlx"
@@ -40,10 +39,6 @@ func NewDestination() sdk.Destination {
 
 func (d *Destination) Config() sdk.DestinationConfig {
 	return &d.config
-}
-
-func (d *Destination) Parameters() config.Parameters {
-	return d.config.Parameters()
 }
 
 func (d *Destination) Open(_ context.Context) (err error) {

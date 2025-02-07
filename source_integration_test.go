@@ -18,7 +18,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	testutils "github.com/conduitio-labs/conduit-connector-mysql/test"
 	"github.com/conduitio/conduit-commons/config"
 	"github.com/conduitio/conduit-commons/opencdc"
@@ -28,10 +27,13 @@ import (
 
 func testSource(ctx context.Context, is *is.I, cfg config.Config) (sdk.Source, func()) {
 	source := &Source{}
-	cfg[common.SourceConfigDsn] = testutils.DSN
-	cfg[common.SourceConfigDisableCanalLogs] = "true"
 
-	err := source.Configure(ctx, cfg)
+	cfg["dsn"] = testutils.DSN
+	cfg["disableCanalLogs"] = "true"
+
+	err := sdk.Util.ParseConfig(
+		ctx, cfg, source.Config(), Connector.NewSpecification().SourceParams,
+	)
 	is.NoErr(err)
 
 	is.NoErr(source.Open(ctx, nil))
@@ -41,7 +43,7 @@ func testSource(ctx context.Context, is *is.I, cfg config.Config) (sdk.Source, f
 
 func testSourceFromUsers(ctx context.Context, is *is.I) (sdk.Source, func()) {
 	return testSource(ctx, is, config.Config{
-		common.SourceConfigTables: "users",
+		"tables": "users",
 	})
 }
 
@@ -63,7 +65,7 @@ func TestSource_ConsistentSnapshot(t *testing.T) {
 	// start source connector
 
 	source, teardown := testSource(ctx, is, config.Config{
-		common.SourceConfigTables: "users",
+		"tables": "users",
 	})
 	defer teardown()
 
@@ -109,8 +111,8 @@ func TestSource_NonZeroSnapshotStart(t *testing.T) {
 	}
 
 	source, teardown := testSource(ctx, is, config.Config{
-		common.SourceConfigTables:    "users",
-		common.SourceConfigFetchSize: "10",
+		"tables":    "users",
+		"fetchSize": "10",
 	})
 	defer teardown()
 
@@ -141,8 +143,8 @@ func TestSource_EmptyChunkRead(t *testing.T) {
 	}
 
 	source, teardown := testSource(ctx, is, config.Config{
-		common.SourceConfigTables:    "users",
-		common.SourceConfigFetchSize: "10",
+		"tables":    "users",
+		"fetchSize": "10",
 	})
 	defer teardown()
 
@@ -178,8 +180,8 @@ func TestUnsafeSnapshot(t *testing.T) {
 
 	ctx := testutils.TestContext(t)
 	source, teardown := testSource(ctx, is, config.Config{
-		common.SourceConfigTables:         testutils.TableName(is, db, &TableWithoutPK{}),
-		common.SourceConfigUnsafeSnapshot: "true",
+		"tables":         testutils.TableName(is, db, &TableWithoutPK{}),
+		"unsafeSnapshot": "true",
 	})
 	defer teardown()
 

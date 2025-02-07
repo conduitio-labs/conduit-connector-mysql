@@ -29,7 +29,7 @@ lint:
 up-database:
 	docker compose -f test/docker-compose.yml up --quiet-pull -d db --wait
 
-.PHONY: up-database
+.PHONY: up-adminer
 up-adminer:
 	docker compose -f test/docker-compose.yml up --quiet-pull -d adminer --wait
 

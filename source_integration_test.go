@@ -18,23 +18,21 @@ import (
 	"context"
 	"testing"
 
+	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	testutils "github.com/conduitio-labs/conduit-connector-mysql/test"
-	"github.com/conduitio/conduit-commons/config"
 	"github.com/conduitio/conduit-commons/opencdc"
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/matryer/is"
 )
 
-func testSource(ctx context.Context, is *is.I, cfg config.Config) (sdk.Source, func()) {
+func testSource(ctx context.Context, is *is.I, cfg common.SourceConfig) (sdk.Source, func()) {
 	source := &Source{}
 
-	cfg["dsn"] = testutils.DSN
-	cfg["disableCanalLogs"] = "true"
+	cfg.DSN = testutils.DSN
+	cfg.DisableCanalLogs = true
 
-	err := sdk.Util.ParseConfig(
-		ctx, cfg, source.Config(), Connector.NewSpecification().SourceParams,
-	)
-	is.NoErr(err)
+	sourceCfg := source.Config().(*common.SourceConfig)
+	*sourceCfg = cfg
 
 	is.NoErr(source.Open(ctx, nil))
 
@@ -42,8 +40,8 @@ func testSource(ctx context.Context, is *is.I, cfg config.Config) (sdk.Source, f
 }
 
 func testSourceFromUsers(ctx context.Context, is *is.I) (sdk.Source, func()) {
-	return testSource(ctx, is, config.Config{
-		"tables": "users",
+	return testSource(ctx, is, common.SourceConfig{
+		Tables: []string{"users"},
 	})
 }
 
@@ -64,9 +62,7 @@ func TestSource_ConsistentSnapshot(t *testing.T) {
 
 	// start source connector
 
-	source, teardown := testSource(ctx, is, config.Config{
-		"tables": "users",
-	})
+	source, teardown := testSourceFromUsers(ctx, is)
 	defer teardown()
 
 	// read 2 records -> they shall be snapshots
@@ -110,9 +106,9 @@ func TestSource_NonZeroSnapshotStart(t *testing.T) {
 		inserted = append(inserted, user)
 	}
 
-	source, teardown := testSource(ctx, is, config.Config{
-		"tables":    "users",
-		"fetchSize": "10",
+	source, teardown := testSource(ctx, is, common.SourceConfig{
+		Tables:    []string{"users"},
+		FetchSize: 10,
 	})
 	defer teardown()
 
@@ -142,9 +138,9 @@ func TestSource_EmptyChunkRead(t *testing.T) {
 		expected = append(expected, user)
 	}
 
-	source, teardown := testSource(ctx, is, config.Config{
-		"tables":    "users",
-		"fetchSize": "10",
+	source, teardown := testSource(ctx, is, common.SourceConfig{
+		Tables:    []string{"users"},
+		FetchSize: 10,
 	})
 	defer teardown()
 
@@ -179,9 +175,9 @@ func TestUnsafeSnapshot(t *testing.T) {
 	expectedData := []string{"record A", "record B"}
 
 	ctx := testutils.TestContext(t)
-	source, teardown := testSource(ctx, is, config.Config{
-		"tables":         testutils.TableName(is, db, &TableWithoutPK{}),
-		"unsafeSnapshot": "true",
+	source, teardown := testSource(ctx, is, common.SourceConfig{
+		Tables:         []string{testutils.TableName(is, db, &TableWithoutPK{})},
+		UnsafeSnapshot: true,
 	})
 	defer teardown()
 

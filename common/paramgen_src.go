@@ -115,9 +115,11 @@ func (SourceConfig) Parameters() map[string]config.Parameter {
 		},
 		SourceConfigTables: {
 			Default:     "",
-			Description: "Tables to be snapshotted. By default, all tables are included, but can be modified by adding a comma-separated string of regex patterns. They are applied in the order that they are provided, so the final regex supersedes all previous ones. To set an \"include\" regex, add \"+\" or nothing in front of the regex. To set an \"exclude\" regex, add \"-\" in front of the regex. e.g. \"-.*meta$, wp_postmeta\" will include all tables (by default), but exclude all tables ending with \"meta\" but include the table \"wp_postmeta\"",
+			Description: "Tables represents the tables to read from.\n - By default, no tables are included, but can be modified by adding a comma-separated string of regex patterns.\n - They are applied in the order that they are provided, so the final regex supersedes all previous ones.\n - To include all tables, use \"*\". You can then filter that list by adding a comma-separated string of regex patterns.\n - To set an \"include\" regex, add \"+\" or nothing in front of the regex.\n - To set an \"exclude\" regex, add \"-\" in front of the regex.\n - e.g. \"-.*meta$, wp_postmeta\" will exclude all tables ending with \"meta\" but include the table \"wp_postmeta\".",
 			Type:        config.ParameterTypeString,
-			Validations: []config.Validation{},
+			Validations: []config.Validation{
+				config.ValidationRequired{},
+			},
 		},
 		SourceConfigUnsafeSnapshot: {
 			Default:     "",

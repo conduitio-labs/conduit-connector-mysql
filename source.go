@@ -189,38 +189,13 @@ func (s *Source) getAndFilterTables(ctx context.Context, db *sqlx.DB, database s
 
 	includedTables := make(map[string]bool)
 
-	// Iterate through all the rules
+	// Process each rule
 	for _, rule := range s.config.Tables {
-		// trim leading and trailing spaces from rule, in case user added spaces between rules
-		rule = strings.TrimSpace(rule)
-		if rule == common.AllTablesWildcard {
-			for _, table := range tables {
-				includedTables[table] = true
-			}
-		} else {
-			action, regexPattern, err := parseRule(rule)
-			if err != nil {
-				return nil, err
-			}
-
-			// Compile the regex
-			re, err := regexp.Compile(regexPattern)
-			if err != nil {
-				return nil, fmt.Errorf("invalid regex pattern: %w", err)
-			}
-
-			// Apply the rule to all tables
-			for _, table := range tables {
-				if re.MatchString(table) {
-					if action == Include {
-						includedTables[table] = true // Include this table
-					} else if action == Exclude {
-						includedTables[table] = false // Exclude this table
-					}
-				}
-			}
+		if err := s.processTableRule(rule, tables, includedTables); err != nil {
+			return nil, err
 		}
 	}
+
 	var result []string
 	// Collect all the tables that were included (true in map)
 	for table, included := range includedTables {
@@ -232,6 +207,38 @@ func (s *Source) getAndFilterTables(ctx context.Context, db *sqlx.DB, database s
 	return result, nil
 }
 
+func (s *Source) processTableRule(rule string, tables []string, includedTables map[string]bool) error {
+	// trim leading and trailing spaces from rule
+	rule = strings.TrimSpace(rule)
+
+	if rule == common.AllTablesWildcard {
+		for _, table := range tables {
+			includedTables[table] = true
+		}
+		return nil
+	}
+
+	action, regexPattern, err := parseRule(rule)
+	if err != nil {
+		return err
+	}
+
+	// Compile the regex
+	re, err := regexp.Compile(regexPattern)
+	if err != nil {
+		return fmt.Errorf("invalid regex pattern: %w", err)
+	}
+
+	// Apply the rule to all tables
+	for _, table := range tables {
+		if re.MatchString(table) {
+			includedTables[table] = (action == Include)
+		}
+	}
+
+	return nil
+}
+
 type Action int
 
 const (
@@ -239,7 +246,7 @@ const (
 	Exclude
 )
 
-// Helper function to parse the rule and return the action and the regex pattern
+// Helper function to parse the rule and return the action and the regex pattern.
 func parseRule(rule string) (Action, string, error) {
 	if len(rule) < 2 {
 		return Include, "", fmt.Errorf("invalid rule format: %s", rule)
@@ -261,7 +268,7 @@ func parseRule(rule string) (Action, string, error) {
 	return action, rule, nil // Return action and regex (without the action prefix)
 }
 
-// function to get the primary key of a table
+// function to get the primary key of a table.
 func getPrimaryKey(db *sqlx.DB, database, table string) (string, error) {
 	var primaryKey struct {
 		ColumnName string `db:"COLUMN_NAME"`

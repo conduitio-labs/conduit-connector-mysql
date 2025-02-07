@@ -97,7 +97,7 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 			Msgf("Successfully detected tables")
 	}
 
-	tableKeys, err := s.getTableKeys(s.db, s.configFromDsn.DBName, s.config.Tables)
+	tableKeys, err := s.getTableKeys(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get table keys: %w", err)
 	}
@@ -192,7 +192,7 @@ func (s *Source) getAllTables(ctx context.Context, db *sqlx.DB, database string)
 	return tables, nil
 }
 
-func getPrimaryKey(db *sqlx.DB, database, table string) (common.PrimaryKeyName, error) {
+func getPrimaryKey(db *sqlx.DB, database, table string) (string, error) {
 	var primaryKey struct {
 		ColumnName string `db:"COLUMN_NAME"`
 	}

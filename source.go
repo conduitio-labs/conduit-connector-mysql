@@ -176,6 +176,7 @@ func (s *Source) getAllTables(ctx context.Context, db *sqlx.DB, database string)
 		sdk.Logger(ctx).Error().Err(err).Msg("failed to query tables")
 		return nil, fmt.Errorf("failed to query tables: %w", err)
 	}
+	defer rows.Close()
 
 	var tables []string
 	for rows.Next() {

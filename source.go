@@ -86,7 +86,7 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 		return fmt.Errorf("failed to connect to mysql: %w", err)
 	}
 
-	sdk.Logger(ctx).Info().Msg("Detecting all tables...")
+	sdk.Logger(ctx).Info().Msg("Parsing table regexes...")
 	s.config.Tables, err = s.getAndFilterTables(ctx, s.db, s.configFromDsn.DBName)
 	if err != nil {
 		return err

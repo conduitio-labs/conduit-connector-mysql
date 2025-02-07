@@ -246,7 +246,7 @@ const (
 	Exclude
 )
 
-// ParseRule parses a table filter rule and returns the action and pattern
+// ParseRule parses a table filter rule and returns the action and pattern.
 func ParseRule(rule string) (Action, string, error) {
 	if len(rule) < 2 {
 		return Include, "", fmt.Errorf("invalid rule format: %s", rule)

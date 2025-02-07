@@ -218,7 +218,7 @@ func (s *Source) processTableRule(rule string, tables []string, includedTables m
 		return nil
 	}
 
-	action, regexPattern, err := parseRule(rule)
+	action, regexPattern, err := ParseRule(rule)
 	if err != nil {
 		return err
 	}
@@ -246,8 +246,8 @@ const (
 	Exclude
 )
 
-// Helper function to parse the rule and return the action and the regex pattern.
-func parseRule(rule string) (Action, string, error) {
+// ParseRule parses a table filter rule and returns the action and pattern
+func ParseRule(rule string) (Action, string, error) {
 	if len(rule) < 2 {
 		return Include, "", fmt.Errorf("invalid rule format: %s", rule)
 	}

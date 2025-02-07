@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"strings"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	"github.com/conduitio/conduit-commons/config"
@@ -190,6 +191,8 @@ func (s *Source) getAndFilterTables(ctx context.Context, db *sqlx.DB, database s
 
 	// Iterate through all the rules
 	for _, rule := range s.config.Tables {
+		// trim leading and trailing spaces from rule, in case user added spaces between rules
+		rule = strings.TrimSpace(rule)
 		if rule == common.AllTablesWildcard {
 			for _, table := range tables {
 				includedTables[table] = true

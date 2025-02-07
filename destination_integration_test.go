@@ -20,7 +20,6 @@ import (
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	testutils "github.com/conduitio-labs/conduit-connector-mysql/test"
-	"github.com/conduitio/conduit-commons/config"
 	"github.com/conduitio/conduit-commons/opencdc"
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/google/go-cmp/cmp"
@@ -29,12 +28,12 @@ import (
 
 func testDestination(ctx context.Context, is *is.I) (sdk.Destination, func()) {
 	destination := &Destination{}
-	err := destination.Configure(ctx, config.Config{
-		common.DestinationConfigDsn:   testutils.DSN,
-		common.DestinationConfigTable: "users",
-		common.DestinationConfigKey:   "id",
-	})
-	is.NoErr(err)
+
+	destCfg := destination.Config().(*common.DestinationConfig)
+
+	destCfg.DSN = testutils.DSN
+	destCfg.Table = "users"
+	destCfg.Key = "id"
 
 	is.NoErr(destination.Open(ctx))
 

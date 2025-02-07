@@ -22,7 +22,6 @@ import (
 
 	"github.com/Masterminds/squirrel"
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
-	"github.com/conduitio/conduit-commons/config"
 	"github.com/conduitio/conduit-commons/opencdc"
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/jmoiron/sqlx"
@@ -40,19 +39,6 @@ func NewDestination() sdk.Destination {
 
 func (d *Destination) Config() sdk.DestinationConfig {
 	return &d.config
-}
-
-func (d *Destination) Parameters() config.Parameters {
-	return d.config.Parameters()
-}
-
-func (d *Destination) Configure(ctx context.Context, cfg config.Config) error {
-	sdk.Logger(ctx).Info().Msg("Configuring Destination...")
-	err := sdk.Util.ParseConfig(ctx, cfg, &d.config, d.config.Parameters())
-	if err != nil {
-		return fmt.Errorf("invalid config: %w", err)
-	}
-	return nil
 }
 
 func (d *Destination) Open(_ context.Context) (err error) {

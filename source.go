@@ -17,10 +17,8 @@ package mysql
 import (
 	"context"
 	"fmt"
-	"math"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
-	"github.com/conduitio/conduit-commons/config"
 	"github.com/conduitio/conduit-commons/opencdc"
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/go-sql-driver/mysql"
@@ -30,8 +28,7 @@ import (
 type Source struct {
 	sdk.UnimplementedSource
 
-	config        common.SourceConfig
-	configFromDsn *mysql.Config
+	config common.SourceConfig
 
 	db *sqlx.DB
 
@@ -47,47 +44,24 @@ func (s *Source) Config() sdk.SourceConfig {
 	return &s.config
 }
 
-func (s *Source) Parameters() config.Parameters {
-	// Parameters is a map of named Parameters that describe how to configure
-	// the Source. Parameters can be generated from SourceConfig with paramgen.
-	return s.config.Parameters()
-}
-
-func (s *Source) Configure(ctx context.Context, cfg config.Config) (err error) {
-	if err := sdk.Util.ParseConfig(ctx, cfg, &s.config, s.config.Parameters()); err != nil {
-		return fmt.Errorf("invalid config: %w", err)
-	}
-
-	s.configFromDsn, err = mysql.ParseDSN(s.config.DSN)
+func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) {
+	mysqlCfg, err := mysql.ParseDSN(s.config.DSN)
 	if err != nil {
 		return fmt.Errorf("failed to parse given URL: %w", err)
 	}
 
-	if s.config.FetchSize > math.MaxInt64 {
-		return fmt.Errorf("given fetch size is too large")
-	}
-
 	// force parse time to true, as we need to take control over how do we
 	// handle time.Time values
-	s.configFromDsn.ParseTime = true
+	mysqlCfg.ParseTime = true
 
-	if s.config.FetchSize > math.MaxInt64 {
-		return fmt.Errorf("given fetch size %v is too large", s.config.FetchSize)
-	}
-
-	sdk.Logger(ctx).Info().Msg("configured source connector")
-	return nil
-}
-
-func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) {
-	s.db, err = sqlx.Open("mysql", s.configFromDsn.FormatDSN())
+	s.db, err = sqlx.Open("mysql", mysqlCfg.FormatDSN())
 	if err != nil {
 		return fmt.Errorf("failed to connect to mysql: %w", err)
 	}
 
 	if s.readingAllTables() {
 		sdk.Logger(ctx).Info().Msg("Detecting all tables...")
-		s.config.Tables, err = s.getAllTables(ctx, s.db, s.configFromDsn.DBName)
+		s.config.Tables, err = s.getAllTables(ctx, s.db, mysqlCfg.DBName)
 		if err != nil {
 			return fmt.Errorf("failed to connect to get all tables: %w", err)
 		}
@@ -97,7 +71,7 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 			Msgf("Successfully detected tables")
 	}
 
-	tableKeys, err := s.getTableKeys(ctx)
+	tableKeys, err := s.getTableKeys(ctx, mysqlCfg.DBName)
 	if err != nil {
 		return fmt.Errorf("failed to get table keys: %w", err)
 	}
@@ -122,10 +96,10 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 		tableSortCols:         tableKeys,
 		startSnapshotPosition: pos.SnapshotPosition,
 		startCdcPosition:      pos.CdcPosition,
-		database:              s.configFromDsn.DBName,
+		database:              mysqlCfg.DBName,
 		tables:                s.config.Tables,
 		serverID:              serverID,
-		mysqlConfig:           s.configFromDsn,
+		mysqlConfig:           mysqlCfg,
 		disableCanalLogging:   s.config.DisableCanalLogs,
 		fetchSize:             s.config.FetchSize,
 	})
@@ -216,7 +190,7 @@ func getPrimaryKey(db *sqlx.DB, database, table string) (string, error) {
 	return primaryKey.ColumnName, nil
 }
 
-func (s *Source) getTableKeys(ctx context.Context) (map[string]string, error) {
+func (s *Source) getTableKeys(ctx context.Context, dbName string) (map[string]string, error) {
 	tableKeys := make(map[string]string)
 
 	for _, table := range s.config.Tables {
@@ -226,7 +200,7 @@ func (s *Source) getTableKeys(ctx context.Context) (map[string]string, error) {
 			continue
 		}
 
-		primaryKey, err := getPrimaryKey(s.db, s.configFromDsn.DBName, table)
+		primaryKey, err := getPrimaryKey(s.db, dbName, table)
 		if err != nil {
 			if s.config.UnsafeSnapshot {
 				sdk.Logger(ctx).Warn().Msgf(

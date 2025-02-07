@@ -27,8 +27,6 @@ type Config struct {
 	DSN string `json:"dsn" validate:"required"`
 }
 
-//go:generate paramgen -output=paramgen_src.go SourceConfig
-
 type SourceConfig struct {
 	sdk.DefaultSourceMiddleware
 
@@ -69,8 +67,6 @@ const (
 	// AllTablesWildcard can be used if you'd like to listen to all tables.
 	AllTablesWildcard = "*"
 )
-
-//go:generate paramgen -output=paramgen_dest.go DestinationConfig
 
 type DestinationConfig struct {
 	sdk.DefaultDestinationMiddleware

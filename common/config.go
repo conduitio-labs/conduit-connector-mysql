@@ -64,7 +64,11 @@ type TableConfig struct {
 	SortingColumn string `json:"sortingColumn"`
 }
 
-const DefaultFetchSize = 50000
+const (
+	DefaultFetchSize = 50000
+	// AllTablesWildcard can be used if you'd like to listen to all tables.
+	AllTablesWildcard = "*"
+)
 
 //go:generate paramgen -output=paramgen_dest.go DestinationConfig
 

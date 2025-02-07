@@ -26,13 +26,12 @@ import (
 	"github.com/matryer/is"
 )
 
-func testSource(ctx context.Context, is *is.I) (sdk.Source, func()) {
+func testSource(ctx context.Context, is *is.I, cfg config.Config) (sdk.Source, func()) {
 	source := &Source{}
-	err := source.Configure(ctx, config.Config{
-		common.SourceConfigUrl:              testutils.DSN,
-		common.SourceConfigTables:           "users",
-		common.SourceConfigDisableCanalLogs: "true",
-	})
+	cfg[common.SourceConfigDsn] = testutils.DSN
+	cfg[common.SourceConfigDisableCanalLogs] = "true"
+
+	err := source.Configure(ctx, cfg)
 	is.NoErr(err)
 
 	is.NoErr(source.Open(ctx, nil))
@@ -40,54 +39,162 @@ func testSource(ctx context.Context, is *is.I) (sdk.Source, func()) {
 	return source, func() { is.NoErr(source.Teardown(ctx)) }
 }
 
-type sourceIterator struct{ sdk.Source }
-
-func (s sourceIterator) Next(ctx context.Context) (opencdc.Record, error) {
-	//nolint:wrapcheck // wrapped already
-	return s.Source.Read(ctx)
+func testSourceFromUsers(ctx context.Context, is *is.I) (sdk.Source, func()) {
+	return testSource(ctx, is, config.Config{
+		common.SourceConfigTables: "users",
+	})
 }
 
 func TestSource_ConsistentSnapshot(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 
-	db := testutils.Connection(t)
+	db := testutils.NewDB(t)
 
-	userTable.Recreate(is, db)
+	testutils.RecreateUsersTable(is, db)
 
 	// insert 4 rows, the whole snapshot
 
-	user1 := userTable.Insert(is, db, "user1")
-	user2 := userTable.Insert(is, db, "user2")
-	user3 := userTable.Insert(is, db, "user3")
-	user4 := userTable.Insert(is, db, "user4")
+	user1 := testutils.InsertUser(is, db, 1)
+	user2 := testutils.InsertUser(is, db, 2)
+	user3 := testutils.InsertUser(is, db, 3)
+	user4 := testutils.InsertUser(is, db, 4)
 
 	// start source connector
 
-	source, teardown := testSource(ctx, is)
+	source, teardown := testSource(ctx, is, config.Config{
+		common.SourceConfigTables: "users",
+	})
 	defer teardown()
-
-	sourceIterator := sourceIterator{source}
 
 	// read 2 records -> they shall be snapshots
 
-	testutils.ReadAndAssertSnapshot(ctx, is, sourceIterator, user1)
-	testutils.ReadAndAssertSnapshot(ctx, is, sourceIterator, user2)
+	testutils.ReadAndAssertSnapshot(ctx, is, source, user1)
+	testutils.ReadAndAssertSnapshot(ctx, is, source, user2)
 
 	// insert 2 rows, delete the 4th inserted row
 
-	user5 := userTable.Insert(is, db, "user5")
-	user6 := userTable.Insert(is, db, "user6")
-	userTable.Delete(is, db, user4)
+	user5 := testutils.InsertUser(is, db, 5)
+	user6 := testutils.InsertUser(is, db, 6)
+	testutils.DeleteUser(is, db, user4)
 
 	// read 2 more records -> they shall be snapshots
 	// snapshot completed, so previous 2 inserts and delete done while
 	// snapshotting should be captured
 
-	testutils.ReadAndAssertSnapshot(ctx, is, sourceIterator, user3)
-	testutils.ReadAndAssertSnapshot(ctx, is, sourceIterator, user4)
+	testutils.ReadAndAssertSnapshot(ctx, is, source, user3)
+	testutils.ReadAndAssertSnapshot(ctx, is, source, user4)
 
-	testutils.ReadAndAssertInsert(ctx, is, sourceIterator, user5)
-	testutils.ReadAndAssertInsert(ctx, is, sourceIterator, user6)
-	testutils.ReadAndAssertDelete(ctx, is, sourceIterator, user4)
+	testutils.ReadAndAssertCreate(ctx, is, source, user5)
+	testutils.ReadAndAssertCreate(ctx, is, source, user6)
+	testutils.ReadAndAssertDelete(ctx, is, source, user4)
+}
+
+func TestSource_NonZeroSnapshotStart(t *testing.T) {
+	ctx := testutils.TestContext(t)
+	is := is.New(t)
+
+	db := testutils.NewDB(t)
+
+	testutils.RecreateUsersTable(is, db)
+
+	// Insert 80 users starting from the 20th so that the starting row's primary key
+	// is greater than 0. This ensures a more realistic dataset where
+	// the first rows don't start at 0.
+
+	var inserted []testutils.User
+	for i := 20; i < 100; i++ {
+		user := testutils.InsertUser(is, db, i)
+		inserted = append(inserted, user)
+	}
+
+	source, teardown := testSource(ctx, is, config.Config{
+		common.SourceConfigTables:    "users",
+		common.SourceConfigFetchSize: "10",
+	})
+	defer teardown()
+
+	for _, user := range inserted {
+		testutils.ReadAndAssertSnapshot(ctx, is, source, user)
+	}
+}
+
+func TestSource_EmptyChunkRead(t *testing.T) {
+	ctx := testutils.TestContext(t)
+	is := is.New(t)
+
+	db := testutils.NewDB(t)
+
+	testutils.RecreateUsersTable(is, db)
+
+	var expected []testutils.User
+	for i := range 100 {
+		userID := i + 1
+		if userID > 20 && userID < 40 {
+			continue
+		} else if userID > 60 && userID < 80 {
+			continue
+		}
+
+		user := testutils.InsertUser(is, db, userID)
+		expected = append(expected, user)
+	}
+
+	source, teardown := testSource(ctx, is, config.Config{
+		common.SourceConfigTables:    "users",
+		common.SourceConfigFetchSize: "10",
+	})
+	defer teardown()
+
+	for _, user := range expected {
+		testutils.ReadAndAssertSnapshot(ctx, is, source, user)
+	}
+}
+
+func TestUnsafeSnapshot(t *testing.T) {
+	is := is.New(t)
+	db := testutils.NewDB(t)
+	var err error
+
+	type TableWithoutPK struct {
+		// No id field, forcing gorm to not create a primary key
+
+		Data string `gorm:"size:100"`
+	}
+
+	err = db.Migrator().DropTable(&TableWithoutPK{})
+	is.NoErr(err)
+
+	err = db.AutoMigrate(&TableWithoutPK{})
+	is.NoErr(err)
+
+	db.Create([]TableWithoutPK{
+		{Data: "record A"},
+		{Data: "record B"},
+	})
+	is.NoErr(db.Error)
+
+	expectedData := []string{"record A", "record B"}
+
+	ctx := testutils.TestContext(t)
+	source, teardown := testSource(ctx, is, config.Config{
+		common.SourceConfigTables:         testutils.TableName(is, db, &TableWithoutPK{}),
+		common.SourceConfigUnsafeSnapshot: "true",
+	})
+	defer teardown()
+
+	var recs []opencdc.Record
+	for i := 0; i < len(expectedData); i++ {
+		rec, err := source.Read(ctx)
+		is.NoErr(err)
+		is.NoErr(source.Ack(ctx, rec.Position))
+
+		recs = append(recs, rec)
+	}
+
+	for i, expectedData := range expectedData {
+		actual := recs[i]
+		is.Equal(actual.Operation, opencdc.OperationSnapshot)
+		is.Equal(actual.Payload.After.(opencdc.StructuredData)["data"].(string), expectedData)
+	}
 }

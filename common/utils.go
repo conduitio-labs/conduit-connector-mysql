@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"strconv"
-	"time"
 
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/go-mysql-org/go-mysql/canal"
@@ -27,23 +26,6 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/siddontang/go-log/log"
 )
-
-func FormatValue(val any) any {
-	switch val := val.(type) {
-	case time.Time:
-		return val.UTC().Format(time.RFC3339)
-	case *time.Time:
-		return val.UTC().Format(time.RFC3339)
-	case []uint8:
-		s := string(val)
-		if parsed, err := time.Parse(time.DateTime, s); err == nil {
-			return parsed.UTC().Format(time.RFC3339)
-		}
-		return s
-	default:
-		return val
-	}
-}
 
 type CanalConfig struct {
 	*mysql.Config
@@ -164,13 +146,9 @@ func (z zerologCanalLogger) Warnln(args ...any) {
 	z.logger.Warn().Msg(fmt.Sprintln(args...))
 }
 
-// ServerID will go to the record metadata, so it is easier to handle it as a
-// string.
-type ServerID string
-
 const ServerIDKey = "mysql.serverID"
 
-func GetServerID(ctx context.Context, db *sqlx.DB) (ServerID, error) {
+func GetServerID(ctx context.Context, db *sqlx.DB) (string, error) {
 	var serverIDRow struct {
 		ServerID uint64 `db:"server_id"`
 	}
@@ -182,5 +160,5 @@ func GetServerID(ctx context.Context, db *sqlx.DB) (ServerID, error) {
 
 	serverID := strconv.FormatUint(serverIDRow.ServerID, 10)
 
-	return ServerID(serverID), nil
+	return serverID, nil
 }

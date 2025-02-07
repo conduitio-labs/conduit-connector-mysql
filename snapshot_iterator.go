@@ -29,15 +29,6 @@ import (
 
 var ErrSnapshotIteratorDone = errors.New("snapshot complete")
 
-type snapshotKey struct {
-	Key   common.PrimaryKeyName `json:"key"`
-	Value any                   `json:"value"`
-}
-
-func (key snapshotKey) ToSDKData() opencdc.Data {
-	return opencdc.StructuredData{string(key.Key): key.Value}
-}
-
 type (
 	// fetchData is the data that is fetched from a table row. As the iterator
 	// fetches rows from multiple tables, reading records from one table affects the
@@ -45,34 +36,39 @@ type (
 	// in order to prevent data races fetchData builds records within the snapshot
 	// iterator itself.
 	fetchData struct {
-		key      snapshotKey
-		table    common.TableName
+		table    string
+		key      opencdc.Data
 		payload  opencdc.StructuredData
 		position common.TablePosition
+
+		payloadSchema *schemaSubjectVersion
+
+		// keySchema might be nil, as fetchWorkerByLimit doesn't have any key
+		keySchema *schemaSubjectVersion
 	}
 	snapshotIterator struct {
 		t            *tomb.Tomb
 		data         chan fetchData
 		acks         csync.WaitGroup
 		lastPosition common.SnapshotPosition
-		workers      []*fetchWorker
+		workers      []fetchWorker
 		config       snapshotIteratorConfig
 	}
 	snapshotIteratorConfig struct {
-		db            *sqlx.DB
-		tableKeys     common.TableKeys
-		fetchSize     int
-		startPosition *common.SnapshotPosition
-		database      string
-		tables        []string
-		serverID      common.ServerID
+		db               *sqlx.DB
+		tableSortColumns map[string]string
+		fetchSize        uint64
+		startPosition    *common.SnapshotPosition
+		database         string
+		tables           []string
+		serverID         string
 	}
 )
 
 func (config *snapshotIteratorConfig) validate() error {
 	if config.startPosition == nil {
 		config.startPosition = &common.SnapshotPosition{
-			Snapshots: map[common.TableName]common.TablePosition{},
+			Snapshots: common.SnapshotPositions{},
 		}
 	}
 
@@ -114,16 +110,22 @@ func newSnapshotIterator(config snapshotIteratorConfig) (*snapshotIterator, erro
 // from the start method so that we can lock and unlock the given tables without
 // starting up the workers.
 func (s *snapshotIterator) setupWorkers(ctx context.Context) error {
-	for table, primaryKey := range s.config.tableKeys {
+	for table, sortCol := range s.config.tableSortColumns {
 		worker := newFetchWorker(s.config.db, s.data, fetchWorkerConfig{
-			lastPosition: s.lastPosition,
+			// the snapshot worker will update the last position, so we need to
+			// clone it to avoid dataraces
+			lastPosition: s.lastPosition.Clone(),
 			table:        table,
 			fetchSize:    s.config.fetchSize,
-			primaryKey:   primaryKey,
+			sortColName:  sortCol,
 		})
 
-		if err := worker.fetchStartEnd(ctx); err != nil {
+		isTableEmpty, err := worker.fetchStartEnd(ctx)
+		if err != nil {
 			return fmt.Errorf("failed to start worker: %w", err)
+		} else if isTableEmpty {
+			sdk.Logger(ctx).Info().Msgf("table %s is empty, skipping...", table)
+			continue
 		}
 
 		s.workers = append(s.workers, worker)
@@ -139,11 +141,15 @@ func (s *snapshotIterator) start(ctx context.Context) {
 			return worker.run(ctx)
 		})
 
-		sdk.Logger(ctx).Info().Msgf("started worker for table %s", worker.config.table)
+		sdk.Logger(ctx).Info().Msgf("started worker for table %s", worker.table())
 	}
 }
 
-func (s *snapshotIterator) Next(ctx context.Context) (rec opencdc.Record, err error) {
+func (s *snapshotIterator) Read(ctx context.Context) (rec opencdc.Record, err error) {
+	if len(s.workers) == 0 {
+		return rec, ErrSnapshotIteratorDone
+	}
+
 	select {
 	case <-ctx.Done():
 		//nolint:wrapcheck // no need to wrap canceled error
@@ -170,6 +176,10 @@ func (s *snapshotIterator) Ack(context.Context, opencdc.Position) error {
 }
 
 func (s *snapshotIterator) Teardown(ctx context.Context) error {
+	if len(s.workers) == 0 {
+		return nil
+	}
+
 	s.t.Kill(ErrSnapshotIteratorDone)
 	if err := s.t.Err(); err != nil && !errors.Is(err, ErrSnapshotIteratorDone) {
 		return fmt.Errorf(
@@ -194,10 +204,18 @@ func (s *snapshotIterator) buildRecord(d fetchData) opencdc.Record {
 
 	pos := s.lastPosition.ToSDKPosition()
 	metadata := make(opencdc.Metadata)
-	metadata.SetCollection(string(d.table))
-	metadata[common.ServerIDKey] = string(s.config.serverID)
+	metadata.SetCollection(d.table)
+	metadata[common.ServerIDKey] = s.config.serverID
 
-	key := d.key.ToSDKData()
+	rec := sdk.Util.Source.NewRecordSnapshot(pos, metadata, d.key, d.payload)
 
-	return sdk.Util.Source.NewRecordSnapshot(pos, metadata, key, d.payload)
+	rec.Metadata.SetPayloadSchemaSubject(d.payloadSchema.subject)
+	rec.Metadata.SetPayloadSchemaVersion(d.payloadSchema.version)
+
+	if d.keySchema != nil {
+		rec.Metadata.SetKeySchemaSubject(d.keySchema.subject)
+		rec.Metadata.SetKeySchemaVersion(d.keySchema.version)
+	}
+
+	return rec
 }

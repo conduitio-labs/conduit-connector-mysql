@@ -26,7 +26,7 @@ import (
 )
 
 func testCdcIterator(ctx context.Context, t *testing.T, is *is.I) (common.Iterator, func()) {
-	db := testutils.Connection(t)
+	db := testutils.NewDB(t).SqlxDB
 
 	config, err := mysql.ParseDSN(testutils.DSN)
 	is.NoErr(err)
@@ -34,7 +34,7 @@ func testCdcIterator(ctx context.Context, t *testing.T, is *is.I) (common.Iterat
 	iterator, err := newCdcIterator(ctx, cdcIteratorConfig{
 		mysqlConfig:         config,
 		tables:              []string{"users"},
-		tableKeys:           testutils.TableKeys,
+		tableSortCols:       testutils.TableSortCols,
 		db:                  db,
 		disableCanalLogging: true,
 	})
@@ -50,21 +50,20 @@ func testCdcIteratorAtPosition(
 	ctx context.Context, t *testing.T, is *is.I,
 	sdkPos opencdc.Position,
 ) (common.Iterator, func()) {
-	db := testutils.Connection(t)
+	db := testutils.NewDB(t).SqlxDB
 
 	config, err := mysql.ParseDSN(testutils.DSN)
 	is.NoErr(err)
 
 	pos, err := common.ParseSDKPosition(sdkPos)
 	is.NoErr(err)
-
 	is.Equal(pos.Kind, common.PositionTypeCDC)
 
 	iterator, err := newCdcIterator(ctx, cdcIteratorConfig{
 		db:                  db,
 		mysqlConfig:         config,
 		tables:              []string{"users"},
-		tableKeys:           testutils.TableKeys,
+		tableSortCols:       testutils.TableSortCols,
 		startPosition:       pos.CdcPosition,
 		disableCanalLogging: true,
 	})
@@ -79,40 +78,40 @@ func TestCDCIterator_InsertAction(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 
-	db := testutils.Connection(t)
+	db := testutils.NewDB(t)
 
-	userTable.Recreate(is, db)
+	testutils.RecreateUsersTable(is, db)
 
 	iterator, teardown := testCdcIterator(ctx, t, is)
 	defer teardown()
 
-	user1 := userTable.Insert(is, db, "user1")
-	user2 := userTable.Insert(is, db, "user2")
-	user3 := userTable.Insert(is, db, "user3")
+	user1 := testutils.InsertUser(is, db, 1)
+	user2 := testutils.InsertUser(is, db, 2)
+	user3 := testutils.InsertUser(is, db, 3)
 
-	testutils.ReadAndAssertInsert(ctx, is, iterator, user1)
-	testutils.ReadAndAssertInsert(ctx, is, iterator, user2)
-	testutils.ReadAndAssertInsert(ctx, is, iterator, user3)
+	testutils.ReadAndAssertCreate(ctx, is, iterator, user1)
+	testutils.ReadAndAssertCreate(ctx, is, iterator, user2)
+	testutils.ReadAndAssertCreate(ctx, is, iterator, user3)
 }
 
 func TestCDCIterator_DeleteAction(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 
-	db := testutils.Connection(t)
+	db := testutils.NewDB(t)
 
-	userTable.Recreate(is, db)
+	testutils.RecreateUsersTable(is, db)
 
-	user1 := userTable.Insert(is, db, "user1")
-	user2 := userTable.Insert(is, db, "user2")
-	user3 := userTable.Insert(is, db, "user3")
+	user1 := testutils.InsertUser(is, db, 1)
+	user2 := testutils.InsertUser(is, db, 2)
+	user3 := testutils.InsertUser(is, db, 3)
 
 	iterator, teardown := testCdcIterator(ctx, t, is)
 	defer teardown()
 
-	userTable.Delete(is, db, user1)
-	userTable.Delete(is, db, user2)
-	userTable.Delete(is, db, user3)
+	testutils.DeleteUser(is, db, user1)
+	testutils.DeleteUser(is, db, user2)
+	testutils.DeleteUser(is, db, user3)
 
 	testutils.ReadAndAssertDelete(ctx, is, iterator, user1)
 	testutils.ReadAndAssertDelete(ctx, is, iterator, user2)
@@ -123,20 +122,20 @@ func TestCDCIterator_UpdateAction(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 
-	db := testutils.Connection(t)
+	db := testutils.NewDB(t)
 
-	userTable.Recreate(is, db)
+	testutils.RecreateUsersTable(is, db)
 
-	user1 := userTable.Insert(is, db, "user1")
-	user2 := userTable.Insert(is, db, "user2")
-	user3 := userTable.Insert(is, db, "user3")
+	user1 := testutils.InsertUser(is, db, 1)
+	user2 := testutils.InsertUser(is, db, 2)
+	user3 := testutils.InsertUser(is, db, 3)
 
 	iterator, teardown := testCdcIterator(ctx, t, is)
 	defer teardown()
 
-	user1Updated := userTable.Update(is, db, user1.Update())
-	user2Updated := userTable.Update(is, db, user2.Update())
-	user3Updated := userTable.Update(is, db, user3.Update())
+	user1Updated := testutils.UpdateUser(is, db, user1.Update())
+	user2Updated := testutils.UpdateUser(is, db, user2.Update())
+	user3Updated := testutils.UpdateUser(is, db, user3.Update())
 
 	testutils.ReadAndAssertUpdate(ctx, is, iterator, user1, user1Updated)
 	testutils.ReadAndAssertUpdate(ctx, is, iterator, user2, user2Updated)
@@ -147,9 +146,9 @@ func TestCDCIterator_RestartOnPosition(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 
-	db := testutils.Connection(t)
+	db := testutils.NewDB(t)
 
-	userTable.Recreate(is, db)
+	testutils.RecreateUsersTable(is, db)
 
 	// start the iterator at the beginning
 
@@ -157,16 +156,16 @@ func TestCDCIterator_RestartOnPosition(t *testing.T) {
 
 	// and trigger some insert actions
 
-	user1 := userTable.Insert(is, db, "user1")
-	user2 := userTable.Insert(is, db, "user2")
-	user3 := userTable.Insert(is, db, "user3")
-	user4 := userTable.Insert(is, db, "user4")
+	user1 := testutils.InsertUser(is, db, 1)
+	user2 := testutils.InsertUser(is, db, 2)
+	user3 := testutils.InsertUser(is, db, 3)
+	user4 := testutils.InsertUser(is, db, 4)
 
 	var latestPosition opencdc.Position
 
 	{ // read and ack 2 records
-		testutils.ReadAndAssertInsert(ctx, is, iterator, user1)
-		rec := testutils.ReadAndAssertInsert(ctx, is, iterator, user2)
+		testutils.ReadAndAssertCreate(ctx, is, iterator, user1)
+		rec := testutils.ReadAndAssertCreate(ctx, is, iterator, user2)
 		teardown()
 
 		latestPosition = rec.Position
@@ -177,9 +176,9 @@ func TestCDCIterator_RestartOnPosition(t *testing.T) {
 	iterator, teardown = testCdcIteratorAtPosition(ctx, t, is, latestPosition)
 	defer teardown()
 
-	user5 := userTable.Insert(is, db, "user5")
+	user5 := testutils.InsertUser(is, db, 5)
 
-	testutils.ReadAndAssertInsert(ctx, is, iterator, user3)
-	testutils.ReadAndAssertInsert(ctx, is, iterator, user4)
-	testutils.ReadAndAssertInsert(ctx, is, iterator, user5)
+	testutils.ReadAndAssertCreate(ctx, is, iterator, user3)
+	testutils.ReadAndAssertCreate(ctx, is, iterator, user4)
+	testutils.ReadAndAssertCreate(ctx, is, iterator, user5)
 }

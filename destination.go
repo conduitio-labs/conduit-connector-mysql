@@ -14,53 +14,39 @@
 
 package mysql
 
-//go:generate paramgen -output=paramgen_dest.go DestinationConfig
-
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
 
+	"github.com/Masterminds/squirrel"
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	"github.com/conduitio/conduit-commons/config"
 	"github.com/conduitio/conduit-commons/opencdc"
 	sdk "github.com/conduitio/conduit-connector-sdk"
+	"github.com/jmoiron/sqlx"
 )
 
 type Destination struct {
 	sdk.UnimplementedDestination
-
-	config DestinationConfig
-}
-
-type DestinationConfig struct {
-	// Config includes parameters that are the same in the source and destination.
-	common.Config
-	// DestinationConfigParam must be either yes or no (defaults to yes).
-	DestinationConfigParam string `validate:"inclusion=yes|no" default:"yes"`
+	db     *sqlx.DB
+	config common.DestinationConfig
 }
 
 func NewDestination() sdk.Destination {
-	// Create Destination and wrap it in the default middleware.
-	return sdk.DestinationWithMiddleware(&Destination{}, sdk.DefaultDestinationMiddleware()...)
+	return sdk.DestinationWithMiddleware(&Destination{})
+}
+
+func (d *Destination) Config() sdk.DestinationConfig {
+	return &d.config
 }
 
 func (d *Destination) Parameters() config.Parameters {
-	// Parameters is a map of named Parameters that describe how to configure
-	// the Destination. Parameters can be generated from DestinationConfig with
-	// paramgen.
 	return d.config.Parameters()
 }
 
 func (d *Destination) Configure(ctx context.Context, cfg config.Config) error {
-	// Configure is the first function to be called in a connector. It provides
-	// the connector with the configuration that can be validated and stored.
-	// In case the configuration is not valid it should return an error.
-	// Testing if your connector can reach the configured data source should be
-	// done in Open, not in Configure.
-	// The SDK will validate the configuration and populate default values
-	// before calling Configure. If you need to do more complex validations you
-	// can do them manually here.
-
 	sdk.Logger(ctx).Info().Msg("Configuring Destination...")
 	err := sdk.Util.ParseConfig(ctx, cfg, &d.config, d.config.Parameters())
 	if err != nil {
@@ -69,24 +55,140 @@ func (d *Destination) Configure(ctx context.Context, cfg config.Config) error {
 	return nil
 }
 
-func (d *Destination) Open(_ context.Context) error {
-	// Open is called after Configure to signal the plugin it can prepare to
-	// start writing records. If needed, the plugin should open connections in
-	// this function.
+func (d *Destination) Open(_ context.Context) (err error) {
+	d.db, err = sqlx.Open("mysql", d.config.DSN)
+	if err != nil {
+		return fmt.Errorf("failed to connect to mysql: %w", err)
+	}
+
 	return nil
 }
 
-func (d *Destination) Write(_ context.Context, _ []opencdc.Record) (int, error) {
-	// Write writes len(r) records from r to the destination right away without
-	// caching. It should return the number of records written from r
-	// (0 <= n <= len(r)) and any error encountered that caused the write to
-	// stop early. Write must return a non-nil error if it returns n < len(r).
-	return 0, nil
+func (d *Destination) Write(ctx context.Context, recs []opencdc.Record) (written int, err error) {
+	tx, err := d.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+
+	//nolint:errcheck // will always error if committed, no need to check
+	defer tx.Rollback()
+
+	for _, rec := range recs {
+		switch rec.Operation {
+		case opencdc.OperationSnapshot:
+			if err := d.upsertRecord(ctx, tx, rec); err != nil {
+				return 0, err
+			}
+		case opencdc.OperationCreate:
+			if err := d.upsertRecord(ctx, tx, rec); err != nil {
+				return 0, err
+			}
+		case opencdc.OperationUpdate:
+			if err := d.upsertRecord(ctx, tx, rec); err != nil {
+				return 0, err
+			}
+		case opencdc.OperationDelete:
+			if err := d.deleteRecord(ctx, tx, rec); err != nil {
+				return 0, err
+			}
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return len(recs), nil
 }
 
 func (d *Destination) Teardown(_ context.Context) error {
-	// Teardown signals to the plugin that all records were written and there
-	// will be no more calls to any other function. After Teardown returns, the
-	// plugin should be ready for a graceful shutdown.
+	if d.db != nil {
+		if err := d.db.Close(); err != nil {
+			return fmt.Errorf("failed to close connection: %w", err)
+		}
+	}
+
 	return nil
+}
+
+func (d *Destination) upsertRecord(ctx context.Context, tx *sqlx.Tx, rec opencdc.Record) error {
+	payload, isStructured := rec.Payload.After.(opencdc.StructuredData)
+	if !isStructured {
+		data := make(opencdc.StructuredData)
+		if err := json.Unmarshal(rec.Payload.After.Bytes(), &data); err != nil {
+			return fmt.Errorf("failed to json unmarshal non structured data: %w", err)
+		}
+
+		payload = data
+	}
+
+	columns := make([]string, 0, len(payload))
+	values := make([]any, 0, len(payload))
+
+	for col, val := range payload {
+		columns = append(columns, col)
+		values = append(values, val)
+	}
+
+	query := squirrel.Insert(d.config.Table).
+		Columns(columns...).
+		Values(values...).
+		Suffix("ON DUPLICATE KEY UPDATE " + buildUpsertSuffix(payload))
+
+	sql, args, err := query.ToSql()
+	if err != nil {
+		return fmt.Errorf("failed to build query: %w", err)
+	}
+
+	_, err = tx.ExecContext(ctx, sql, args...)
+	if err != nil {
+		return fmt.Errorf("failed to upsert record: %w", err)
+	}
+
+	return nil
+}
+
+func buildUpsertSuffix(upsertList opencdc.StructuredData) string {
+	parts := make([]string, 0, len(upsertList))
+	for col := range upsertList {
+		parts = append(parts, fmt.Sprintf("%s = VALUES(%s)", col, col))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func (d *Destination) deleteRecord(ctx context.Context, tx *sqlx.Tx, rec opencdc.Record) error {
+	val, err := d.parseRecordKey(rec.Key)
+	if err != nil {
+		return err
+	}
+
+	query := squirrel.
+		Delete(d.config.Table).
+		Where(squirrel.Eq{d.config.Key: val})
+
+	sql, args, err := query.ToSql()
+	if err != nil {
+		return fmt.Errorf("failed to build query: %w", err)
+	}
+
+	_, err = tx.ExecContext(ctx, sql, args...)
+	if err != nil {
+		return fmt.Errorf("failed to delete record: %w", err)
+	}
+
+	return nil
+}
+
+func (d *Destination) parseRecordKey(key opencdc.Data) (any, error) {
+	data := make(opencdc.StructuredData)
+	if err := json.Unmarshal(key.Bytes(), &data); err != nil {
+		return nil, fmt.Errorf("failed to parse key: %w", err)
+	}
+
+	val, ok := data[d.config.Key]
+	if !ok {
+		return nil, fmt.Errorf("primary key not found")
+	}
+
+	return val, nil
 }

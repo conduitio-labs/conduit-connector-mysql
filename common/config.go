@@ -14,15 +14,28 @@
 
 package common
 
+import (
+	"context"
+	"fmt"
+
+	sdk "github.com/conduitio/conduit-connector-sdk"
+	"github.com/go-sql-driver/mysql"
+)
+
 type Config struct {
-	// URL is the connection string for the Mysql database.
-	URL string `json:"url" validate:"required"`
+	// DSN is the connection string for the MySQL database.
+	DSN string `json:"dsn" validate:"required"`
 }
 
 //go:generate paramgen -output=paramgen_src.go SourceConfig
 
 type SourceConfig struct {
+	sdk.DefaultSourceMiddleware
+
 	Config
+
+	// TableConfig holds the custom configuration that each table can have.
+	TableConfig map[string]TableConfig `json:"tableConfig"`
 
 	// Tables represents the tables to read from.
 	Tables []string `json:"tables" validate:"required"`
@@ -31,11 +44,53 @@ type SourceConfig struct {
 	DisableCanalLogs bool `json:"disableCanalLogs"`
 
 	// FetchSize limits how many rows should be retrieved on each database fetch.
-	FetchSize int `json:"fetchSize" default:"50000"`
+	FetchSize uint64 `json:"fetchSize" default:"10000"`
+
+	// UnsafeSnapshot allows a snapshot of a table with neither a primary key
+	// nor a defined sorting column. The opencdc.Position won't record the last record
+	// read from a table.
+	UnsafeSnapshot bool `json:"unsafeSnapshot"`
 }
 
+func (c SourceConfig) Validate(_ context.Context) error {
+	if _, err := mysql.ParseDSN(c.DSN); err != nil {
+		return fmt.Errorf("failed to parse DSN: %w", err)
+	}
+	return nil
+}
+
+type TableConfig struct {
+	// SortingColumn allows to force using a custom column to sort the snapshot.
+	SortingColumn string `json:"sortingColumn"`
+}
+
+<<<<<<< HEAD
 const (
 	DefaultFetchSize = 50000
 	// AllTablesWildcard can be used if you'd like to listen to all tables.
 	AllTablesWildcard = "*"
 )
+=======
+const DefaultFetchSize = 50000
+
+//go:generate paramgen -output=paramgen_dest.go DestinationConfig
+
+type DestinationConfig struct {
+	sdk.DefaultDestinationMiddleware
+
+	Config
+
+	// Table is used as the target table into which records are inserted.
+	Table string `json:"table" validate:"required"`
+
+	// Key is the primary key of the specified table.
+	Key string `json:"key" validate:"required"`
+}
+
+func (c DestinationConfig) Validate(_ context.Context) error {
+	if _, err := mysql.ParseDSN(c.DSN); err != nil {
+		return fmt.Errorf("failed to parse DSN: %w", err)
+	}
+	return nil
+}
+>>>>>>> origin/main

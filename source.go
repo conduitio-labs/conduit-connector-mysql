@@ -172,7 +172,6 @@ func (s *Source) getAllTables(ctx context.Context, db *sqlx.DB, database string)
 	query := fmt.Sprintf("SELECT table_name	FROM information_schema.tables	WHERE table_schema = '%s'", database)
 
 	rows, err := db.Queryx(query)
-
 	if err != nil {
 		sdk.Logger(ctx).Error().Err(err).Msg("failed to query tables")
 		return nil, fmt.Errorf("failed to query tables: %w", err)

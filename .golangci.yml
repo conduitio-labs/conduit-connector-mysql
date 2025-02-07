@@ -2,6 +2,9 @@ run:
   timeout: 5m
 
 linters-settings:
+  exhaustive:
+    default-signifies-exhaustive: true
+
   nolintlint:
     allow-unused: false # report any unused nolint directives
     require-explanation: true # require an explanation for nolint directives
@@ -15,7 +18,6 @@ linters-settings:
     values:
       regexp:
         copyright-year: 20[2-9]\d
-
 issues:
   exclude-rules:
     - path: _test\.go
@@ -52,7 +54,7 @@ linters:
     - errname
     - errorlint
     - exhaustive
-    - exportloopref
+    - copyloopvar
     # - forbidigo
     - forcetypeassert
     # - funlen

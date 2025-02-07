@@ -12,13 +12,14 @@ services:
       MYSQL_PASSWORD: meroxapass
       MYSQL_ROOT_PASSWORD: meroxaadmin
     ports:
-      - "3306:3306"
+      - '3306:3306'
     networks:
       - main
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      test: ['CMD', 'mysqladmin', 'ping', '-h', 'localhost']
+      interval: 1s
       timeout: 20s
-      retries: 10
+      retries: 30
 
   # Adminer is a web-based SQL management tool. Useful on development
   adminer:

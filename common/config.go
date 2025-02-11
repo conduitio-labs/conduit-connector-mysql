@@ -36,6 +36,12 @@ type SourceConfig struct {
 	TableConfig map[string]TableConfig `json:"tableConfig"`
 
 	// Tables represents the tables to read from.
+	//  - By default, no tables are included, but can be modified by adding a comma-separated string of regex patterns.
+	//  - They are applied in the order that they are provided, so the final regex supersedes all previous ones.
+	//  - To include all tables, use "*". You can then filter that list by adding a comma-separated string of regex patterns.
+	//  - To set an "include" regex, add "+" or nothing in front of the regex.
+	//  - To set an "exclude" regex, add "-" in front of the regex.
+	//  - e.g. "-.*meta$, wp_postmeta" will exclude all tables ending with "meta" but include the table "wp_postmeta".
 	Tables []string `json:"tables" validate:"required"`
 
 	// DisableCanalLogs disables verbose logs.

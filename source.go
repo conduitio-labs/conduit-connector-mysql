@@ -17,6 +17,8 @@ package mysql
 import (
 	"context"
 	"fmt"
+	"regexp"
+	"strings"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	"github.com/conduitio/conduit-commons/opencdc"
@@ -59,17 +61,16 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 		return fmt.Errorf("failed to connect to mysql: %w", err)
 	}
 
-	if s.readingAllTables() {
-		sdk.Logger(ctx).Info().Msg("Detecting all tables...")
-		s.config.Tables, err = s.getAllTables(ctx, s.db, mysqlCfg.DBName)
-		if err != nil {
-			return fmt.Errorf("failed to connect to get all tables: %w", err)
-		}
-		sdk.Logger(ctx).Info().
-			Strs("tables", s.config.Tables).
-			Int("count", len(s.config.Tables)).
-			Msgf("Successfully detected tables")
+	sdk.Logger(ctx).Info().Msg("Parsing table regexes...")
+	s.config.Tables, err = s.getAndFilterTables(ctx, s.db, mysqlCfg.DBName)
+	if err != nil {
+		return err
 	}
+
+	sdk.Logger(ctx).Info().
+		Strs("tables", s.config.Tables).
+		Int("count", len(s.config.Tables)).
+		Msgf("Successfully detected tables")
 
 	tableKeys, err := s.getTableKeys(ctx, mysqlCfg.DBName)
 	if err != nil {
@@ -138,11 +139,7 @@ func (s *Source) Teardown(ctx context.Context) error {
 	return nil
 }
 
-func (s *Source) readingAllTables() bool {
-	return len(s.config.Tables) == 1 && s.config.Tables[0] == common.AllTablesWildcard
-}
-
-func (s *Source) getAllTables(ctx context.Context, db *sqlx.DB, database string) ([]string, error) {
+func (s *Source) getAndFilterTables(ctx context.Context, db *sqlx.DB, database string) ([]string, error) {
 	query := "SELECT table_name FROM information_schema.tables WHERE table_schema = ?"
 
 	rows, err := db.Queryx(query, database)
@@ -163,9 +160,89 @@ func (s *Source) getAllTables(ctx context.Context, db *sqlx.DB, database string)
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("rows error: %w", err)
 	}
-	return tables, nil
+
+	includedTables := make(map[string]bool)
+
+	// Process each rule
+	for _, rule := range s.config.Tables {
+		if err := s.processTableRule(rule, tables, includedTables); err != nil {
+			return nil, err
+		}
+	}
+
+	var result []string
+	// Collect all the tables that were included (true in map)
+	for table, included := range includedTables {
+		if included {
+			result = append(result, table)
+		}
+	}
+
+	return result, nil
 }
 
+func (s *Source) processTableRule(rule string, tables []string, includedTables map[string]bool) error {
+	// trim leading and trailing spaces from rule
+	rule = strings.TrimSpace(rule)
+
+	if rule == common.AllTablesWildcard {
+		for _, table := range tables {
+			includedTables[table] = true
+		}
+		return nil
+	}
+
+	action, regexPattern, err := ParseRule(rule)
+	if err != nil {
+		return err
+	}
+
+	// Compile the regex
+	re, err := regexp.Compile(regexPattern)
+	if err != nil {
+		return fmt.Errorf("invalid regex pattern: %w", err)
+	}
+
+	// Apply the rule to all tables
+	for _, table := range tables {
+		if re.MatchString(table) {
+			includedTables[table] = (action == Include)
+		}
+	}
+
+	return nil
+}
+
+type Action int
+
+const (
+	Include Action = iota
+	Exclude
+)
+
+// ParseRule parses a table filter rule and returns the action and pattern.
+func ParseRule(rule string) (Action, string, error) {
+	if len(rule) < 2 {
+		return Include, "", fmt.Errorf("invalid rule format: %s", rule)
+	}
+
+	var action Action
+	switch rule[0] {
+	case '+':
+		action = Include
+		rule = rule[1:] // Strip the prefix
+	case '-':
+		action = Exclude
+		rule = rule[1:] // Strip the prefix
+	default:
+		// No prefix means default to Include
+		action = Include
+	}
+
+	return action, rule, nil // Return action and regex (without the action prefix)
+}
+
+// function to get the primary key of a table.
 func getPrimaryKey(db *sqlx.DB, database, table string) (string, error) {
 	var primaryKey struct {
 		ColumnName string `db:"COLUMN_NAME"`

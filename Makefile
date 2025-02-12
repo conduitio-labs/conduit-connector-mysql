@@ -4,11 +4,9 @@ VERSION=$(shell git describe --tags --dirty --always)
 build:
 	go build -ldflags "-X 'github.com/conduitio-labs/conduit-connector-mysql.version=${VERSION}'" -o conduit-connector-mysql cmd/connector/main.go
 
-.PHONY: test-integration
-test-integration: up-database
-	go test $(GOTEST_FLAGS) -v -race ./...; ret=$$?; \
-		docker compose -f test/docker-compose.yml down; \
-		exit $$ret
+.PHONY: test
+test: up-database
+	go test $(GOTEST_FLAGS) -v -race ./...
 
 .PHONY: generate
 generate:
@@ -44,3 +42,8 @@ down:
 .PHONY: connect
 connect:
 	docker exec -it mysql_db mysql -u root -p'meroxaadmin' meroxadb
+
+.PHONY: fmt
+fmt:
+	gofumpt -l -w .
+	gci write --skip-generated  .

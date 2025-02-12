@@ -142,7 +142,7 @@ func (s *Source) Teardown(ctx context.Context) error {
 func (s *Source) getAndFilterTables(ctx context.Context, db *sqlx.DB, database string) ([]string, error) {
 	query := "SELECT table_name FROM information_schema.tables WHERE table_schema = ?"
 
-	rows, err := db.Queryx(query, database)
+	rows, err := db.Queryx(query, database) //nolint:sqlclosecheck //false positive in latest version. Issue #35
 	if err != nil {
 		sdk.Logger(ctx).Error().Err(err).Msg("failed to query tables")
 		return nil, fmt.Errorf("failed to query tables: %w", err)

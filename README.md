@@ -8,7 +8,7 @@ Run `make build` to build the connector.
 
 ## Testing
 
-Run `make test` to run all the unit tests. Run `make test-integration` to run the integration tests.
+Run `make test` to run all tests.
 
 The Docker compose file at `test/docker-compose.yml` can be used to run the required resource locally. It includes [adminer](https://www.adminer.org/) for database management.
 

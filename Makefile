@@ -44,3 +44,8 @@ down:
 .PHONY: connect
 connect:
 	docker exec -it mysql_db mysql -u root -p'meroxaadmin' meroxadb
+
+.PHONY: fmt
+fmt:
+	gofumpt -l -w .
+	gci write --skip-generated  .

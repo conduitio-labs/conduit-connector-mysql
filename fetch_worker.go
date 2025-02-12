@@ -16,7 +16,6 @@ package mysql
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 
@@ -108,19 +107,9 @@ func (w *fetchWorkerByKey) run(ctx context.Context) (err error) {
 	sdk.Logger(ctx).Info().Msgf("started fetch worker by key for table %q", w.config.table)
 	defer sdk.Logger(ctx).Info().Msgf("finished fetch worker by key for table %q", w.config.table)
 
-	tx, err := w.db.BeginTxx(ctx, &sql.TxOptions{
-		Isolation: sql.LevelRepeatableRead,
-		ReadOnly:  true,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to create transaction: %w", err)
-	}
+	logger := sdk.Logger(ctx).With().Str("table", w.config.table).Logger()
 
-	sdk.Logger(ctx).Debug().Msgf("obtained tx for table %v", w.config.table)
-
-	defer func() { err = errors.Join(err, tx.Commit()) }()
-
-	sdk.Logger(ctx).Info().
+	logger.Info().
 		Any("start", w.start).
 		Any("end", w.end).
 		Uint64("fetchSize", w.config.fetchSize).
@@ -132,18 +121,18 @@ func (w *fetchWorkerByKey) run(ctx context.Context) (err error) {
 	discardFirst := w.config.lastPosition.Snapshots[w.config.table].LastRead != nil
 	chunkStart := w.start
 	for {
-		sdk.Logger(ctx).Info().
+		logger.Info().
 			Any("chunk start", chunkStart).
 			Any("end", w.end).Msg("fetching chunk")
 
-		rowsChunk, err := w.selectRowsChunk(ctx, tx, chunkStart, discardFirst)
+		rowsChunk, err := w.selectRowsChunk(ctx, chunkStart, discardFirst)
 		if err != nil {
 			return fmt.Errorf("failed to select rows chunk: %w", err)
 		}
 		discardFirst = true
 
 		for _, row := range rowsChunk.rows {
-			sdk.Logger(ctx).Trace().Msgf("fetched row: %+v", row)
+			logger.Trace().Msgf("fetched row: %+v", row)
 
 			lastRead := row[w.config.sortColName]
 			if lastRead == nil {
@@ -218,8 +207,7 @@ type rowsChunk struct {
 }
 
 func (w *fetchWorkerByKey) selectRowsChunk(
-	ctx context.Context, tx *sqlx.Tx,
-	start any, discardFirst bool,
+	ctx context.Context, start any, discardFirst bool,
 ) (_ *rowsChunk, err error) {
 	var whereStart any = squirrel.GtOrEq{w.config.sortColName: start}
 	if discardFirst {
@@ -240,7 +228,7 @@ func (w *fetchWorkerByKey) selectRowsChunk(
 
 	sdk.Logger(ctx).Debug().Str("query", query).Any("args", args).Msg("created query")
 
-	rows, err := tx.QueryxContext(ctx, query, args...)
+	rows, err := w.db.QueryxContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query rows: %w", err)
 	}
@@ -393,23 +381,10 @@ func (w *fetchWorkerByLimit) fetchStartEnd(ctx context.Context) (isTableEmpty bo
 }
 
 func (w *fetchWorkerByLimit) run(ctx context.Context) (err error) {
-	sdk.Logger(ctx).Info().Msgf("started fetch worker by limit for table %q", w.config.table)
-	defer sdk.Logger(ctx).Info().Msgf("finished fetch worker by limit for table %q", w.config.table)
+	logger := sdk.Logger(ctx).With().Str("table", w.config.table).Logger()
 
-	tx, err := w.db.BeginTxx(ctx, &sql.TxOptions{
-		Isolation: sql.LevelRepeatableRead,
-		ReadOnly:  true,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to create transaction: %w", err)
-	}
-	defer func() {
-		if err = tx.Commit(); err != nil {
-			err = fmt.Errorf("failed to commit transaction: %w", err)
-		}
-	}()
-
-	sdk.Logger(ctx).Debug().Msgf("obtained tx for table %v", w.config.table)
+	logger.Info().Msgf("started fetch worker by limit")
+	defer logger.Info().Msgf("finished fetch worker by limit")
 
 	for offset := uint64(0); offset < w.end; offset += w.config.fetchSize {
 		query, args, err := squirrel.
@@ -419,9 +394,9 @@ func (w *fetchWorkerByLimit) run(ctx context.Context) (err error) {
 			return fmt.Errorf("failed to build query: %w", err)
 		}
 
-		sdk.Logger(ctx).Debug().Str("query", query).Any("args", args).Msg("created query")
+		logger.Debug().Str("query", query).Any("args", args).Msg("created query")
 
-		sqlxRows, err := tx.QueryxContext(ctx, query, args...)
+		sqlxRows, err := w.db.QueryxContext(ctx, query, args...)
 		if err != nil {
 			return fmt.Errorf("failed to query rows: %w", err)
 		}
@@ -449,7 +424,7 @@ func (w *fetchWorkerByLimit) run(ctx context.Context) (err error) {
 		}
 
 		for i, row := range rows {
-			sdk.Logger(ctx).Trace().Msgf("fetched row: %+v", row)
+			logger.Trace().Msgf("fetched row: %+v", row)
 
 			payloadSubver, err := w.payloadSchema.createPayloadSchema(ctx, w.config.table, colTypes)
 			if err != nil {

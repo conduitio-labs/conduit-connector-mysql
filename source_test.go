@@ -17,7 +17,6 @@ package mysql
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/matryer/is"
 )
@@ -27,9 +26,4 @@ func TestSource_Teardown(t *testing.T) {
 	con := NewSource()
 	err := con.Teardown(context.Background())
 	is.NoErr(err)
-}
-
-func TestMain(m *testing.M) {
-	time.Sleep(10 * time.Second)
-	m.Run()
 }

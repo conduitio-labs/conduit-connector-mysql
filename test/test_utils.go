@@ -38,7 +38,7 @@ import (
 	gormschema "gorm.io/gorm/schema"
 )
 
-const DSN = "root:meroxaadmin@tcp(127.0.0.1:3306)/meroxadb"
+const DSN = "root:meroxaadmin@tcp(127.0.0.1:3306)/meroxadb?timeout=30s"
 
 var ServerID = "1"
 

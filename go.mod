@@ -10,7 +10,7 @@ require (
 	github.com/go-mysql-org/go-mysql v1.11.0
 	github.com/go-sql-driver/mysql v1.9.0
 	github.com/golangci/golangci-lint v1.64.5
-	github.com/google/go-cmp v0.6.0
+	github.com/google/go-cmp v0.7.0
 	github.com/hamba/avro/v2 v2.28.0
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/matryer/is v1.4.1

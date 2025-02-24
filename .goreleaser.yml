@@ -5,6 +5,9 @@ builds:
       - darwin
       - linux
       - windows
+    goarch:
+      - amd64
+      - arm64
     env:
       - CGO_ENABLED=0
     ldflags:

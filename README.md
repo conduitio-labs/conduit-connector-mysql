@@ -1,19 +1,6 @@
 # Conduit Connector for MySQL
 
-[Conduit](https://conduit.io) connector for MySQL.
-
-## How to build?
-
-Run `make build` to build the connector.
-
-## Testing
-
-Run `make test` to run all tests.
-
-The Docker compose file at `test/docker-compose.yml` can be used to run the required resource locally. It includes [adminer](https://www.adminer.org/) for database management.
-
-Use the `TRACE=true` environment variable to enable trace logs when running tests.
-
+<!-- readmegen:description -->
 ## Source
 
 A source connector pulls data from an external resource and pushes it to
@@ -40,18 +27,6 @@ By default, the connector will error out if it finds a table that has no primary
 
 As of writing, the unsafe snapshot is implemented using batches with `LIMIT` and `OFFSET`, so expect it to be slow for large tables. You can optimize the snapshot by specifying a [sorting column](#configuration).
 The position of the table is currently not recorded, so the unsafe snapshot will restart from zero every time.
-
-### Configuration
-
-| name                                        | description                                                                                                                                             | required | default | example                                                         |
-| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------- | --------------------------------------------------------------- |
-| `dsn`                                       | [The data source name](https://github.com/go-sql-driver/mysql?tab=readme-ov-file#dsn-data-source-name) for the MySQL database.                          | true     |         | `<user>:<password>@tcp(127.0.0.1:3306)/<db>`                    |
-| `tables`                                    | The list of tables to pull data from                                                                                                                    | true     |         | `users,posts,admins`                                            |
-| `tableConfig.<table name>.sortingColum (*)` | The custom column to use to sort the rows during the snapshot. Use this if there are any tables which don't have a proper autoincrementing primary key. | false    |         | `tableConfig.users.sortingColumn` as the key, `id` as the value |
-| `fetchSize`                                 | Limits how many rows should be retrieved on each database fetch.                                                                                        | false    | 50000   | 50000                                                           |
-| `unsafeSnapshot`                            | Allows tables that don't have either a primary key or are specified in tableConfig.\*.sortingColumn.                                                    | false    |         |                                                                 |
-
-(\*): you can use any ordinal mysql datatype.
 
 ### Schema
 
@@ -90,6 +65,22 @@ The source connector uses [avro](https://avro.apache.org/docs/1.11.1/specificati
 | SET        | string    |
 | JSON       | string    |
 
+## Destination
+
+The MySQL destination takes a `opencdc.Record` and parses it into a valid SQL query. Each record is individually parsed and upserted. Writing in batches is [planned](https://github.com/conduitio-labs/conduit-connector-mysql/issues/63) to be implemented, which should greatly improve performance over the current implementation.
+
+### Upsert Behavior
+
+If the target table contains a column with a unique constraint (this includes PRIMARY KEY and UNIQUE indexes), records will be upserted. Otherwise, they will be appended. Support for updating tables without unique constraints is tracked [here](https://github.com/conduitio-labs/conduit-connector-mysql/issues/66).
+
+If the target table already contains a record with the same key, the Destination will upsert with its current received values. Because Keys must be unique, this can overwrite and thus potentially lose data, so keys should be assigned correctly from the Source.
+
+If there is no key, the record will be simply appended.
+
+### Multicollection mode
+
+(Planned to do). You can upvote [the following issue](https://github.com/conduitio-labs/conduit-connector-mysql/issues/13) to add more interest on getting this feature implemented sooner.
+
 ## Requirements and compatibility
 
 The connector is tested against MySQL v8.0. Compatibility with older versions isn't guaranteed.
@@ -110,27 +101,177 @@ For Snapshot and CDC modes, the following privileges are required:
 - RELOAD
 - REPLICATION CLIENT
 - REPLICATION SLAVE
+<!-- /readmegen:description -->
 
-## Destination
+## Source Configuration Parameters
 
-The MySQL destination takes a `opencdc.Record` and parses it into a valid SQL query. Each record is individually parsed and upserted. Writing in batches is [planned](https://github.com/conduitio-labs/conduit-connector-mysql/issues/63) to be implemented, which should greatly improve performance over the current implementation.
+<!-- readmegen:source.parameters.yaml -->
+```yaml
+version: 2.2
+pipelines:
+  - id: example
+    status: running
+    connectors:
+      - id: example
+        plugin: "mysql"
+        settings:
+          # DSN is the connection string for the MySQL database.
+          # Type: string
+          # Required: yes
+          dsn: ""
+          # Tables represents the tables to read from. - By default, no tables
+          # are included, but can be modified by adding a comma-separated string
+          # of regex patterns. - They are applied in the order that they are
+          # provided, so the final regex supersedes all previous ones. - To
+          # include all tables, use "*". You can then filter that list by adding
+          # a comma-separated string of regex patterns. - To set an "include"
+          # regex, add "+" or nothing in front of the regex. - To set an
+          # "exclude" regex, add "-" in front of the regex. - e.g. "-.*meta$,
+          # wp_postmeta" will exclude all tables ending with "meta" but include
+          # the table "wp_postmeta".
+          # Type: string
+          # Required: yes
+          tables: ""
+          # DisableCanalLogs disables verbose logs.
+          # Type: bool
+          # Required: no
+          disableCanalLogs: "false"
+          # FetchSize limits how many rows should be retrieved on each database
+          # fetch.
+          # Type: int
+          # Required: no
+          fetchSize: "10000"
+          # SortingColumn allows to force using a custom column to sort the
+          # snapshot.
+          # Type: string
+          # Required: no
+          tableConfig.*.sortingColumn: ""
+          # UnsafeSnapshot allows a snapshot of a table with neither a primary
+          # key nor a defined sorting column. The opencdc.Position won't record
+          # the last record read from a table.
+          # Type: bool
+          # Required: no
+          unsafeSnapshot: "false"
+          # Maximum delay before an incomplete batch is read from the source.
+          # Type: duration
+          # Required: no
+          sdk.batch.delay: "0"
+          # Maximum size of batch before it gets read from the source.
+          # Type: int
+          # Required: no
+          sdk.batch.size: "0"
+          # Specifies whether to use a schema context name. If set to false, no
+          # schema context name will be used, and schemas will be saved with the
+          # subject name specified in the connector (not safe because of name
+          # conflicts).
+          # Type: bool
+          # Required: no
+          sdk.schema.context.enabled: "true"
+          # Schema context name to be used. Used as a prefix for all schema
+          # subject names. If empty, defaults to the connector ID.
+          # Type: string
+          # Required: no
+          sdk.schema.context.name: ""
+          # Whether to extract and encode the record key with a schema.
+          # Type: bool
+          # Required: no
+          sdk.schema.extract.key.enabled: "true"
+          # The subject of the key schema. If the record metadata contains the
+          # field "opencdc.collection" it is prepended to the subject name and
+          # separated with a dot.
+          # Type: string
+          # Required: no
+          sdk.schema.extract.key.subject: "key"
+          # Whether to extract and encode the record payload with a schema.
+          # Type: bool
+          # Required: no
+          sdk.schema.extract.payload.enabled: "true"
+          # The subject of the payload schema. If the record metadata contains
+          # the field "opencdc.collection" it is prepended to the subject name
+          # and separated with a dot.
+          # Type: string
+          # Required: no
+          sdk.schema.extract.payload.subject: "payload"
+          # The type of the payload schema.
+          # Type: string
+          # Required: no
+          sdk.schema.extract.type: "avro"
+```
+<!-- /readmegen:source.parameters.yaml -->
 
-### Upsert Behavior
+## Destination Configuration Parameters
 
-If the target table contains a column with a unique constraint (this includes PRIMARY KEY and UNIQUE indexes), records will be upserted. Otherwise, they will be appended. Support for updating tables without unique constraints is tracked [here](https://github.com/conduitio-labs/conduit-connector-mysql/issues/66).
+<!-- readmegen:destination.parameters.yaml -->
+```yaml
+version: 2.2
+pipelines:
+  - id: example
+    status: running
+    connectors:
+      - id: example
+        plugin: "mysql"
+        settings:
+          # DSN is the connection string for the MySQL database.
+          # Type: string
+          # Required: yes
+          dsn: ""
+          # Key is the primary key of the specified table.
+          # Type: string
+          # Required: yes
+          key: ""
+          # Table is used as the target table into which records are inserted.
+          # Type: string
+          # Required: yes
+          table: ""
+          # Maximum delay before an incomplete batch is written to the
+          # destination.
+          # Type: duration
+          # Required: no
+          sdk.batch.delay: "0"
+          # Maximum size of batch before it gets written to the destination.
+          # Type: int
+          # Required: no
+          sdk.batch.size: "0"
+          # Allow bursts of at most X records (0 or less means that bursts are
+          # not limited). Only takes effect if a rate limit per second is set.
+          # Note that if `sdk.batch.size` is bigger than `sdk.rate.burst`, the
+          # effective batch size will be equal to `sdk.rate.burst`.
+          # Type: int
+          # Required: no
+          sdk.rate.burst: "0"
+          # Maximum number of records written per second (0 means no rate
+          # limit).
+          # Type: float
+          # Required: no
+          sdk.rate.perSecond: "0"
+          # The format of the output record. See the Conduit documentation for a
+          # full list of supported formats
+          # (https://conduit.io/docs/using/connectors/configuration-parameters/output-format).
+          # Type: string
+          # Required: no
+          sdk.record.format: "opencdc/json"
+          # Options to configure the chosen output record format. Options are
+          # normally key=value pairs separated with comma (e.g.
+          # opt1=val2,opt2=val2), except for the `template` record format, where
+          # options are a Go template.
+          # Type: string
+          # Required: no
+          sdk.record.format.options: ""
+          # Whether to extract and decode the record key with a schema.
+          # Type: bool
+          # Required: no
+          sdk.schema.extract.key.enabled: "true"
+          # Whether to extract and decode the record payload with a schema.
+          # Type: bool
+          # Required: no
+          sdk.schema.extract.payload.enabled: "true"
+```
+<!-- /readmegen:destination.parameters.yaml -->
 
-If the target table already contains a record with the same key, the Destination will upsert with its current received values. Because Keys must be unique, this can overwrite and thus potentially lose data, so keys should be assigned correctly from the Source.
+## Testing
 
-If there is no key, the record will be simply appended.
+Run `make test` to run all tests.
 
-### Multicollection mode
+The Docker compose file at `test/docker-compose.yml` can be used to run the required resource locally. It includes [adminer](https://www.adminer.org/) for database management.
 
-(Planned to do). You can upvote [the following issue](https://github.com/conduitio-labs/conduit-connector-mysql/issues/13) to add more interest on getting this feature implemented sooner.
-
-### Configuration Options
-
-| name    | description                                                                                                                    | required | example                                      |
-| ------- | ------------------------------------------------------------------------------------------------------------------------------ | -------- | -------------------------------------------- |
-| `dsn`   | [The data source name](https://github.com/go-sql-driver/mysql?tab=readme-ov-file#dsn-data-source-name) for the MySQL database. | true     | `<user>:<password>@tcp(127.0.0.1:3306)/<db>` |
-| `table` | The target table to write the record to                                                                                        | true     | `users`                                      |
-| `key`   | Key represents the column name to use to delete records.                                                                       | true     | `user_id`                                    |
+Use the `TRACE=true` environment variable to enable trace logs when running tests.

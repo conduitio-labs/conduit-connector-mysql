@@ -73,5 +73,4 @@ func TestCombinedIterator_SnapshotAndCDC(t *testing.T) {
 	testutils.ReadAndAssertUpdate(ctx, is, iterator, user1, user1Updated)
 	testutils.ReadAndAssertUpdate(ctx, is, iterator, user2, user2Updated)
 	testutils.ReadAndAssertUpdate(ctx, is, iterator, user3, user3Updated)
-
 }

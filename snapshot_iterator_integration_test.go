@@ -37,7 +37,7 @@ func testSnapshotIterator(ctx context.Context, t *testing.T, is *is.I) (common.I
 	is.NoErr(err)
 
 	iterator, err := newSnapshotIterator(snapshotIteratorConfig{
-		tableSortColumns: testutils.TableSortCols,
+		tablePrimaryKeys: testutils.TablePrimaryKeys,
 		db:               db,
 		database:         "meroxadb",
 		tables:           []string{"users"},
@@ -66,10 +66,10 @@ func testSnapshotIteratorAtPosition(
 	pos, err := common.ParseSDKPosition(sdkPos)
 	is.NoErr(err)
 
-	is.Equal(pos.Kind, common.PositionTypeSnapshot)
+	is.True(pos.SnapshotPosition != nil)
 
 	iterator, err := newSnapshotIterator(snapshotIteratorConfig{
-		tableSortColumns: testutils.TableSortCols,
+		tablePrimaryKeys: testutils.TablePrimaryKeys,
 		db:               db.SqlxDB,
 		startPosition:    pos.SnapshotPosition,
 		database:         "meroxadb",
@@ -245,24 +245,24 @@ func TestSnapshotIterator_CustomTableKeys(t *testing.T) {
 
 	type testCase struct {
 		tableName    string
-		sortingCol   string
+		primaryKey   string
 		expectedData []string
 	}
 
 	for _, testCase := range []testCase{
 		{
 			tableName:    testutils.TableName(is, db, &CompositeWithAutoInc{}),
-			sortingCol:   "id",
+			primaryKey:   "id",
 			expectedData: []string{"record 1", "record 2", "record 3"},
 		},
 		{
 			tableName:    testutils.TableName(is, db, &UlidPk{}),
-			sortingCol:   "id",
+			primaryKey:   "id",
 			expectedData: []string{"ULID record 1", "ULID record 2"},
 		},
 		{
 			tableName:    testutils.TableName(is, db, &TimestampOrdered{}),
-			sortingCol:   "created_at",
+			primaryKey:   "created_at",
 			expectedData: []string{"Timestamp record 1", "Timestamp record 2"},
 		},
 	} {
@@ -272,8 +272,9 @@ func TestSnapshotIterator_CustomTableKeys(t *testing.T) {
 			serverID, err := common.GetServerID(ctx, db)
 			is.NoErr(err)
 
+			primaryKeys := map[string]common.PrimaryKeys{testCase.tableName: {testCase.primaryKey}}
 			iterator, err := newSnapshotIterator(snapshotIteratorConfig{
-				tableSortColumns: map[string]string{testCase.tableName: testCase.sortingCol},
+				tablePrimaryKeys: primaryKeys,
 				db:               db,
 				database:         "meroxadb",
 				tables:           []string{testCase.tableName},
@@ -334,7 +335,7 @@ func TestSnapshotIterator_DeleteEndWhileSnapshotting(t *testing.T) {
 	is.NoErr(err)
 
 	iterator, err := newSnapshotIterator(snapshotIteratorConfig{
-		tableSortColumns: testutils.TableSortCols,
+		tablePrimaryKeys: testutils.TablePrimaryKeys,
 		db:               conn,
 		database:         "meroxadb",
 		tables:           []string{"users"},
@@ -411,7 +412,7 @@ func TestSnapshotIterator_StringSorting(t *testing.T) {
 	is.NoErr(err)
 
 	iterator, err := newSnapshotIterator(snapshotIteratorConfig{
-		tableSortColumns: map[string]string{tablename: "str"},
+		tablePrimaryKeys: map[string]common.PrimaryKeys{tablename: {"str"}},
 		db:               db.SqlxDB,
 		database:         "meroxadb",
 		tables:           []string{tablename},
@@ -481,7 +482,7 @@ func TestSnapshotIterator_FetchByLimit(t *testing.T) {
 	is.NoErr(err)
 
 	iterator, err := newSnapshotIterator(snapshotIteratorConfig{
-		tableSortColumns: map[string]string{table1name: "", table2name: ""},
+		tablePrimaryKeys: map[string]common.PrimaryKeys{table1name: {}, table2name: {}},
 		db:               db.SqlxDB,
 		database:         "meroxadb",
 		tables:           []string{table1name, table2name},

@@ -36,7 +36,7 @@ type combinedIterator struct {
 
 type combinedIteratorConfig struct {
 	db                    *sqlx.DB
-	tableSortCols         map[string]string
+	primaryKeys           map[string]common.PrimaryKeys
 	fetchSize             uint64
 	startSnapshotPosition *common.SnapshotPosition
 	startCdcPosition      *common.CdcPosition
@@ -54,7 +54,7 @@ func newCombinedIterator(
 	cdcIterator, err := newCdcIterator(ctx, cdcIteratorConfig{
 		tables:              config.tables,
 		mysqlConfig:         config.mysqlConfig,
-		tableSortCols:       config.tableSortCols,
+		primaryKeys:         config.primaryKeys,
 		disableCanalLogging: config.disableCanalLogging,
 		db:                  config.db,
 		startPosition:       config.startCdcPosition,
@@ -65,7 +65,7 @@ func newCombinedIterator(
 
 	snapshotIterator, err := newSnapshotIterator(snapshotIteratorConfig{
 		db:               config.db,
-		tableSortColumns: config.tableSortCols,
+		tablePrimaryKeys: config.primaryKeys,
 		fetchSize:        config.fetchSize,
 		startPosition:    config.startSnapshotPosition,
 		database:         config.database,

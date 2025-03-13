@@ -18,6 +18,8 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"maps"
+
 	"github.com/conduitio/conduit-commons/opencdc"
 	"github.com/go-mysql-org/go-mysql/mysql"
 )
@@ -30,7 +32,6 @@ const (
 )
 
 type Position struct {
-	Kind             PositionType      `json:"kind"`
 	SnapshotPosition *SnapshotPosition `json:"snapshot_position,omitempty"`
 	CdcPosition      *CdcPosition      `json:"cdc_position,omitempty"`
 }
@@ -40,10 +41,7 @@ type SnapshotPosition struct {
 }
 
 func (p SnapshotPosition) ToSDKPosition() opencdc.Position {
-	v, err := json.Marshal(Position{
-		Kind:             PositionTypeSnapshot,
-		SnapshotPosition: &p,
-	})
+	v, err := json.Marshal(Position{SnapshotPosition: &p})
 	if err != nil {
 		// This should never happen, all Position structs should be valid.
 		panic(err)
@@ -54,9 +52,7 @@ func (p SnapshotPosition) ToSDKPosition() opencdc.Position {
 func (p SnapshotPosition) Clone() SnapshotPosition {
 	var newPosition SnapshotPosition
 	newPosition.Snapshots = make(SnapshotPositions)
-	for k, v := range p.Snapshots {
-		newPosition.Snapshots[k] = v
-	}
+	maps.Copy(newPosition.Snapshots, p.Snapshots)
 	return newPosition
 }
 
@@ -73,8 +69,21 @@ func ParseSDKPosition(p opencdc.Position) (Position, error) {
 type SnapshotPositions map[string]TablePosition
 
 type TablePosition struct {
+	SingleKey   *TablePositionSingleKey
+	MultipleKey *TablePositionMultipleKey
+}
+
+type TablePositionSingleKey struct {
 	LastRead    any `json:"last_read"`
 	SnapshotEnd any `json:"snapshot_end"`
+}
+
+type TablePositionMultipleKey []TablePositionMultipleKeyItem
+
+type TablePositionMultipleKeyItem struct {
+	KeyName     string `json:"key_name"`
+	LastRead    any    `json:"last_read"`
+	SnapshotEnd any    `json:"snapshot_end"`
 }
 
 type CdcPosition struct {
@@ -91,10 +100,7 @@ func (p CdcPosition) ToMysqlPos() mysql.Position {
 }
 
 func (p CdcPosition) ToSDKPosition() opencdc.Position {
-	v, err := json.Marshal(Position{
-		Kind:        PositionTypeCDC,
-		CdcPosition: &p,
-	})
+	v, err := json.Marshal(Position{CdcPosition: &p})
 	if err != nil {
 		// This should never happen, all Position structs should be valid.
 		panic(err)

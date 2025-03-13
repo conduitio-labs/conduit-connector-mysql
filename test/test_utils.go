@@ -103,8 +103,8 @@ func TestContext(t *testing.T) context.Context {
 	return logger.WithContext(context.Background())
 }
 
-var TableSortCols = map[string]string{
-	"users": "id",
+var TablePrimaryKeys = map[string]common.PrimaryKeys{
+	"users": {"id"},
 }
 
 type User struct {

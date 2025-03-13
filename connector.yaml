@@ -27,7 +27,7 @@ specification:
 
     By default, the connector will error out if it finds a table that has no primary key and no specified sorting column specified, as we can't guarantee that the snapshot will be consistent. Table changes during the snapshot will be however captured by CDC mode.
 
-    As of writing, the unsafe snapshot is implemented using batches with `LIMIT` and `OFFSET`, so expect it to be slow for large tables. You can optimize the snapshot by specifying a [sorting column](#configuration).
+    As of writing, the unsafe snapshot is implemented using batches with `LIMIT` and `OFFSET`, so expect it to be slow for large tables. You can optimize the snapshot by specifying a sorting column (see source configuration parameters).
     The position of the table is currently not recorded, so the unsafe snapshot will restart from zero every time.
 
     ### Schema

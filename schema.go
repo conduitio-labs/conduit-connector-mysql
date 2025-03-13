@@ -231,6 +231,18 @@ type schemaSubjectVersion struct {
 }
 
 func (s *schemaMapper) createPayloadSchema(
+	ctx context.Context, schemaName string, colTypes []*avroNamedType,
+) (*schemaSubjectVersion, error) {
+	return s.createSchema(ctx, schemaName+"_payload", colTypes)
+}
+
+func (s *schemaMapper) createKeySchema(
+	ctx context.Context, schemaName string, colTypes []*avroNamedType,
+) (*schemaSubjectVersion, error) {
+	return s.createSchema(ctx, schemaName+"_key", colTypes)
+}
+
+func (s *schemaMapper) createSchema(
 	ctx context.Context, table string, mysqlCols []*avroNamedType,
 ) (*schemaSubjectVersion, error) {
 	if s.schema != nil {
@@ -249,46 +261,15 @@ func (s *schemaMapper) createPayloadSchema(
 		s.colTypes[colType.Name] = colType
 	}
 
-	recordSchema, err := avro.NewRecordSchema(table+"_payload", "mysql", fields)
+	recordSchema, err := avro.NewRecordSchema(table, "mysql", fields)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create payload schema: %w", err)
 	}
 
-	schema, err := schema.Create(ctx, schema.TypeAvro, recordSchema.Name(), []byte(recordSchema.String()))
+	schema, err := schema.Create(
+		ctx, schema.TypeAvro, recordSchema.Name(), []byte(recordSchema.String()))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create payload schema: %w", err)
-	}
-
-	s.schema = &schemaSubjectVersion{
-		subject: schema.Subject,
-		version: schema.Version,
-	}
-
-	return s.schema, nil
-}
-
-func (s *schemaMapper) createKeySchema(
-	ctx context.Context, table string, colType *avroNamedType,
-) (*schemaSubjectVersion, error) {
-	if s.schema != nil {
-		return s.schema, nil
-	}
-
-	field, err := colTypeToAvroField(colType)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create key schema: %w", err)
-	}
-
-	recordSchema, err := avro.NewRecordSchema(table+"_key", "mysql", []*avro.Field{field})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create key schema: %w", err)
-	}
-
-	s.colTypes[colType.Name] = colType
-
-	schema, err := schema.Create(ctx, schema.TypeAvro, recordSchema.Name(), []byte(recordSchema.String()))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create key schema: %w", err)
 	}
 
 	s.schema = &schemaSubjectVersion{

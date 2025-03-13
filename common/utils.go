@@ -162,3 +162,17 @@ func GetServerID(ctx context.Context, db *sqlx.DB) (string, error) {
 
 	return serverID, nil
 }
+
+// PrimaryKeys contains all possible primary keys that a table can have. The
+// order is important, so that we can properly build ORDER BY clauses.
+type PrimaryKeys []string
+
+func (p PrimaryKeys) GetValuesFromRow(row map[string]any) []any {
+	values := make([]any, 0, len(p))
+	for _, key := range p {
+		if value, ok := row[key]; ok {
+			values = append(values, value)
+		}
+	}
+	return values
+}

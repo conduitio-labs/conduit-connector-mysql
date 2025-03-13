@@ -56,7 +56,7 @@ type (
 	}
 	snapshotIteratorConfig struct {
 		db               *sqlx.DB
-		tableSortColumns map[string]string
+		tablePrimaryKeys map[string]common.PrimaryKeys
 		fetchSize        uint64
 		startPosition    *common.SnapshotPosition
 		database         string
@@ -110,14 +110,16 @@ func newSnapshotIterator(config snapshotIteratorConfig) (*snapshotIterator, erro
 // from the start method so that we can lock and unlock the given tables without
 // starting up the workers.
 func (s *snapshotIterator) setupWorkers(ctx context.Context) error {
-	for table, sortCol := range s.config.tableSortColumns {
-		worker := newFetchWorker(s.config.db, s.data, fetchWorkerConfig{
+	for table, primaryKeys := range s.config.tablePrimaryKeys {
+		worker := newFetchWorker(ctx, fetchWorkerConfig{
 			// the snapshot worker will update the last position, so we need to
 			// clone it to avoid dataraces
 			lastPosition: s.lastPosition.Clone(),
 			table:        table,
 			fetchSize:    s.config.fetchSize,
-			sortColName:  sortCol,
+			primaryKeys:  primaryKeys,
+			db:           s.config.db,
+			data:         s.data,
 		})
 
 		isTableEmpty, err := worker.fetchStartEnd(ctx)

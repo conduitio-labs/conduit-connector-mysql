@@ -17,7 +17,6 @@ package common
 import (
 	"encoding/json"
 	"fmt"
-
 	"maps"
 
 	"github.com/conduitio/conduit-commons/opencdc"

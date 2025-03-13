@@ -14,7 +14,7 @@ specification:
     from the configured tables as record snapshots.
 
     In snapshot mode, the record payload consists of
-    [opencdc.StructuredData](https://pkg.go.dev/github.com/conduitio/conduit-connector-sdk@v0.9.1#StructuredData),
+    [opencdc.StructuredData](https://conduit.io/docs/using/opencdc-record#structured-data),
     with each key being a column and each value being that column's value.
 
     ### Change Data Capture mode

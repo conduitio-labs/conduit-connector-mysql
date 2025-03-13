@@ -12,7 +12,7 @@ Snapshot mode is the first stage of the source sync process. It reads all rows
 from the configured tables as record snapshots.
 
 In snapshot mode, the record payload consists of
-[opencdc.StructuredData](https://pkg.go.dev/github.com/conduitio/conduit-connector-sdk@v0.9.1#StructuredData),
+[opencdc.StructuredData](https://conduit.io/docs/using/opencdc-record#structured-data),
 with each key being a column and each value being that column's value.
 
 ### Change Data Capture mode
@@ -25,7 +25,7 @@ to capture detailed changes at the individual row level.
 
 By default, the connector will error out if it finds a table that has no primary key and no specified sorting column specified, as we can't guarantee that the snapshot will be consistent. Table changes during the snapshot will be however captured by CDC mode.
 
-As of writing, the unsafe snapshot is implemented using batches with `LIMIT` and `OFFSET`, so expect it to be slow for large tables. You can optimize the snapshot by specifying a [sorting column](#configuration).
+As of writing, the unsafe snapshot is implemented using batches with `LIMIT` and `OFFSET`, so expect it to be slow for large tables. You can optimize the snapshot by specifying a sorting column (see source configuration parameters).
 The position of the table is currently not recorded, so the unsafe snapshot will restart from zero every time.
 
 ### Schema

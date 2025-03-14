@@ -17,9 +17,8 @@ package mysql
 import (
 	"context"
 	"encoding/json"
-	"testing"
-
 	"slices"
+	"testing"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	testutils "github.com/conduitio-labs/conduit-connector-mysql/test"

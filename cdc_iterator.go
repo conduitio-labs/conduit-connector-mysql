@@ -200,12 +200,12 @@ func (c *cdcIterator) buildRecord(ctx context.Context, e rowEvent) (opencdc.Reco
 	keyCols := c.config.primaryKeys[tableName]
 	var key opencdc.Data
 
-	if len(keyCol) == 0 {
+	if len(keyCols) == 0 {
 		keyVal := fmt.Sprintf("%s_%d", e.binlogName, e.Header.LogPos)
 		key = opencdc.RawData(keyVal)
 	} else {
 		var keyAvroCols []*avroNamedType
-		for _, keyCol := range keyCol {
+		for _, keyCol := range keyCols {
 			keyColType, found := findKeyColType(payloadAvroCols, keyCol)
 			if !found {
 				return opencdc.Record{}, fmt.Errorf("failed to find key schema column type for table %s", tableName)
@@ -219,7 +219,7 @@ func (c *cdcIterator) buildRecord(ctx context.Context, e rowEvent) (opencdc.Reco
 		}
 
 		structuredKey := opencdc.StructuredData{}
-		for _, keyCol := range keyCol {
+		for _, keyCol := range keyCols {
 			keyVal := payload[keyCol]
 			// In update events, the key has to be the value after the update,
 			// otherwise we could use a stale value.

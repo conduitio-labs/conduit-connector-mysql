@@ -58,10 +58,14 @@ func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (*cdcIterator
 	err := config.db.QueryRowContext(ctx, "SELECT VERSION()").Scan(&version)
 	if err != nil {
 		sdk.Logger(ctx).Warn().Err(err).Msg("failed to detect database version, defaulting to MySQL")
-	} else if strings.Contains(version, "MariaDB") {
-		flavor = "mariadb"
-	} else {
 		flavor = "mysql"
+	} else {
+		switch {
+		case strings.Contains(version, "MariaDB"):
+			flavor = "mariadb"
+		default:
+			flavor = "mysql"
+		}
 	}
 
 	canal, err := common.NewCanal(ctx, common.CanalConfig{

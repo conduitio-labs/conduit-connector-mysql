@@ -58,10 +58,6 @@ func TestCombinedIterator_SnapshotAndCDC(t *testing.T) {
 	iterator, cleanup := testCombinedIterator(ctx, t, is)
 	defer cleanup()
 
-	// ci is slow, we need a bit of time for the setup to initialize canal.Canal.
-	// Theoretically it should not matter, as we get the position at the start.
-	// time.Sleep(time.Second)
-
 	user1Updated := testutils.UpdateUser(is, db, user1.Update())
 	user2Updated := testutils.UpdateUser(is, db, user2.Update())
 	user3Updated := testutils.UpdateUser(is, db, user3.Update())

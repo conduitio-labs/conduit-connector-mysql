@@ -89,29 +89,26 @@ var (
 	}
 )
 
-// EnsureSchemas sets up schemas based on database type detection and caches database type.
+// ensureSchemas sets up schemas based on database type detection and caches database type.
 // It's designed to run only once even if called multiple times.
-func EnsureSchemas(t *testing.T) {
-	is := is.New(t)
-
+func ensureSchemas(db *sqlx.DB) error {
+	var initErr error
 	// Use sync.Once to ensure this runs only one time, no matter how many goroutines call it
 	schemaInitOnce.Do(func() {
-		// Try to connect and detect database type
-		tempDB, err := sqlx.Connect("mysql", DSN+"?parseTime=true")
+		payload, key, err := createSchemas(db)
 		if err != nil {
-			is.NoErr(fmt.Errorf("failed to connect to database for schema initialization: %w", err))
-		}
-		defer tempDB.Close()
-
-		payload, key, err := createSchemas(tempDB)
-		if err != nil {
-			is.NoErr(fmt.Errorf("failed to create schemas: %w", err))
+			initErr = fmt.Errorf("failed to create schemas: %w", err)
+			return
 		}
 
 		// Update the schema definitions with the results from createSchemas
 		userPayloadSchema = payload
 		userKeySchema = key
 	})
+	if initErr != nil {
+		return initErr
+	}
+	return nil
 }
 
 // Database type detection functions.
@@ -180,10 +177,6 @@ func createSchemas(db *sqlx.DB) (AvroSchema, AvroSchema, error) {
 func NewDB(t *testing.T) DB {
 	is := is.New(t)
 
-	// Ensure schemas are initialized when creating a new DB
-	// This will only do the actual work once
-	EnsureSchemas(t)
-
 	// Individual iterators assume that parseTime has already been configured to true, so
 	// they have no knowledge whether that has actually been the case.
 	// We might want in the future to run many more tests using the Source itself, so that
@@ -202,6 +195,12 @@ func NewDB(t *testing.T) DB {
 
 	// Fixes sporadic connection issues, as per https://github.com/go-sql-driver/mysql/issues/674
 	sqlxDB.SetConnMaxLifetime(time.Second)
+	// sqlxDB.SetMaxIdleConns(0)
+
+	// Ensure schemas are initialized when creating a new DB
+	// This will only do the actual work once
+	err = ensureSchemas(sqlxDB)
+	is.NoErr(err)
 
 	t.Cleanup(func() {
 		sqlxDB.Close()

@@ -9,7 +9,7 @@ require (
 	github.com/daixiang0/gci v0.13.5
 	github.com/go-mysql-org/go-mysql v1.11.0
 	github.com/go-sql-driver/mysql v1.9.0
-	github.com/golangci/golangci-lint v1.64.7
+	github.com/golangci/golangci-lint v1.64.8
 	github.com/google/go-cmp v0.7.0
 	github.com/hamba/avro/v2 v2.28.0
 	github.com/jmoiron/sqlx v1.4.0

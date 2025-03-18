@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -38,9 +39,22 @@ import (
 	gormschema "gorm.io/gorm/schema"
 )
 
+// Constants
 const DSN = "root:meroxaadmin@tcp(127.0.0.1:3306)/meroxadb"
 
+// Database types supported by this connector
+const (
+	DatabaseTypeMySQL   = "mysql"
+	DatabaseTypeMariaDB = "mariadb"
+)
+
+// Global Variables
 var ServerID = "1"
+
+// DetectedDBType stores the database type (MySQL or MariaDB) detected at initialization
+var DetectedDBType string
+
+// Type Definitions
 
 // DB is a gorm wrapper that also holds a sqlx DB. Iterators
 // don't manage sql connections, so we need to store them somehow.
@@ -49,6 +63,84 @@ type DB struct {
 	SqlxDB *sqlx.DB
 }
 
+// Initialize schemas based on database type detection and cache database type
+func init() {
+	// Try to connect and detect database type
+	tempDB, err := sqlx.Connect("mysql", DSN+"?parseTime=true")
+	if err == nil {
+		payload, key, err := createSchemas(tempDB)
+		if err == nil {
+			// Update the schema definitions with the results from createSchemas
+			userPayloadSchema = payload
+			userKeySchema = key
+		}
+		tempDB.Close()
+	}
+}
+
+// Database type detection functions
+func detectDatabaseType(db *sqlx.DB) (string, error) {
+	// If we already detected the type, return the cached value
+	if DetectedDBType != "" {
+		return DetectedDBType, nil
+	}
+
+	var version string
+	err := db.Get(&version, "SELECT VERSION()")
+	if err != nil {
+		return "", err
+	}
+
+	if strings.Contains(version, "MariaDB") {
+		DetectedDBType = DatabaseTypeMariaDB
+		return DatabaseTypeMariaDB, nil
+	}
+
+	DetectedDBType = DatabaseTypeMySQL
+	return DatabaseTypeMySQL, nil
+}
+
+// getAvroIntegerType returns the appropriate Avro type based on database type
+func getAvroIntegerType(db *sqlx.DB) (string, error) {
+	dbType, err := detectDatabaseType(db)
+	if err != nil {
+		return "long", err
+	}
+
+	if dbType == DatabaseTypeMariaDB {
+		return "int", nil
+	}
+	return "long", nil
+}
+
+// createSchemas generates the schema for the current database
+func createSchemas(db *sqlx.DB) (AvroSchema, AvroSchema, error) {
+	idType, err := getAvroIntegerType(db)
+	if err != nil {
+		return AvroSchema{}, AvroSchema{}, err
+	}
+
+	payloadSchema := AvroSchema{
+		Name: "mysql.users_payload",
+		Type: "record",
+		Fields: []AvroSchemaField{
+			{Name: "id", Type: idType},
+			{Name: "username", Type: "string"},
+			{Name: "email", Type: "string"},
+			{Name: "created_at", Type: "string"},
+		},
+	}
+
+	keySchema := AvroSchema{
+		Name:   "mysql.users_key",
+		Type:   "record",
+		Fields: []AvroSchemaField{{Name: "id", Type: idType}},
+	}
+
+	return payloadSchema, keySchema, nil
+}
+
+// Database connection functions
 func NewDB(t *testing.T) DB {
 	is := is.New(t)
 
@@ -67,6 +159,9 @@ func NewDB(t *testing.T) DB {
 	sqlDB, err := db.DB()
 	is.NoErr(err)
 	sqlxDB := sqlx.NewDb(sqlDB, "mysql")
+
+	// Fixes sporadic connection issues, as per https://github.com/go-sql-driver/mysql/issues/674
+	sqlxDB.SetConnMaxLifetime(time.Second)
 
 	t.Cleanup(func() {
 		sqlxDB.Close()
@@ -268,7 +363,9 @@ func ReadAndAssertDelete(
 }
 
 func isDataEqual(is *is.I, actual, expected any) {
-	is.Equal("", cmp.Diff(actual, expected)) // actual (-) != expected (+)
+	normalizedActual := normalizeData(actual)
+	normalizedExpected := normalizeData(expected)
+	is.Equal("", cmp.Diff(normalizedActual, normalizedExpected)) // actual (-) != expected (+)
 }
 
 func ReadAndAssertSnapshot(
@@ -317,7 +414,10 @@ func assertSchema(ctx context.Context, is *is.I, metadata opencdc.Metadata) {
 		var actualSchema AvroSchema
 		is.NoErr(json.Unmarshal(s.Bytes, &actualSchema))
 
-		isDataEqual(is, actualSchema, userPayloadSchema)
+		// Normalize schema before comparing
+		normalizeSchemaTypes(&actualSchema)
+		normalizeSchemaTypes(&userPayloadSchema)
+		is.Equal("", cmp.Diff(actualSchema, userPayloadSchema))
 	}
 
 	{ // key schema
@@ -332,10 +432,73 @@ func assertSchema(ctx context.Context, is *is.I, metadata opencdc.Metadata) {
 		var actualSchema AvroSchema
 		is.NoErr(json.Unmarshal(s.Bytes, &actualSchema))
 
-		isDataEqual(is, actualSchema, userKeySchema)
+		// Normalize schema before comparing
+		normalizeSchemaTypes(&actualSchema)
+		normalizeSchemaTypes(&userKeySchema)
+		is.Equal("", cmp.Diff(actualSchema, userKeySchema))
 	}
 }
 
+// normalizeSchemaTypes normalizes int/long types for comparison
+func normalizeSchemaTypes(schema *AvroSchema) {
+	for i := range schema.Fields {
+		if schema.Fields[i].Type == "int" || schema.Fields[i].Type == "long" {
+			schema.Fields[i].Type = "integer" // neutral name for comparison
+		}
+	}
+}
+
+func normalizeData(data interface{}) interface{} {
+	switch v := data.(type) {
+	case opencdc.StructuredData:
+		result := opencdc.StructuredData{}
+		for k, val := range v {
+			result[k] = normalizeData(val)
+		}
+		return result
+	case map[string]interface{}:
+		result := map[string]interface{}{}
+		for k, val := range v {
+			result[k] = normalizeData(val)
+		}
+		return result
+	case int32:
+		return int64(v)
+	case uint64:
+		// Convert uint64 to int64 for MariaDB compatibility
+		return int64(v)
+	case uint32:
+		// Convert uint32 to int64 for MariaDB compatibility
+		return int64(v)
+	default:
+		return v
+	}
+}
+
+func normalizeMapData(data map[string]any) map[string]any {
+	result := make(map[string]any, len(data))
+	for k, v := range data {
+		switch val := v.(type) {
+		case int32:
+			result[k] = int64(val)
+		case uint32:
+			result[k] = int64(val)
+		case uint64:
+			result[k] = int64(val)
+		default:
+			result[k] = val
+		}
+	}
+	return result
+}
+
+func CompareData(is *is.I, actual, expected map[string]any) {
+	normalizedActual := normalizeMapData(actual)
+	normalizedExpected := normalizeMapData(expected)
+	is.Equal("", cmp.Diff(normalizedExpected, normalizedActual))
+}
+
+// Canal helper functions
 func newCanal(ctx context.Context, is *is.I, tablename string) *canal.Canal {
 	is.Helper()
 
@@ -406,6 +569,7 @@ func (h *testEventHandler) OnRow(e *canal.RowsEvent) error {
 	}
 }
 
-func (h *testEventHandler) String() string {
+// Note: this doesnt seem to be used anywhere
+/* func (h *testEventHandler) String() string {
 	return "testEventHandler"
-}
+} */

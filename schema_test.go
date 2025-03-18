@@ -285,7 +285,7 @@ func TestSchema_Payload_SQLX_Rows(t *testing.T) {
 	expectedSchema := expectedPayloadRecordSchema(is, tableName)
 
 	is.Equal("", cmp.Diff(expectedSchema, actualSchema)) // expected schema != actual schema
-	is.Equal("", cmp.Diff(testData, formatted))          // expected data != actual data
+	testutils.CompareData(is, formatted, testData)       // Use function from test_utils
 }
 
 func TestSchema_Payload_canal_RowsEvent(t *testing.T) {
@@ -327,7 +327,7 @@ func TestSchema_Payload_canal_RowsEvent(t *testing.T) {
 	expectedSchema := expectedPayloadRecordSchema(is, tableName)
 
 	is.Equal("", cmp.Diff(expectedSchema, actualSchema)) // expected schema != actual schema
-	is.Equal("", cmp.Diff(testData, formatted))          // expected data != actual data
+	testutils.CompareData(is, formatted, testData)       // expected data != actual data
 }
 
 func TestSchema_Key(t *testing.T) {

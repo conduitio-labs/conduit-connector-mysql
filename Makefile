@@ -8,6 +8,14 @@ build:
 test: up-database
 	go test $(GOTEST_FLAGS) -v -race ./...
 
+.PHONY: test-mysql
+test-mysql:
+	DB_IMAGE=mysql:8.0.39 make down test
+
+.PHONY: test-mariadb
+test-mariadb:
+	DB_IMAGE=mariadb:10.11 make down test
+
 .PHONY: generate
 generate:
 	go generate ./...

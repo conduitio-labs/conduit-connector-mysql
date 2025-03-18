@@ -5,7 +5,7 @@ networks:
 services:
   db:
     container_name: mysql_db
-    image: mysql:8.0.39
+    image: ${DB_IMAGE:-mysql:8.0.39}
     environment:
       MYSQL_DATABASE: meroxadb
       MYSQL_USER: meroxauser
@@ -15,6 +15,14 @@ services:
       - '3306:3306'
     networks:
       - main
+    command: >
+      --binlog-format=ROW
+      --log-bin=mysql-bin
+      --server-id=1
+    # We've removed the volume here to avoid persisting data between test runs
+    # This ensures each test starts with a clean database state
+    tmpfs:
+      - /var/lib/mysql:rw,noexec,nosuid,size=1024m
     healthcheck:
       test: ['CMD', 'mysqladmin', 'ping', '-h', 'localhost']
       interval: 1s

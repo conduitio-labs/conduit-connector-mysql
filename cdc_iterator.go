@@ -53,19 +53,15 @@ type cdcIteratorConfig struct {
 
 func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (*cdcIterator, error) {
 	// Detect if we're connecting to MariaDB or MySQL
-	var flavor string
-	var version string
-	err := config.db.QueryRowContext(ctx, "SELECT VERSION()").Scan(&version)
-	if err != nil {
+	var flavor, version string
+	switch err := config.db.QueryRowContext(ctx, "SELECT VERSION()").Scan(&version); {
+	case err != nil:
 		sdk.Logger(ctx).Warn().Err(err).Msg("failed to detect database version, defaulting to MySQL")
 		flavor = "mysql"
-	} else {
-		switch {
-		case strings.Contains(version, "MariaDB"):
-			flavor = "mariadb"
-		default:
-			flavor = "mysql"
-		}
+	case strings.Contains(version, "MariaDB"):
+		flavor = "mariadb"
+	default:
+		flavor = "mysql"
 	}
 
 	canal, err := common.NewCanal(ctx, common.CanalConfig{

@@ -19,12 +19,15 @@ services:
       --binlog-format=ROW
       --log-bin=mysql-bin
       --server-id=1
-    # We've removed the volume here to avoid persisting data between test runs
-    # This ensures each test starts with a clean database state
     tmpfs:
       - /var/lib/mysql:rw,noexec,nosuid,size=1024m
     healthcheck:
-      test: ['CMD', 'mysqladmin', 'ping', '-h', 'localhost']
+      test: >
+        /bin/bash -c 'if echo "$DB_IMAGE" | grep -q "mariadb"; then
+          mariadb-admin ping -h localhost;
+        else
+          mysqladmin ping -h localhost;
+        fi'
       interval: 1s
       timeout: 20s
       retries: 30

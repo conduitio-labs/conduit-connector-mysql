@@ -178,3 +178,66 @@ func (d *Destination) parseRecordKey(key opencdc.Data) (any, error) {
 
 	return val, nil
 }
+
+type recordBatch interface {
+	write(ctx context.Context) error
+	add(opencdc.Record)
+}
+
+type upsertBatch struct {
+	recs []opencdc.Record
+}
+
+func (b *upsertBatch) write(ctx context.Context) error {
+	return nil
+}
+
+func (b *upsertBatch) add(rec opencdc.Record) { b.recs = append(b.recs, rec) }
+
+type deleteBatch struct {
+	recs []opencdc.Record
+}
+
+func (b *deleteBatch) write(ctx context.Context) error {
+	return nil
+}
+
+func (b *deleteBatch) add(rec opencdc.Record) { b.recs = append(b.recs, rec) }
+
+// batchRecords follows the following pattern:
+// https://github.com/conduitio-labs/conduit-connector-sqs/blob/c8c94fc6254cc6f2521f179efffb60aa78d399a0/destination/destination.go#L189-L203
+func batchRecords(recs []opencdc.Record) []recordBatch {
+	var batches []recordBatch
+	for _, rec := range recs {
+		switch rec.Operation {
+		case opencdc.OperationSnapshot, opencdc.OperationCreate, opencdc.OperationUpdate:
+			if len(batches) == 0 {
+				batches = append(batches, &upsertBatch{recs: []opencdc.Record{rec}})
+				continue
+			}
+
+			lastBatch := batches[len(batches)-1]
+			if batch, ok := lastBatch.(*upsertBatch); ok {
+				batch.add(rec)
+				continue
+			}
+
+			batches = append(batches, &upsertBatch{recs: []opencdc.Record{rec}})
+		case opencdc.OperationDelete:
+			if len(batches) == 0 {
+				batches = append(batches, &deleteBatch{recs: []opencdc.Record{rec}})
+				continue
+			}
+
+			lastBatch := batches[len(batches)-1]
+			if batch, ok := lastBatch.(*deleteBatch); ok {
+				batch.add(rec)
+				continue
+			}
+
+			batches = append(batches, &deleteBatch{recs: []opencdc.Record{rec}})
+		}
+	}
+
+	return batches
+}

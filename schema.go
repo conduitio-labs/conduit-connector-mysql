@@ -19,6 +19,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"regexp"
 	"strconv"
 	"time"
 
@@ -164,24 +165,31 @@ var rawTypeToAvroTypeMap = map[string]avro.Type{
 	"longblob":        avro.Bytes,
 }
 
+var rawTypeRe = regexp.MustCompile(`(\([^)]+\))`)
+
 func mysqlSchemaToAvroCol(tableCol mysqlschema.TableColumn) (*avroNamedType, error) {
 	avroType, ok := mysqlschemaTypeToAvroTypeMap[tableCol.Type]
 	if !ok {
 		return nil, fmt.Errorf("unsupported column type %s for column %s", tableCol.RawType, tableCol.Name)
 	}
 
-	if tableCol.RawType == "int unsigned" {
+	// Numeric type names could contain the total number of digits that can be stored.
+	// Remove any value in parenthesis to understand real type.
+	// https://dev.mysql.com/doc/refman/8.0/en/numeric-type-syntax.html
+	rawType := rawTypeRe.ReplaceAllString(tableCol.RawType, "")
+
+	if rawType == "int unsigned" {
 		avroType.Type = avro.Long
 	}
 
-	if tableCol.Type == mysqlschema.TYPE_FLOAT && tableCol.RawType == "double" {
+	if tableCol.Type == mysqlschema.TYPE_FLOAT && rawType == "double" {
 		avroType.Type = avro.Double
 	}
 
 	avroColType := &avroNamedType{avroType: avroType, Name: tableCol.Name}
-	rawType, ok := rawTypeToAvroTypeMap[tableCol.RawType]
+	finalType, ok := rawTypeToAvroTypeMap[rawType]
 	if ok {
-		avroColType.Type = rawType
+		avroColType.Type = finalType
 	}
 
 	return avroColType, nil

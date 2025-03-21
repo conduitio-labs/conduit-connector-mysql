@@ -109,7 +109,7 @@ func newCombinedIterator(
 
 	sdk.Logger(ctx).Info().Msg("started snapshot iterator")
 
-	if err := cdcIterator.start(); err != nil {
+	if err := cdcIterator.start(ctx); err != nil {
 		return nil, fmt.Errorf("failed to start cdc iterator: %w", err)
 	}
 

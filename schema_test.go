@@ -75,6 +75,13 @@ type SchemaAllTypes struct {
 	IntCol       int32 `gorm:"column:int_col;type:int"`
 	BigIntCol    int64 `gorm:"column:big_int_col;type:bigint"`
 
+	// Signed Numeric Types with n-digits
+	TinyIntDCol   int32 `gorm:"column:tiny_int_d_col;type:tinyint(1)"`
+	SmallIntDCol  int32 `gorm:"column:small_int_d_col;type:smallint(2)"`
+	MediumIntDCol int32 `gorm:"column:medium_int_d_col;type:mediumint(3)"`
+	IntDCol       int32 `gorm:"column:int_d_col;type:int(5)"`
+	BigIntDCol    int64 `gorm:"column:big_int_d_col;type:bigint(11)"`
+
 	// Unsigned Numeric Types
 	UTinyIntCol   int32 `gorm:"column:utiny_int_col;type:tinyint unsigned"`
 	USmallIntCol  int32 `gorm:"column:usmall_int_col;type:smallint unsigned"`
@@ -85,6 +92,15 @@ type SchemaAllTypes struct {
 	DecimalCol float64 `gorm:"column:decimal_col;type:decimal(10,2)"`
 	FloatCol   float32 `gorm:"column:float_col;type:float(24)"`
 	DoubleCol  float64 `gorm:"column:double_col;type:double"`
+
+	// Unsigned Numeric Types with n-digits
+	UTinyIntDCol   int32 `gorm:"column:utiny_int_d_col;type:tinyint(1) unsigned"`
+	USmallIntDCol  int32 `gorm:"column:usmall_int_d_col;type:smallint(2) unsigned"`
+	UMediumIntDCol int32 `gorm:"column:umedium_int_d_col;type:mediumint(3) unsigned"`
+	UIntDCol       int32 `gorm:"column:uint_d_col;type:int(8) unsigned"`
+	UBigIntDCol    int64 `gorm:"column:ubig_int_d_col;type:bigint(12) unsigned"`
+
+	DoubleDCol float64 `gorm:"column:double_d_col;type:double(10,2)"`
 
 	// Bit Types (most common)
 	Bit1Col  []byte `gorm:"column:bit1_col;type:bit(1)"`
@@ -130,6 +146,13 @@ func expectedPayloadRecordSchema(is *is.I, tableName string) map[string]any {
 		field(is, "int_col", avro.Int),
 		field(is, "big_int_col", avro.Long),
 
+		// Signed Numeric Types with n-digits
+		field(is, "tiny_int_d_col", avro.Int),
+		field(is, "small_int_d_col", avro.Int),
+		field(is, "medium_int_d_col", avro.Int),
+		field(is, "int_d_col", avro.Int),
+		field(is, "big_int_d_col", avro.Long),
+
 		// Unsigned Numeric Types
 		field(is, "utiny_int_col", avro.Int),
 		field(is, "usmall_int_col", avro.Int),
@@ -140,6 +163,15 @@ func expectedPayloadRecordSchema(is *is.I, tableName string) map[string]any {
 		field(is, "decimal_col", avro.Double),
 		field(is, "float_col", avro.Float),
 		field(is, "double_col", avro.Double),
+
+		// Unsigned Numeric Types with n-digits
+		field(is, "utiny_int_d_col", avro.Int),
+		field(is, "usmall_int_d_col", avro.Int),
+		field(is, "umedium_int_d_col", avro.Int),
+		field(is, "uint_d_col", avro.Long),
+		field(is, "ubig_int_d_col", avro.Long),
+
+		field(is, "double_d_col", avro.Double),
 
 		fixed8ByteField(is, "bit1_col"),
 		fixed8ByteField(is, "bit8_col"),
@@ -194,12 +226,28 @@ func allTypesSnapshotTestData() map[string]any {
 		"int_col":        int32(2147483647),
 		"big_int_col":    int64(9223372036854775807),
 
+		// Signed Numeric Types with n-digits
+		"tiny_int_d_col":   int32(1),
+		"small_int_d_col":  int32(32),
+		"medium_int_d_col": int32(838),
+		"int_d_col":        int32(21474),
+		"big_int_d_col":    int64(92233720368),
+
 		// Unsigned max values
 		"utiny_int_col":   int32(255),
 		"usmall_int_col":  int32(65535),
 		"umedium_int_col": int32(16777215),
 		"uint_col":        int64(429496729),
 		"ubig_int_col":    int64(1844674407370955161),
+
+		// Unsigned Numeric Types with n-digits
+		"utiny_int_d_col":   int32(2),
+		"usmall_int_d_col":  int32(65),
+		"umedium_int_d_col": int32(167),
+		"uint_d_col":        int64(42949672),
+		"ubig_int_d_col":    int64(184467440737),
+
+		"double_d_col": 12345678.22,
 
 		"float_col":       float32(123.5),
 		"decimal_col":     123.5,

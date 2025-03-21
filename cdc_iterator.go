@@ -276,6 +276,10 @@ func (c *cdcIterator) buildRecords(ctx context.Context, e rowEvent) ([]opencdc.R
 			// updated rows are going in pairs:
 			// [ row_before, row_after, row_before, row_after ]
 			i++
+			if i >= len(e.Rows) {
+				return records,
+					fmt.Errorf("invalid number of rows in CDC event of type %q", canal.UpdateAction)
+			}
 
 			payloadBefore := payload
 			payloadAfter := c.buildPayload(ctx, payloadSchema, e.Table.Columns, e.Rows[i])

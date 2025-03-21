@@ -5,8 +5,19 @@ build:
 	go build -ldflags "-X 'github.com/conduitio-labs/conduit-connector-mysql.version=${VERSION}'" -o conduit-connector-mysql cmd/connector/main.go
 
 .PHONY: test
-test: up-database
+test: test-mysql test-mariadb down
+
+.PHONY: test-internal
+test-internal: up-database
 	go test $(GOTEST_FLAGS) -v -race ./...
+
+.PHONY: test-mysql
+test-mysql:
+	export DB_IMAGE=mysql:8.0.39 && make test-internal
+
+.PHONY: test-mariadb
+test-mariadb:
+	export DB_IMAGE=mariadb:11.4 && make test-internal
 
 .PHONY: generate
 generate:

@@ -395,17 +395,33 @@ func TestSnapshotIterator_StringSorting(t *testing.T) {
 		{Str: "Apple"},
 	}
 
-	sorted := []Table{
-		{Str: "_apple"},
-		{Str: "123apple"},
-		{Str: "apple"},
-		{Str: "āpple"},
-		{Str: "Apple"},
-		{Str: "BANANA"},
-		{Str: "Zebra"},
-	}
-
 	is.NoErr(db.Create(&data).Error)
+
+	// Different databases may sort strings differently (MySQL vs MariaDB)
+	var expectedSortedStrings []string
+	if testutils.DetectedDBType == testutils.DatabaseTypeMariaDB {
+		// MariaDB sorting order
+		expectedSortedStrings = []string{
+			"123apple",
+			"apple",
+			"āpple",
+			"Apple",
+			"BANANA",
+			"Zebra",
+			"_apple",
+		}
+	} else {
+		// MySQL sorting order
+		expectedSortedStrings = []string{
+			"_apple",
+			"123apple",
+			"apple",
+			"āpple",
+			"Apple",
+			"BANANA",
+			"Zebra",
+		}
+	}
 
 	serverID, err := common.GetServerID(ctx, db.SqlxDB)
 	is.NoErr(err)
@@ -436,12 +452,11 @@ func TestSnapshotIterator_StringSorting(t *testing.T) {
 		recs = append(recs, rec)
 	}
 
-	is.Equal(len(recs), len(sorted))
+	is.Equal(len(recs), len(expectedSortedStrings))
 
-	for i, expectedData := range sorted {
-		actual := recs[i]
-		is.Equal(actual.Operation, opencdc.OperationSnapshot)
-		is.Equal(actual.Payload.After.(opencdc.StructuredData)["str"].(string), expectedData.Str)
+	for i, rec := range recs {
+		is.Equal(rec.Operation, opencdc.OperationSnapshot)
+		is.Equal(rec.Payload.After.(opencdc.StructuredData)["str"].(string), expectedSortedStrings[i])
 	}
 
 	is.NoErr(iterator.Teardown(ctx))

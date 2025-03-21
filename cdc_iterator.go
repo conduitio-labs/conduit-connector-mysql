@@ -39,6 +39,9 @@ type cdcIterator struct {
 	rowsEventsC  chan rowEvent
 	canalRunErrC chan error
 	canalDoneC   chan struct{}
+
+	parsedRecordsC    chan opencdc.Record
+	parsedRecordsErrC chan error
 }
 
 type cdcIteratorConfig struct {
@@ -61,12 +64,14 @@ func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (*cdcIterator
 	}
 
 	return &cdcIterator{
-		config:       config,
-		canal:        canal,
-		position:     config.startPosition,
-		rowsEventsC:  make(chan rowEvent),
-		canalRunErrC: make(chan error),
-		canalDoneC:   make(chan struct{}),
+		config:            config,
+		canal:             canal,
+		position:          config.startPosition,
+		rowsEventsC:       make(chan rowEvent),
+		canalRunErrC:      make(chan error),
+		canalDoneC:        make(chan struct{}),
+		parsedRecordsC:    make(chan opencdc.Record),
+		parsedRecordsErrC: make(chan error),
 	}, nil
 }
 
@@ -84,12 +89,14 @@ func (c *cdcIterator) obtainStartPosition() error {
 	return nil
 }
 
-func (c *cdcIterator) start() error {
+func (c *cdcIterator) start(ctx context.Context) error {
 	startPosition, err := c.getStartPosition()
 	if err != nil {
 		return fmt.Errorf("failed to get start position: %w", err)
 	}
 	eventHandler := newCdcEventHandler(c.canal, c.canalDoneC, c.rowsEventsC)
+
+	go c.readCDCEvents(ctx)
 
 	go func() {
 		c.canal.SetEventHandler(eventHandler)
@@ -119,19 +126,36 @@ func (c *cdcIterator) Ack(context.Context, opencdc.Position) error {
 	return nil
 }
 
-func (c *cdcIterator) Read(ctx context.Context) (rec opencdc.Record, err error) {
+func (c *cdcIterator) readCDCEvents(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-c.canalDoneC:
+			return
+		case data := <-c.rowsEventsC:
+			recs, err := c.buildRecords(ctx, data)
+			if err != nil {
+				c.parsedRecordsErrC <- fmt.Errorf("unable to build record: %w", err)
+			}
+
+			for _, r := range recs {
+				c.parsedRecordsC <- r
+			}
+		}
+	}
+}
+
+func (c *cdcIterator) Read(ctx context.Context) (rec opencdc.Record, _ error) {
 	select {
 	//nolint:wrapcheck // no need to wrap canceled error
 	case <-ctx.Done():
 		return rec, ctx.Err()
 	case <-c.canalDoneC:
 		return rec, fmt.Errorf("canal is closed")
-	case data := <-c.rowsEventsC:
-		rec, err := c.buildRecord(ctx, data)
-		if err != nil {
-			return rec, fmt.Errorf("failed to build record: %w", err)
-		}
-
+	case err := <-c.parsedRecordsErrC:
+		return rec, err
+	case rec := <-c.parsedRecordsC:
 		return rec, nil
 	}
 }
@@ -157,27 +181,26 @@ func (c *cdcIterator) Teardown(ctx context.Context) error {
 	return nil
 }
 
-func (c *cdcIterator) buildRecord(ctx context.Context, e rowEvent) (opencdc.Record, error) {
-	pos := common.CdcPosition{
-		Name: e.binlogName,
-		Pos:  e.Header.LogPos,
-	}.ToSDKPosition()
-
+func (c *cdcIterator) createMetadata(
+	ctx context.Context,
+	e rowEvent,
+	keySchema *schemaMapper,
+	payloadSchema *schemaMapper,
+) (opencdc.Metadata, error) {
 	avroCols := make([]*avroNamedType, len(e.Table.Columns))
 	for i, col := range e.Table.Columns {
 		avroCol, err := mysqlSchemaToAvroCol(col)
 		if err != nil {
-			return opencdc.Record{}, fmt.Errorf("failed to parse avro cols: %w", err)
+			return nil, fmt.Errorf("failed to parse avro cols: %w", err)
 		}
 		avroCols[i] = avroCol
 	}
 
-	payloadSchema, keySchema := newSchemaMapper(), newSchemaMapper()
 	tableName := e.Table.Name
 
 	payloadSubver, err := payloadSchema.createPayloadSchema(ctx, tableName, avroCols)
 	if err != nil {
-		return opencdc.Record{}, fmt.Errorf("failed to create cdc payload schema for table %s: %w", tableName, err)
+		return nil, fmt.Errorf("failed to create cdc payload schema for table %s: %w", tableName, err)
 	}
 
 	metadata := opencdc.Metadata{}
@@ -188,57 +211,91 @@ func (c *cdcIterator) buildRecord(ctx context.Context, e rowEvent) (opencdc.Reco
 	metadata.SetPayloadSchemaSubject(payloadSubver.subject)
 	metadata.SetPayloadSchemaVersion(payloadSubver.version)
 
-	var payloadBefore, payloadAfter, payload opencdc.StructuredData
-	payloadBefore = c.buildPayload(ctx, payloadSchema, e.Table.Columns, e.Rows[0])
-	if len(e.Rows) > 1 {
-		payloadAfter = c.buildPayload(ctx, payloadSchema, e.Table.Columns, e.Rows[1])
-	}
-
-	// payload really is just an alias, but makes buildRecord easier to understand.
-	payload = payloadBefore
-
-	keyCol := c.config.tableSortCols[tableName]
-	var key opencdc.Data
-
-	if keyCol == "" {
-		keyVal := fmt.Sprintf("%s_%d", e.binlogName, e.Header.LogPos)
-		key = opencdc.RawData(keyVal)
-	} else {
+	if keyCol := c.config.tableSortCols[tableName]; keyCol != "" {
 		keyColType, found := findKeyColType(avroCols, keyCol)
 		if !found {
-			return opencdc.Record{}, fmt.Errorf("failed to find key schema column type for table %s", tableName)
+			return nil, fmt.Errorf("failed to find key schema column type for table %s", tableName)
 		}
 
 		keySubver, err := keySchema.createKeySchema(ctx, tableName, keyColType)
 		if err != nil {
-			return opencdc.Record{}, fmt.Errorf("failed to create key schema for table %s: %w", tableName, err)
+			return nil, fmt.Errorf("failed to create key schema for table %s: %w", tableName, err)
 		}
-
-		keyVal := payload[keyCol]
-
-		// In update events, the key has to be the value after the update,
-		// otherwise we could use a stale value.
-		if e.Action == canal.UpdateAction {
-			keyVal = payloadAfter[keyCol]
-		}
-
-		keyVal = keySchema.formatValue(ctx, keyCol, keyVal)
-		key = opencdc.StructuredData{keyCol: keyVal}
 
 		metadata.SetKeySchemaSubject(keySubver.subject)
 		metadata.SetKeySchemaVersion(keySubver.version)
 	}
 
-	switch e.Action {
-	case canal.InsertAction:
-		return sdk.Util.Source.NewRecordCreate(pos, metadata, key, payload), nil
-	case canal.UpdateAction:
-		return sdk.Util.Source.NewRecordUpdate(pos, metadata, key, payloadBefore, payloadAfter), nil
-	case canal.DeleteAction:
-		return sdk.Util.Source.NewRecordDelete(pos, metadata, key, payload), nil
-	default:
-		return opencdc.Record{}, fmt.Errorf("unknown action type: %v", e.Action)
+	return metadata, nil
+}
+
+func (c *cdcIterator) buildKey(
+	ctx context.Context,
+	e rowEvent,
+	payload opencdc.StructuredData,
+	keySchema *schemaMapper,
+) opencdc.Data {
+	keyCol := c.config.tableSortCols[e.Table.Name]
+
+	if keyCol == "" {
+		keyVal := fmt.Sprintf("%s_%d", e.binlogName, e.Header.LogPos)
+		return opencdc.RawData(keyVal)
 	}
+
+	keyVal := keySchema.formatValue(ctx, keyCol, payload[keyCol])
+	return opencdc.StructuredData{keyCol: keyVal}
+}
+
+func (c *cdcIterator) buildRecords(ctx context.Context, e rowEvent) ([]opencdc.Record, error) {
+	var records []opencdc.Record
+
+	keySchema := newSchemaMapper()
+	payloadSchema := newSchemaMapper()
+
+	metadata, err := c.createMetadata(ctx, e, keySchema, payloadSchema)
+	if err != nil {
+		return records, fmt.Errorf("failed to create metadata: %w", err)
+	}
+
+	pos := common.CdcPosition{
+		Name: e.binlogName,
+		Pos:  e.Header.LogPos,
+	}.ToSDKPosition()
+
+	for i := 0; i < len(e.Rows); i++ {
+		payload := c.buildPayload(ctx, payloadSchema, e.Table.Columns, e.Rows[i])
+		key := c.buildKey(ctx, e, payload, keySchema)
+
+		switch e.Action {
+		case canal.InsertAction:
+			records = append(records,
+				sdk.Util.Source.NewRecordCreate(pos, metadata, key, payload),
+			)
+
+		case canal.UpdateAction:
+			// updated rows are going in pairs:
+			// [ row_before, row_after, row_before, row_after ]
+			i++
+
+			payloadBefore := payload
+			payloadAfter := c.buildPayload(ctx, payloadSchema, e.Table.Columns, e.Rows[i])
+			key = c.buildKey(ctx, e, payloadAfter, keySchema)
+
+			records = append(records,
+				sdk.Util.Source.NewRecordUpdate(pos, metadata, key, payloadBefore, payloadAfter),
+			)
+
+		case canal.DeleteAction:
+			records = append(records,
+				sdk.Util.Source.NewRecordDelete(pos, metadata, key, payload),
+			)
+
+		default:
+			return records, fmt.Errorf("unknown action type: %v", e.Action)
+		}
+	}
+
+	return records, nil
 }
 
 func findKeyColType(avroCols []*avroNamedType, keyCol string) (*avroNamedType, bool) {

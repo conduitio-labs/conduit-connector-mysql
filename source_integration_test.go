@@ -16,12 +16,15 @@ package mysql
 
 import (
 	"context"
+	"encoding/json"
+	"slices"
 	"testing"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	testutils "github.com/conduitio-labs/conduit-connector-mysql/test"
 	"github.com/conduitio/conduit-commons/opencdc"
 	sdk "github.com/conduitio/conduit-connector-sdk"
+	"github.com/conduitio/conduit-connector-sdk/schema"
 	"github.com/matryer/is"
 )
 
@@ -149,7 +152,7 @@ func TestSource_EmptyChunkRead(t *testing.T) {
 	}
 }
 
-func TestUnsafeSnapshot(t *testing.T) {
+func TestSource_UnsafeSnapshot(t *testing.T) {
 	is := is.New(t)
 	db := testutils.NewDB(t)
 	var err error
@@ -182,7 +185,7 @@ func TestUnsafeSnapshot(t *testing.T) {
 	defer teardown()
 
 	var recs []opencdc.Record
-	for i := 0; i < len(expectedData); i++ {
+	for range expectedData {
 		rec, err := source.Read(ctx)
 		is.NoErr(err)
 		is.NoErr(source.Ack(ctx, rec.Position))
@@ -194,5 +197,156 @@ func TestUnsafeSnapshot(t *testing.T) {
 		actual := recs[i]
 		is.Equal(actual.Operation, opencdc.OperationSnapshot)
 		is.Equal(actual.Payload.After.(opencdc.StructuredData)["data"].(string), expectedData)
+	}
+}
+
+func TestSource_CompositeKey(t *testing.T) {
+	is := is.New(t)
+	ctx := testutils.TestContext(t)
+	db := testutils.NewDB(t)
+
+	type CompositeKeyTable struct {
+		UserID    int    `gorm:"primaryKey;autoIncrement:false"`
+		TenantID  string `gorm:"primaryKey;size:50"`
+		Email     string `gorm:"size:100;uniqueIndex"`
+		FirstName string `gorm:"size:50"`
+		LastName  string `gorm:"size:50"`
+	}
+
+	tableName := testutils.TableName(is, db, &CompositeKeyTable{})
+	is.NoErr(db.Migrator().DropTable(&CompositeKeyTable{}))
+	is.NoErr(db.AutoMigrate(&CompositeKeyTable{}))
+
+	testData := []CompositeKeyTable{
+		{UserID: 1, TenantID: "tenant1", Email: "user1@example.com", FirstName: "John", LastName: "Doe"},
+		{UserID: 2, TenantID: "tenant1", Email: "user2@example.com", FirstName: "Jane", LastName: "Smith"},
+		{UserID: 1, TenantID: "tenant2", Email: "user3@example.com", FirstName: "Alice", LastName: "Johnson"},
+		{UserID: 2, TenantID: "tenant2", Email: "user4@example.com", FirstName: "Bob", LastName: "Brown"},
+	}
+	is.NoErr(db.Create(&testData).Error)
+
+	source, teardown := testSource(ctx, is, common.SourceConfig{
+		Tables: []string{tableName},
+	})
+	defer teardown()
+
+	var snapshotRecords []opencdc.Record
+	for range testData {
+		rec, err := source.Read(ctx)
+		is.NoErr(err)
+		is.NoErr(source.Ack(ctx, rec.Position))
+
+		is.Equal(rec.Operation, opencdc.OperationSnapshot)
+
+		collection, err := rec.Metadata.GetCollection()
+		is.NoErr(err)
+		is.Equal(collection, tableName)
+
+		payloadSchemaSubject, err := rec.Metadata.GetPayloadSchemaSubject()
+		is.NoErr(err)
+		payloadSchemaVersion, err := rec.Metadata.GetPayloadSchemaVersion()
+		is.NoErr(err)
+
+		keySchemaSubject, err := rec.Metadata.GetKeySchemaSubject()
+		is.NoErr(err)
+		keySchemaVersion, err := rec.Metadata.GetKeySchemaVersion()
+		is.NoErr(err)
+
+		payloadSchema, err := schema.Get(ctx, payloadSchemaSubject, payloadSchemaVersion)
+		is.NoErr(err)
+
+		keySchema, err := schema.Get(ctx, keySchemaSubject, keySchemaVersion)
+		is.NoErr(err)
+
+		var parsedPayloadSchema testutils.AvroSchema
+		is.NoErr(json.Unmarshal(payloadSchema.Bytes, &parsedPayloadSchema))
+
+		var parsedKeySchema testutils.AvroSchema
+		is.NoErr(json.Unmarshal(keySchema.Bytes, &parsedKeySchema))
+
+		is.Equal(parsedPayloadSchema.Type, "record")
+		is.Equal(len(parsedPayloadSchema.Fields), 5)
+
+		is.Equal(parsedKeySchema.Type, "record")
+		is.Equal(len(parsedKeySchema.Fields), 2)
+
+		var keyFieldNames []string
+		for _, field := range parsedKeySchema.Fields {
+			keyFieldNames = append(keyFieldNames, field.Name)
+		}
+		is.True(slices.Contains(keyFieldNames, "user_id"))
+		is.True(slices.Contains(keyFieldNames, "tenant_id"))
+
+		snapshotRecords = append(snapshotRecords, rec)
+	}
+
+	is.Equal(len(snapshotRecords), len(testData))
+
+	for _, rec := range snapshotRecords {
+		key, ok := rec.Key.(opencdc.StructuredData)
+		is.True(ok)
+
+		_, hasUserID := key["user_id"]
+		_, hasTenantID := key["tenant_id"]
+		is.True(hasUserID)
+		is.True(hasTenantID)
+	}
+
+	updatedRecord := testData[0]
+	updatedRecord.FirstName = "Johnny"
+	updatedRecord.LastName = "Doeson"
+	is.NoErr(db.Save(&updatedRecord).Error)
+
+	newRecord := CompositeKeyTable{
+		UserID: 3, TenantID: "tenant1", Email: "user5@example.com",
+		FirstName: "Sarah", LastName: "Wilson",
+	}
+	is.NoErr(db.Create(&newRecord).Error)
+
+	is.NoErr(db.Delete(&testData[3]).Error)
+
+	updateRec, err := source.Read(ctx)
+	is.NoErr(err)
+	is.NoErr(source.Ack(ctx, updateRec.Position))
+	is.Equal(updateRec.Operation, opencdc.OperationUpdate)
+
+	is.True(updateRec.Payload.Before != nil)
+	is.True(updateRec.Payload.After != nil)
+
+	createRec, err := source.Read(ctx)
+	is.NoErr(err)
+	is.NoErr(source.Ack(ctx, createRec.Position))
+	is.Equal(createRec.Operation, opencdc.OperationCreate)
+
+	deleteRec, err := source.Read(ctx)
+	is.NoErr(err)
+	is.NoErr(source.Ack(ctx, deleteRec.Position))
+	is.Equal(deleteRec.Operation, opencdc.OperationDelete)
+
+	is.True(deleteRec.Payload.Before != nil)
+	is.True(deleteRec.Payload.After == nil)
+
+	for _, rec := range []opencdc.Record{updateRec, createRec, deleteRec} {
+		key, ok := rec.Key.(opencdc.StructuredData)
+		is.True(ok)
+
+		_, hasUserID := key["user_id"]
+		_, hasTenantID := key["tenant_id"]
+		is.True(hasUserID)
+		is.True(hasTenantID)
+
+		keySchemaSubject, err := rec.Metadata.GetKeySchemaSubject()
+		is.NoErr(err)
+		keySchemaVersion, err := rec.Metadata.GetKeySchemaVersion()
+		is.NoErr(err)
+
+		keySchema, err := schema.Get(ctx, keySchemaSubject, keySchemaVersion)
+		is.NoErr(err)
+
+		var parsedKeySchema testutils.AvroSchema
+		is.NoErr(json.Unmarshal(keySchema.Bytes, &parsedKeySchema))
+
+		is.Equal(parsedKeySchema.Type, "record")
+		is.Equal(len(parsedKeySchema.Fields), 2) // Both parts of the composite key
 	}
 }

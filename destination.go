@@ -59,25 +59,17 @@ func (d *Destination) Write(ctx context.Context, recs []opencdc.Record) (written
 	//nolint:errcheck // will always error if committed, no need to check
 	defer tx.Rollback()
 
-	for _, rec := range recs {
-		switch rec.Operation {
-		case opencdc.OperationSnapshot:
-			if err := d.upsertRecord(ctx, tx, rec); err != nil {
-				return 0, err
-			}
-		case opencdc.OperationCreate:
-			if err := d.upsertRecord(ctx, tx, rec); err != nil {
-				return 0, err
-			}
-		case opencdc.OperationUpdate:
-			if err := d.upsertRecord(ctx, tx, rec); err != nil {
-				return 0, err
-			}
-		case opencdc.OperationDelete:
-			if err := d.deleteRecord(ctx, tx, rec); err != nil {
-				return 0, err
-			}
+	batches, err := batchRecords(recs)
+	if err != nil {
+		return 0, fmt.Errorf("failed to batch records: %w", err)
+	}
+
+	for _, batch := range batches {
+		n, err := batch.write(ctx, tx)
+		if err != nil {
+			return written, fmt.Errorf("failed to write %s batch: %w", batch.name(), err)
 		}
+		written += n
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -95,6 +87,9 @@ func (d *Destination) Teardown(_ context.Context) error {
 	}
 
 	return nil
+}
+
+func (d *Destination) upsertBatch(ctx context.Context, tx *sqlx.Tx, recs []opencdc.Record) (int, error) {
 }
 
 func (d *Destination) upsertRecord(ctx context.Context, tx *sqlx.Tx, rec opencdc.Record) error {
@@ -179,65 +174,70 @@ func (d *Destination) parseRecordKey(key opencdc.Data) (any, error) {
 	return val, nil
 }
 
-type recordBatch interface {
-	write(ctx context.Context) error
-	add(opencdc.Record)
+type recordBatchKind string
+
+func newRecordKind(op opencdc.Operation) recordBatchKind {
+	switch op {
+	case opencdc.OperationSnapshot, opencdc.OperationCreate, opencdc.OperationUpdate:
+		return upsertBatchKind
+	case opencdc.OperationDelete:
+		return deleteBatchKind
+	default:
+		return ""
+	}
 }
 
-type upsertBatch struct {
-	recs []opencdc.Record
+const (
+	upsertBatchKind recordBatchKind = "upsert"
+	deleteBatchKind recordBatchKind = "delete"
+)
+
+type recordBatch struct {
+	kind  recordBatchKind
+	table string
+	recs  []opencdc.Record
 }
 
-func (b *upsertBatch) write(ctx context.Context) error {
-	return nil
-}
+func batchRecords(recs []opencdc.Record) ([]recordBatch, error) {
+	if len(recs) == 0 {
+		return nil, nil
+	}
 
-func (b *upsertBatch) add(rec opencdc.Record) { b.recs = append(b.recs, rec) }
+	firstRec := recs[0]
+	table, err := firstRec.Metadata.GetCollection()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get collection: %w", err)
+	}
 
-type deleteBatch struct {
-	recs []opencdc.Record
-}
-
-func (b *deleteBatch) write(ctx context.Context) error {
-	return nil
-}
-
-func (b *deleteBatch) add(rec opencdc.Record) { b.recs = append(b.recs, rec) }
-
-// batchRecords follows the following pattern:
-// https://github.com/conduitio-labs/conduit-connector-sqs/blob/c8c94fc6254cc6f2521f179efffb60aa78d399a0/destination/destination.go#L189-L203
-func batchRecords(recs []opencdc.Record) []recordBatch {
 	var batches []recordBatch
+	currBatch := recordBatch{
+		kind:  newRecordKind(recs[0].Operation),
+		table: table,
+		recs:  []opencdc.Record{firstRec},
+	}
+
+	recs = recs[1:]
+
 	for _, rec := range recs {
-		switch rec.Operation {
-		case opencdc.OperationSnapshot, opencdc.OperationCreate, opencdc.OperationUpdate:
-			if len(batches) == 0 {
-				batches = append(batches, &upsertBatch{recs: []opencdc.Record{rec}})
-				continue
-			}
+		table, err := rec.Metadata.GetCollection()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get collection: %w", err)
+		}
 
-			lastBatch := batches[len(batches)-1]
-			if batch, ok := lastBatch.(*upsertBatch); ok {
-				batch.add(rec)
-				continue
+		kind := newRecordKind(rec.Operation)
+		if currBatch.kind == kind && currBatch.table == table {
+			currBatch.recs = append(currBatch.recs, rec)
+		} else {
+			batches = append(batches, currBatch)
+			currBatch = recordBatch{
+				kind:  kind,
+				table: table,
+				recs:  []opencdc.Record{rec},
 			}
-
-			batches = append(batches, &upsertBatch{recs: []opencdc.Record{rec}})
-		case opencdc.OperationDelete:
-			if len(batches) == 0 {
-				batches = append(batches, &deleteBatch{recs: []opencdc.Record{rec}})
-				continue
-			}
-
-			lastBatch := batches[len(batches)-1]
-			if batch, ok := lastBatch.(*deleteBatch); ok {
-				batch.add(rec)
-				continue
-			}
-
-			batches = append(batches, &deleteBatch{recs: []opencdc.Record{rec}})
 		}
 	}
 
-	return batches
+	batches = append(batches, currBatch)
+
+	return batches, nil
 }

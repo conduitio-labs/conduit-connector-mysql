@@ -61,8 +61,9 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 		return fmt.Errorf("failed to connect to mysql: %w", err)
 	}
 
+	var canalRegexes []string
 	sdk.Logger(ctx).Info().Msg("Parsing table regexes...")
-	s.config.Tables, err = s.getAndFilterTables(ctx, s.db, mysqlCfg.DBName)
+	s.config.Tables, canalRegexes, err = s.getAndFilterTables(ctx, s.db, mysqlCfg.DBName)
 	if err != nil {
 		return err
 	}
@@ -99,6 +100,7 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 		startCdcPosition:      pos.CdcPosition,
 		database:              mysqlCfg.DBName,
 		tables:                s.config.Tables,
+		canalRegexes:          canalRegexes,
 		serverID:              serverID,
 		mysqlConfig:           mysqlCfg,
 		disableCanalLogging:   s.config.DisableCanalLogs,
@@ -139,13 +141,13 @@ func (s *Source) Teardown(ctx context.Context) error {
 	return nil
 }
 
-func (s *Source) getAndFilterTables(ctx context.Context, db *sqlx.DB, database string) ([]string, error) {
+func (s *Source) getAndFilterTables(ctx context.Context, db *sqlx.DB, database string) ([]string, []string, error) {
 	query := "SELECT table_name FROM information_schema.tables WHERE table_schema = ?"
 
 	rows, err := db.Queryx(query, database) //nolint:sqlclosecheck //false positive in latest version. Issue #35
 	if err != nil {
 		sdk.Logger(ctx).Error().Err(err).Msg("failed to query tables")
-		return nil, fmt.Errorf("failed to query tables: %w", err)
+		return nil, nil, fmt.Errorf("failed to query tables: %w", err)
 	}
 	defer rows.Close()
 
@@ -153,12 +155,12 @@ func (s *Source) getAndFilterTables(ctx context.Context, db *sqlx.DB, database s
 	for rows.Next() {
 		var tableName string
 		if err := rows.Scan(&tableName); err != nil {
-			return nil, fmt.Errorf("failed to scan table name: %w", err)
+			return nil, nil, fmt.Errorf("failed to scan table name: %w", err)
 		}
 		tables = append(tables, tableName)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("rows error: %w", err)
+		return nil, nil, fmt.Errorf("rows error: %w", err)
 	}
 
 	includedTables := make(map[string]bool)
@@ -166,19 +168,26 @@ func (s *Source) getAndFilterTables(ctx context.Context, db *sqlx.DB, database s
 	// Process each rule
 	for _, rule := range s.config.Tables {
 		if err := s.processTableRule(rule, tables, includedTables); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 
-	var result []string
+	var finalTables []string
 	// Collect all the tables that were included (true in map)
 	for table, included := range includedTables {
 		if included {
-			result = append(result, table)
+			finalTables = append(finalTables, table)
 		}
 	}
 
-	return result, nil
+	var canalRegexes []string
+	for _, table := range finalTables {
+		// prefix with db name because Canal does the same for the key, so we can't prefix with ^ to prevent undesired matches.
+		// Append $ to prevent undesired matches.
+		canalRegexes = append(canalRegexes, fmt.Sprintf("%s.%s$", database, regexp.QuoteMeta(table)))
+	}
+
+	return finalTables, canalRegexes, nil
 }
 
 func (s *Source) processTableRule(rule string, tables []string, includedTables map[string]bool) error {

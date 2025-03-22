@@ -180,7 +180,7 @@ func (s *Source) getAndFilterTables(ctx context.Context, db *sqlx.DB, database s
 		}
 	}
 
-	var canalRegexes []string
+	canalRegexes := make([]string, 0, len(finalTables))
 	for _, table := range finalTables {
 		// prefix with db name because Canal does the same for the key, so we can't prefix with ^ to prevent undesired matches.
 		// Append $ to prevent undesired matches.

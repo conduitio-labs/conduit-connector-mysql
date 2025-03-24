@@ -82,8 +82,10 @@ func (c *cdcIterator) obtainStartPosition() error {
 	}
 
 	c.position = &common.CdcPosition{
-		Name: masterPos.Name,
-		Pos:  masterPos.Pos,
+		ReplicationEventPosition: common.ReplicationEventPosition{
+			Name: masterPos.Name,
+			Pos:  masterPos.Pos,
+		},
 	}
 
 	return nil
@@ -96,13 +98,20 @@ func (c *cdcIterator) start(ctx context.Context) error {
 	}
 	eventHandler := newCdcEventHandler(c.canal, c.canalDoneC, c.rowsEventsC)
 
-	go c.readCDCEvents(ctx)
+	go c.readCDCEvents(ctx, startPosition)
 
 	go func() {
 		c.canal.SetEventHandler(eventHandler)
-		pos := startPosition.ToMysqlPos()
 
-		c.canalRunErrC <- c.canal.RunFrom(pos)
+		// We need to run canal from Previous position to be sure
+		// we didn't lose any record from nulti-row mysql replication
+		// event.
+		pos := startPosition.ReplicationEventPosition
+		if startPosition.PrevPosition != nil {
+			pos = *startPosition.PrevPosition
+		}
+
+		c.canalRunErrC <- c.canal.RunFrom(pos.ToMysqlPos())
 	}()
 
 	return nil
@@ -119,28 +128,66 @@ func (c *cdcIterator) getStartPosition() (common.CdcPosition, error) {
 		return cdcPosition, fmt.Errorf("failed to get master position: %w", err)
 	}
 
-	return common.CdcPosition{Name: masterPos.Name, Pos: masterPos.Pos}, nil
+	return common.CdcPosition{
+		ReplicationEventPosition: common.ReplicationEventPosition{
+			Name: masterPos.Name,
+			Pos:  masterPos.Pos,
+		},
+	}, nil
 }
 
 func (c *cdcIterator) Ack(context.Context, opencdc.Position) error {
 	return nil
 }
 
-func (c *cdcIterator) readCDCEvents(ctx context.Context) {
+func (c *cdcIterator) readCDCEvents(ctx context.Context, startPosition common.CdcPosition) {
+	// MySQL replication event could contain multiple rows
+	// with the same position.
+	// The Index identifier describes the row index in such an event.
+	// Here we need to start replication from an absolute position,
+	// including the row index.
+	requiredOffset := startPosition.Index + 1
+
+	// If there was no prev position, we started replication
+	// from the very beginning => don't try to skip any records.
+	if startPosition.PrevPosition == nil {
+		requiredOffset = 0
+	}
+
+	prevPosition := common.ReplicationEventPosition{
+		Name: startPosition.Name,
+		Pos:  startPosition.Pos,
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-c.canalDoneC:
 			return
-		case data := <-c.rowsEventsC:
-			recs, err := c.buildRecords(ctx, data)
+		case e := <-c.rowsEventsC:
+			recs, err := c.buildRecords(ctx, e, prevPosition)
 			if err != nil {
 				c.parsedRecordsErrC <- fmt.Errorf("unable to build record: %w", err)
 			}
 
-			for _, r := range recs {
-				c.parsedRecordsC <- r
+			if len(recs) < requiredOffset {
+				// should be impossible
+				sdk.Logger(ctx).Error().
+					Any("position", startPosition).
+					Msg("unexpected number of rows in the event: some records could be lost")
+			}
+
+			for i := requiredOffset; i < len(recs); i++ {
+				c.parsedRecordsC <- recs[i]
+			}
+
+			// Only a part of the first event could be skipped.
+			requiredOffset = 0
+
+			prevPosition = common.ReplicationEventPosition{
+				Name: e.binlogName,
+				Pos:  e.Header.LogPos,
 			}
 		}
 	}
@@ -246,7 +293,11 @@ func (c *cdcIterator) buildKey(
 	return opencdc.StructuredData{keyCol: keyVal}
 }
 
-func (c *cdcIterator) buildRecords(ctx context.Context, e rowEvent) ([]opencdc.Record, error) {
+func (c *cdcIterator) buildRecords(
+	ctx context.Context,
+	e rowEvent,
+	prevPos common.ReplicationEventPosition,
+) ([]opencdc.Record, error) {
 	var records []opencdc.Record
 
 	keySchema := newSchemaMapper()
@@ -257,14 +308,18 @@ func (c *cdcIterator) buildRecords(ctx context.Context, e rowEvent) ([]opencdc.R
 		return records, fmt.Errorf("failed to create metadata: %w", err)
 	}
 
-	pos := common.CdcPosition{
-		Name: e.binlogName,
-		Pos:  e.Header.LogPos,
-	}.ToSDKPosition()
-
 	for i := 0; i < len(e.Rows); i++ {
 		payload := c.buildPayload(ctx, payloadSchema, e.Table.Columns, e.Rows[i])
 		key := c.buildKey(ctx, e, payload, keySchema)
+
+		pos := common.CdcPosition{
+			ReplicationEventPosition: common.ReplicationEventPosition{
+				Name: e.binlogName,
+				Pos:  e.Header.LogPos,
+			},
+			PrevPosition: &prevPos,
+			Index:        len(records),
+		}.ToSDKPosition()
 
 		switch e.Action {
 		case canal.InsertAction:

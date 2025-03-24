@@ -77,13 +77,24 @@ type TablePosition struct {
 	SnapshotEnd any `json:"snapshot_end"`
 }
 
-type CdcPosition struct {
+type ReplicationEventPosition struct {
 	// Name represents the mysql binlog filename.
 	Name string `json:"name"`
 	Pos  uint32 `json:"pos"`
 }
 
-func (p CdcPosition) ToMysqlPos() mysql.Position {
+type CdcPosition struct {
+	ReplicationEventPosition
+
+	// Index represents the row index in the mysql replication event.
+	Index int `json:"idx,omitempty"`
+
+	// PrevPosition represents position of the mysql replication
+	// event just before the current one.
+	PrevPosition *ReplicationEventPosition `json:"prev,omitempty"`
+}
+
+func (p ReplicationEventPosition) ToMysqlPos() mysql.Position {
 	return mysql.Position{
 		Name: p.Name,
 		Pos:  p.Pos,

@@ -275,3 +275,60 @@ func TestCDCIterator_RestartOnPosition(t *testing.T) {
 	testutils.ReadAndAssertCreate(ctx, is, iterator, user4)
 	testutils.ReadAndAssertCreate(ctx, is, iterator, user5)
 }
+
+func TestCDCIterator_RestartOnEventCenter(t *testing.T) {
+	ctx := testutils.TestContext(t)
+	is := is.New(t)
+
+	db := testutils.NewDB(t)
+
+	testutils.RecreateUsersTable(is, db)
+
+	// start the iterator at the beginning
+
+	iterator, teardown := testCdcIterator(ctx, t, is)
+
+	// and trigger some insert actions
+
+	var users []*testutils.User
+	for i := 10; i < 100; i++ { // 90 items
+		users = append(users, testutils.CreateUser(i))
+	}
+
+	// Following call triggers a single mysql request:
+	//   INSERT INTO users (col1, col2) VALUES (val1, val2), (val3, val4), ...
+	// which generates multiple rows in a single CDC event.
+	is.NoErr(db.Create(users).Error)
+
+	var latestPosition opencdc.Position
+	lastIdx := 15
+
+	{ // read and ack 2 records
+		for i := 0; i < lastIdx; i++ {
+			testutils.ReadAndAssertCreate(ctx, is, iterator, *users[i])
+		}
+
+		rec := testutils.ReadAndAssertCreate(ctx, is, iterator, *users[lastIdx])
+		teardown()
+
+		lastIdx++
+		latestPosition = rec.Position
+		t.Logf("Last position: %+v", latestPosition)
+	}
+
+	// then, try to read from the second record
+
+	iterator, teardown = testCdcIteratorAtPosition(ctx, t, is, latestPosition)
+	defer teardown()
+
+	var newUsers []*testutils.User
+	for i := 110; i < 130; i++ {
+		newUsers = append(newUsers, testutils.CreateUser(i))
+	}
+	is.NoErr(db.Create(newUsers).Error)
+
+	users = append(users, newUsers...)
+	for i := lastIdx; i < len(users); i++ {
+		testutils.ReadAndAssertCreate(ctx, is, iterator, *users[i])
+	}
+}

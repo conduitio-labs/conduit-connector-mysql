@@ -34,8 +34,11 @@ func testSource(ctx context.Context, is *is.I, cfg common.SourceConfig) (sdk.Sou
 	cfg.DSN = testutils.DSN
 	cfg.DisableCanalLogs = true
 
-	sourceCfg := source.Config().(*common.SourceConfig)
-	*sourceCfg = cfg
+	err := sdk.Util.ParseConfig(ctx,
+		cfgToMap(is, cfg), source.Config(),
+		Connector.NewSpecification().SourceParams,
+	)
+	is.NoErr(err)
 
 	is.NoErr(source.Open(ctx, nil))
 

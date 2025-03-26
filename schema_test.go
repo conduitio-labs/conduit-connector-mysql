@@ -17,6 +17,7 @@ package mysql
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -49,6 +50,23 @@ func toMap(is *is.I, bs []byte) map[string]any {
 	is.NoErr(json.Unmarshal(bs, &m))
 
 	return m
+}
+
+func cfgToMap(is *is.I, cfg any) map[string]string {
+	bs, err := json.Marshal(cfg)
+	is.NoErr(err)
+
+	m := map[string]any{}
+	is.NoErr(json.Unmarshal(bs, &m))
+
+	result := map[string]string{}
+	for key, val := range m {
+		if val != nil {
+			result[key] = fmt.Sprint(val)
+		}
+	}
+
+	return result
 }
 
 func expectedKeyRecordSchema(is *is.I, tableName string) map[string]any {

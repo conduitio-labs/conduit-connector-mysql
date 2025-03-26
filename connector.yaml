@@ -69,7 +69,7 @@ specification:
 
     ## Destination
 
-    The MySQL destination takes a `opencdc.Record` and parses it into a valid SQL query. Each record is individually parsed and upserted. Writing in batches is [planned](https://github.com/conduitio-labs/conduit-connector-mysql/issues/63) to be implemented, which should greatly improve performance over the current implementation.
+    The MySQL destination takes a slice of `opencdc.Record` and writes them in batches to MySQL. It will use the `opencdc.collection` field in the metadata to determine the table to write to.
 
     ### Upsert Behavior
 
@@ -77,11 +77,7 @@ specification:
 
     If the target table already contains a record with the same key, the Destination will upsert with its current received values. Because Keys must be unique, this can overwrite and thus potentially lose data, so keys should be assigned correctly from the Source.
 
-    If there is no key, the record will be simply appended.
-
-    ### Multicollection mode
-
-    (Planned to do). You can upvote [the following issue](https://github.com/conduitio-labs/conduit-connector-mysql/issues/13) to add more interest on getting this feature implemented sooner.
+    If a unique key is not present in the target table, the record will be simply appended.
 
     ## Requirements and compatibility
 
@@ -215,20 +211,6 @@ specification:
     parameters:
       - name: dsn
         description: DSN is the connection string for the MySQL database.
-        type: string
-        default: ""
-        validations:
-          - type: required
-            value: ""
-      - name: key
-        description: Key is the primary key of the specified table.
-        type: string
-        default: ""
-        validations:
-          - type: required
-            value: ""
-      - name: table
-        description: Table is used as the target table into which records are inserted.
         type: string
         default: ""
         validations:

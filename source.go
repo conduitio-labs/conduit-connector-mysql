@@ -23,7 +23,6 @@ import (
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	"github.com/conduitio/conduit-commons/opencdc"
 	sdk "github.com/conduitio/conduit-connector-sdk"
-	"github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -47,22 +46,17 @@ func (s *Source) Config() sdk.SourceConfig {
 }
 
 func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) {
-	mysqlCfg, err := mysql.ParseDSN(s.config.DSN)
-	if err != nil {
-		return fmt.Errorf("failed to parse given URL: %w", err)
-	}
-
 	// force parse time to true, as we need to take control over how do we
 	// handle time.Time values
-	mysqlCfg.ParseTime = true
+	s.config.MysqlCfg().ParseTime = true
 
-	s.db, err = sqlx.Open("mysql", mysqlCfg.FormatDSN())
+	s.db, err = sqlx.Open("mysql", s.config.MysqlCfg().FormatDSN())
 	if err != nil {
 		return fmt.Errorf("failed to connect to mysql: %w", err)
 	}
 
 	sdk.Logger(ctx).Info().Msg("Parsing table regexes...")
-	s.config.Tables, err = s.getAndFilterTables(ctx, s.db, mysqlCfg.DBName)
+	s.config.Tables, err = s.getAndFilterTables(ctx, s.db, s.config.MysqlCfg().DBName)
 	if err != nil {
 		return err
 	}
@@ -72,7 +66,7 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 		Int("count", len(s.config.Tables)).
 		Msgf("Successfully detected tables")
 
-	tableKeys, err := s.getTableKeys(ctx, mysqlCfg.DBName)
+	tableKeys, err := s.getTableKeys(ctx, s.config.MysqlCfg().DBName)
 	if err != nil {
 		return fmt.Errorf("failed to get table keys: %w", err)
 	}
@@ -97,10 +91,10 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 		primaryKeys:           tableKeys,
 		startSnapshotPosition: pos.SnapshotPosition,
 		startCdcPosition:      pos.CdcPosition,
-		database:              mysqlCfg.DBName,
+		database:              s.config.MysqlCfg().DBName,
 		tables:                s.config.Tables,
 		serverID:              serverID,
-		mysqlConfig:           mysqlCfg,
+		mysqlConfig:           s.config.MysqlCfg(),
 		disableCanalLogging:   s.config.DisableCanalLogs,
 		fetchSize:             s.config.FetchSize,
 	})
@@ -242,31 +236,6 @@ func ParseRule(rule string) (Action, string, error) {
 	return action, rule, nil // Return action and regex (without the action prefix)
 }
 
-func getPrimaryKeys(db *sqlx.DB, database, table string) (common.PrimaryKeys, error) {
-	var primaryKeys []struct {
-		ColumnName string `db:"COLUMN_NAME"`
-	}
-
-	err := db.Select(&primaryKeys, `
-		SELECT COLUMN_NAME
-		FROM information_schema.key_column_usage
-		WHERE constraint_name = 'PRIMARY'
-			AND table_schema = ?
-			AND table_name = ?
-		ORDER BY ORDINAL_POSITION
-	`, database, table)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get primary key(s) from table %s: %w", table, err)
-	}
-
-	var keys common.PrimaryKeys
-	for _, pk := range primaryKeys {
-		keys = append(keys, pk.ColumnName)
-	}
-
-	return keys, nil
-}
-
 func (s *Source) getTableKeys(ctx context.Context, dbName string) (map[string]common.PrimaryKeys, error) {
 	tableKeys := make(map[string]common.PrimaryKeys)
 
@@ -277,7 +246,7 @@ func (s *Source) getTableKeys(ctx context.Context, dbName string) (map[string]co
 			continue
 		}
 
-		primaryKeys, err := getPrimaryKeys(s.db, dbName, table)
+		primaryKeys, err := common.GetPrimaryKeys(s.db, dbName, table)
 		if err != nil {
 			if s.config.UnsafeSnapshot {
 				sdk.Logger(ctx).Warn().Msgf(

@@ -29,11 +29,13 @@ import (
 func testDestination(ctx context.Context, is *is.I) (sdk.Destination, func()) {
 	destination := &Destination{}
 
-	destCfg := destination.Config().(*common.DestinationConfig)
+	destCfg := common.DestinationConfig{Config: common.Config{DSN: testutils.DSN}}
 
-	destCfg.DSN = testutils.DSN
-	destCfg.Table = "users"
-	destCfg.Key = "id"
+	err := sdk.Util.ParseConfig(ctx,
+		cfgToMap(is, destCfg), destination.Config(),
+		Connector.NewSpecification().DestinationParams,
+	)
+	is.NoErr(err)
 
 	is.NoErr(destination.Open(ctx))
 

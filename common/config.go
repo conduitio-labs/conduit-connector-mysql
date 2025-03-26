@@ -62,13 +62,16 @@ func (s *SourceConfig) MysqlCfg() *mysql.Config {
 	return s.mysqlCfg
 }
 
-func (c *SourceConfig) Validate(context.Context) error {
-	mysqlCfg, err := mysql.ParseDSN(c.DSN)
+func (s *SourceConfig) Validate(context.Context) error {
+	mysqlCfg, err := mysql.ParseDSN(s.DSN)
 	if err != nil {
 		return fmt.Errorf("failed to parse DSN: %w", err)
 	}
 
-	c.mysqlCfg = mysqlCfg
+	// we need to take control over how do we handle time.Time values
+	mysqlCfg.ParseTime = true
+
+	s.mysqlCfg = mysqlCfg
 
 	return nil
 }
@@ -101,14 +104,14 @@ func (d *DestinationConfig) TableKeyFetcher() *TableKeyFetcher {
 	return d.tableKeyFetcher
 }
 
-func (c *DestinationConfig) Validate(context.Context) error {
-	mysqlCfg, err := mysql.ParseDSN(c.DSN)
+func (d *DestinationConfig) Validate(context.Context) error {
+	mysqlCfg, err := mysql.ParseDSN(d.DSN)
 	if err != nil {
 		return fmt.Errorf("failed to parse DSN: %w", err)
 	}
 
-	c.mysqlCfg = mysqlCfg
-	c.tableKeyFetcher = NewTableKeyFetcher(mysqlCfg.DBName)
+	d.mysqlCfg = mysqlCfg
+	d.tableKeyFetcher = NewTableKeyFetcher(mysqlCfg.DBName)
 
 	return nil
 }

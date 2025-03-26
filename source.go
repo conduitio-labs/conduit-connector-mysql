@@ -46,10 +46,6 @@ func (s *Source) Config() sdk.SourceConfig {
 }
 
 func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) {
-	// force parse time to true, as we need to take control over how do we
-	// handle time.Time values
-	s.config.MysqlCfg().ParseTime = true
-
 	s.db, err = sqlx.Open("mysql", s.config.MysqlCfg().FormatDSN())
 	if err != nil {
 		return fmt.Errorf("failed to connect to mysql: %w", err)

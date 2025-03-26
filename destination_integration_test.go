@@ -18,7 +18,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	testutils "github.com/conduitio-labs/conduit-connector-mysql/test"
 	"github.com/conduitio/conduit-commons/opencdc"
 	sdk "github.com/conduitio/conduit-connector-sdk"
@@ -29,10 +28,12 @@ import (
 func testDestination(ctx context.Context, is *is.I) (sdk.Destination, func()) {
 	destination := &Destination{}
 
-	destCfg := common.DestinationConfig{Config: common.Config{DSN: testutils.DSN}}
+	destCfg := map[string]string{
+		"dsn": testutils.DSN,
+	}
 
 	err := sdk.Util.ParseConfig(ctx,
-		cfgToMap(is, destCfg), destination.Config(),
+		destCfg, destination.Config(),
 		Connector.NewSpecification().DestinationParams,
 	)
 	is.NoErr(err)
@@ -206,3 +207,4 @@ func TestDestination_OperationDelete(t *testing.T) {
 	total := testutils.CountUsers(is, db)
 	is.Equal(total, 0)
 }
+

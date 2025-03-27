@@ -184,7 +184,7 @@ func (s *Source) getAndFilterTables(ctx context.Context, db *sqlx.DB, database s
 	for _, table := range finalTables {
 		// prefix with db name because Canal does the same for the key, so we can't prefix with ^ to prevent undesired matches.
 		// Append $ to prevent undesired matches.
-		canalRegexes = append(canalRegexes, fmt.Sprintf("%s.%s$", database, regexp.QuoteMeta(table)))
+		canalRegexes = append(canalRegexes, fmt.Sprintf("^%s.%s$", database, regexp.QuoteMeta(table)))
 	}
 
 	return finalTables, canalRegexes, nil

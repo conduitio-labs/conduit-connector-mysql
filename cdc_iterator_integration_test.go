@@ -303,7 +303,7 @@ func TestCDCIterator_RestartOnEventCenter(t *testing.T) {
 	var latestPosition opencdc.Position
 	lastIdx := 15
 
-	{ // read and ack 2 records
+	{ // read and ack some records
 		for i := 0; i < lastIdx; i++ {
 			testutils.ReadAndAssertCreate(ctx, is, iterator, *users[i])
 		}
@@ -313,10 +313,9 @@ func TestCDCIterator_RestartOnEventCenter(t *testing.T) {
 
 		lastIdx++
 		latestPosition = rec.Position
-		t.Logf("Last position: %+v", latestPosition)
 	}
 
-	// then, try to read from the second record
+	// then, try to read from the next record
 
 	iterator, teardown = testCdcIteratorAtPosition(ctx, t, is, latestPosition)
 	defer teardown()

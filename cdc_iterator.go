@@ -168,7 +168,13 @@ func (c *cdcIterator) readCDCEvents(ctx context.Context, startPosition common.Cd
 		case e := <-c.rowsEventsC:
 			recs, err := c.buildRecords(ctx, e, prevPosition)
 			if err != nil {
-				c.parsedRecordsErrC <- fmt.Errorf("unable to build record: %w", err)
+				select {
+				case <-ctx.Done():
+					return
+				case <-c.canalDoneC:
+					return
+				case c.parsedRecordsErrC <- fmt.Errorf("unable to build record: %w", err):
+				}
 			}
 
 			if len(recs) < requiredOffset {
@@ -179,7 +185,13 @@ func (c *cdcIterator) readCDCEvents(ctx context.Context, startPosition common.Cd
 			}
 
 			for i := requiredOffset; i < len(recs); i++ {
-				c.parsedRecordsC <- recs[i]
+				select {
+				case <-ctx.Done():
+					return
+				case <-c.canalDoneC:
+					return
+				case c.parsedRecordsC <- recs[i]:
+				}
 			}
 
 			// Only a part of the first event could be skipped.

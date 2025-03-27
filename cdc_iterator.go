@@ -104,7 +104,7 @@ func (c *cdcIterator) start(ctx context.Context) error {
 		c.canal.SetEventHandler(eventHandler)
 
 		// We need to run canal from Previous position to be sure
-		// we didn't lose any record from nulti-row mysql replication
+		// we didn't lose any record from multi-row mysql replication
 		// event.
 		pos := startPosition.ReplicationEventPosition
 		if startPosition.PrevPosition != nil {

@@ -134,7 +134,7 @@ func TestSource_TableFilterRegex(t *testing.T) {
 
 			var expectedRegexes []string
 			for _, expectedTable := range tc.expectedTables {
-				expectedRegexes = append(expectedRegexes, fmt.Sprintf("%s.%s$", "meroxadb", regexp.QuoteMeta(expectedTable)))
+				expectedRegexes = append(expectedRegexes, fmt.Sprintf("^%s.%s$", "meroxadb", regexp.QuoteMeta(expectedTable)))
 			}
 			sortStrings(regexes)
 			if len(expectedRegexes) == 0 && len(regexes) == 0 {

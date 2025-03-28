@@ -208,3 +208,69 @@ func TestDestination_OperationDelete(t *testing.T) {
 	is.Equal(total, 0)
 }
 
+func TestDestination_HandleUniqueConflicts(t *testing.T) {
+	ctx := testutils.TestContext(t)
+	is := is.New(t)
+	db := testutils.NewDB(t)
+
+	type CustomUser struct {
+		ID       int    `gorm:"primaryKey" json:"id" db:"id"`
+		Username string `gorm:"type:varchar(100);unique" json:"username" db:"username"`
+		Email    string `gorm:"type:varchar(100);uniqueIndex:idx_email_age" json:"email" db:"email"`
+		Age      int    `gorm:"uniqueIndex:idx_email_age" json:"age" db:"age"`
+	}
+
+	testutils.CreateTables(is, db, &CustomUser{})
+
+	initialUsers := []CustomUser{
+		{ID: 1, Username: "uniqueUser", Email: "initial@example.com", Age: 25},
+		{ID: 2, Username: "anotherUser", Email: "another@example.com", Age: 30},
+	}
+	is.NoErr(db.Create(&initialUsers).Error)
+
+	createRecord := func(id int, username, email string, age int) opencdc.Record {
+		return opencdc.Record{
+			Operation: opencdc.OperationCreate,
+			Metadata:  opencdc.Metadata{"opencdc.collection": "custom_users"},
+			Key:       opencdc.StructuredData{"id": id},
+			Payload: opencdc.Change{
+				After: opencdc.StructuredData{
+					"id":       id,
+					"username": username,
+					"email":    email,
+					"age":      age,
+				},
+			},
+		}
+	}
+
+	records := []opencdc.Record{
+		createRecord(3, "uniqueUser", "new@example.com", 35),
+		createRecord(4, "newUser", "initial@example.com", 25),
+		createRecord(5, "newUniqueUser", "unique@example.com", 40),
+	}
+
+	dest, cleanDest := testDestination(ctx, is)
+	defer cleanDest()
+	written, err := dest.Write(ctx, records)
+	is.NoErr(err)
+	is.Equal(len(records), written)
+
+	verifyUser := func(username, email string, age int) {
+		var user CustomUser
+		is.NoErr(db.DB.First(&user, "username = ?", username).Error)
+		is.Equal(email, user.Email)
+		is.Equal(age, user.Age)
+	}
+
+	verifyUserComposite := func(email string, age int, expectedUsername string, expectedID int) {
+		var user CustomUser
+		is.NoErr(db.DB.Take(&user, "email = ? AND age = ?", email, age).Error)
+		is.Equal(expectedUsername, user.Username)
+		is.Equal(expectedID, user.ID)
+	}
+
+	verifyUser("uniqueUser", "new@example.com", 35)
+	verifyUserComposite("initial@example.com", 25, "newUser", 4)
+	verifyUser("newUniqueUser", "unique@example.com", 40)
+}

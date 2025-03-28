@@ -167,7 +167,7 @@ func CreateTables(is *is.I, db DB, tables ...any) {
 }
 
 func CreateUserTable(is *is.I, db DB) {
-	CreateTables(is, db, User{})
+	CreateTables(is, db, &User{})
 }
 
 func CreateUser(userID int) *User {

@@ -213,16 +213,16 @@ func TestDestination_HandleUniqueConflicts(t *testing.T) {
 	is := is.New(t)
 	db := testutils.NewDB(t)
 
-	type CustomUser struct {
+	type User struct {
 		ID       int    `gorm:"primaryKey" json:"id" db:"id"`
 		Username string `gorm:"type:varchar(100);unique" json:"username" db:"username"`
 		Email    string `gorm:"type:varchar(100);uniqueIndex:idx_email_age" json:"email" db:"email"`
 		Age      int    `gorm:"uniqueIndex:idx_email_age" json:"age" db:"age"`
 	}
 
-	testutils.CreateTables(is, db, &CustomUser{})
+	testutils.CreateTables(is, db, &User{})
 
-	initialUsers := []CustomUser{
+	initialUsers := []User{
 		{ID: 1, Username: "uniqueUser", Email: "initial@example.com", Age: 25},
 		{ID: 2, Username: "anotherUser", Email: "another@example.com", Age: 30},
 	}
@@ -231,7 +231,7 @@ func TestDestination_HandleUniqueConflicts(t *testing.T) {
 	createRecord := func(id int, username, email string, age int) opencdc.Record {
 		return opencdc.Record{
 			Operation: opencdc.OperationCreate,
-			Metadata:  opencdc.Metadata{"opencdc.collection": "custom_users"},
+			Metadata:  opencdc.Metadata{"opencdc.collection": "users"},
 			Key:       opencdc.StructuredData{"id": id},
 			Payload: opencdc.Change{
 				After: opencdc.StructuredData{
@@ -257,14 +257,14 @@ func TestDestination_HandleUniqueConflicts(t *testing.T) {
 	is.Equal(len(records), written)
 
 	verifyUser := func(username, email string, age int) {
-		var user CustomUser
+		var user User
 		is.NoErr(db.DB.First(&user, "username = ?", username).Error)
 		is.Equal(email, user.Email)
 		is.Equal(age, user.Age)
 	}
 
 	verifyUserComposite := func(email string, age int, expectedUsername string, expectedID int) {
-		var user CustomUser
+		var user User
 		is.NoErr(db.DB.Take(&user, "email = ? AND age = ?", email, age).Error)
 		is.Equal(expectedUsername, user.Username)
 		is.Equal(expectedID, user.ID)

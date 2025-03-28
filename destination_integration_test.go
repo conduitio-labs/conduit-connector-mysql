@@ -48,7 +48,7 @@ func TestDestination_OperationSnapshot(t *testing.T) {
 	is := is.New(t)
 	db := testutils.NewDB(t)
 
-	testutils.RecreateUsersTable(is, db)
+	testutils.CreateUserTable(is, db)
 
 	user1 := testutils.InsertUser(is, db, 1)
 	user2 := testutils.InsertUser(is, db, 2)
@@ -65,7 +65,7 @@ func TestDestination_OperationSnapshot(t *testing.T) {
 	rec3 := testutils.ReadAndAssertSnapshot(ctx, is, src, user3)
 
 	// clean table to assert snapshots were written
-	testutils.RecreateUsersTable(is, db)
+	testutils.CreateUserTable(is, db)
 
 	written, err := dest.Write(ctx, []opencdc.Record{rec1, rec2, rec3})
 	is.NoErr(err)
@@ -85,7 +85,7 @@ func TestDestination_OperationCreate(t *testing.T) {
 	is := is.New(t)
 	db := testutils.NewDB(t)
 
-	testutils.RecreateUsersTable(is, db)
+	testutils.CreateUserTable(is, db)
 	dest, cleanDest := testDestination(ctx, is)
 	defer cleanDest()
 
@@ -101,7 +101,7 @@ func TestDestination_OperationCreate(t *testing.T) {
 	rec3 := testutils.ReadAndAssertCreate(ctx, is, src, user3)
 
 	// clean table to assert snapshots were written
-	testutils.RecreateUsersTable(is, db)
+	testutils.CreateUserTable(is, db)
 
 	written, err := dest.Write(ctx, []opencdc.Record{rec1, rec2, rec3})
 	is.NoErr(err)
@@ -121,7 +121,7 @@ func TestDestination_OperationUpdate(t *testing.T) {
 	is := is.New(t)
 	db := testutils.NewDB(t)
 
-	testutils.RecreateUsersTable(is, db)
+	testutils.CreateUserTable(is, db)
 
 	user1 := testutils.InsertUser(is, db, 1)
 	user2 := testutils.InsertUser(is, db, 2)
@@ -147,7 +147,7 @@ func TestDestination_OperationUpdate(t *testing.T) {
 	rec3 := testutils.ReadAndAssertUpdate(ctx, is, src, user3, user3Updated)
 
 	// clean table to assert snapshots were written
-	testutils.RecreateUsersTable(is, db)
+	testutils.CreateUserTable(is, db)
 
 	written, err := dest.Write(ctx, []opencdc.Record{rec1, rec2, rec3})
 	is.NoErr(err)
@@ -167,7 +167,7 @@ func TestDestination_OperationDelete(t *testing.T) {
 	is := is.New(t)
 	db := testutils.NewDB(t)
 
-	testutils.RecreateUsersTable(is, db)
+	testutils.CreateUserTable(is, db)
 
 	user1 := testutils.InsertUser(is, db, 1)
 	user2 := testutils.InsertUser(is, db, 2)
@@ -193,7 +193,7 @@ func TestDestination_OperationDelete(t *testing.T) {
 	rec3 := testutils.ReadAndAssertDelete(ctx, is, src, user3)
 
 	// reset autoincrement primary key
-	testutils.RecreateUsersTable(is, db)
+	testutils.CreateUserTable(is, db)
 
 	// insert users back to assert deletes where done
 	testutils.InsertUser(is, db, 1)

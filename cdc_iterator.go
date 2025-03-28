@@ -39,6 +39,9 @@ type cdcIterator struct {
 	rowsEventsC  chan rowEvent
 	canalRunErrC chan error
 	canalDoneC   chan struct{}
+
+	parsedRecordsC    chan opencdc.Record
+	parsedRecordsErrC chan error
 }
 
 type cdcIteratorConfig struct {
@@ -61,12 +64,14 @@ func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (*cdcIterator
 	}
 
 	return &cdcIterator{
-		config:       config,
-		canal:        canal,
-		position:     config.startPosition,
-		rowsEventsC:  make(chan rowEvent),
-		canalRunErrC: make(chan error),
-		canalDoneC:   make(chan struct{}),
+		config:            config,
+		canal:             canal,
+		position:          config.startPosition,
+		rowsEventsC:       make(chan rowEvent),
+		canalRunErrC:      make(chan error),
+		canalDoneC:        make(chan struct{}),
+		parsedRecordsC:    make(chan opencdc.Record),
+		parsedRecordsErrC: make(chan error),
 	}, nil
 }
 
@@ -77,25 +82,36 @@ func (c *cdcIterator) obtainStartPosition() error {
 	}
 
 	c.position = &common.CdcPosition{
-		Name: masterPos.Name,
-		Pos:  masterPos.Pos,
+		ReplicationEventPosition: common.ReplicationEventPosition{
+			Name: masterPos.Name,
+			Pos:  masterPos.Pos,
+		},
 	}
 
 	return nil
 }
 
-func (c *cdcIterator) start() error {
+func (c *cdcIterator) start(ctx context.Context) error {
 	startPosition, err := c.getStartPosition()
 	if err != nil {
 		return fmt.Errorf("failed to get start position: %w", err)
 	}
 	eventHandler := newCdcEventHandler(c.canal, c.canalDoneC, c.rowsEventsC)
 
+	go c.readCDCEvents(ctx, startPosition)
+
 	go func() {
 		c.canal.SetEventHandler(eventHandler)
-		pos := startPosition.ToMysqlPos()
 
-		c.canalRunErrC <- c.canal.RunFrom(pos)
+		// We need to run canal from Previous position to be sure
+		// we didn't lose any record from multi-row mysql replication
+		// event.
+		pos := startPosition.ReplicationEventPosition
+		if startPosition.PrevPosition != nil {
+			pos = *startPosition.PrevPosition
+		}
+
+		c.canalRunErrC <- c.canal.RunFrom(pos.ToMysqlPos())
 	}()
 
 	return nil
@@ -112,26 +128,96 @@ func (c *cdcIterator) getStartPosition() (common.CdcPosition, error) {
 		return cdcPosition, fmt.Errorf("failed to get master position: %w", err)
 	}
 
-	return common.CdcPosition{Name: masterPos.Name, Pos: masterPos.Pos}, nil
+	return common.CdcPosition{
+		ReplicationEventPosition: common.ReplicationEventPosition{
+			Name: masterPos.Name,
+			Pos:  masterPos.Pos,
+		},
+	}, nil
 }
 
 func (c *cdcIterator) Ack(context.Context, opencdc.Position) error {
 	return nil
 }
 
-func (c *cdcIterator) Read(ctx context.Context) (rec opencdc.Record, err error) {
+func pushToChan[T any](
+	ctx context.Context,
+	canalDoneC <-chan struct{},
+	dataChan chan<- T,
+	data T,
+) {
+	select {
+	case <-ctx.Done():
+	case <-canalDoneC:
+	case dataChan <- data:
+	}
+}
+
+func (c *cdcIterator) readCDCEvents(ctx context.Context, startPosition common.CdcPosition) {
+	// MySQL replication event could contain multiple rows
+	// with the same position.
+	// The Index identifier describes the row index in such an event.
+	// Here we need to start replication from an absolute position,
+	// including the row index.
+	requiredOffset := startPosition.Index + 1
+
+	// If there was no prev position, we started replication
+	// from the very beginning => don't try to skip any records.
+	if startPosition.PrevPosition == nil {
+		requiredOffset = 0
+	}
+
+	prevPosition := common.ReplicationEventPosition{
+		Name: startPosition.Name,
+		Pos:  startPosition.Pos,
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-c.canalDoneC:
+			return
+		case e := <-c.rowsEventsC:
+			recs, err := c.buildRecords(ctx, e, prevPosition)
+			if err != nil {
+				pushToChan(ctx, c.canalDoneC, c.parsedRecordsErrC,
+					fmt.Errorf("unable to build record: %w", err),
+				)
+			}
+
+			if len(recs) < requiredOffset {
+				// should be impossible
+				sdk.Logger(ctx).Error().
+					Any("position", startPosition).
+					Msg("unexpected number of rows in the event: some records could be lost")
+			}
+
+			for i := requiredOffset; i < len(recs); i++ {
+				pushToChan(ctx, c.canalDoneC, c.parsedRecordsC, recs[i])
+			}
+
+			// Only a part of the first event could be skipped.
+			requiredOffset = 0
+
+			prevPosition = common.ReplicationEventPosition{
+				Name: e.binlogName,
+				Pos:  e.header.LogPos,
+			}
+		}
+	}
+}
+
+func (c *cdcIterator) Read(ctx context.Context) (rec opencdc.Record, _ error) {
 	select {
 	//nolint:wrapcheck // no need to wrap canceled error
 	case <-ctx.Done():
 		return rec, ctx.Err()
 	case <-c.canalDoneC:
 		return rec, fmt.Errorf("canal is closed")
-	case data := <-c.rowsEventsC:
-		rec, err := c.buildRecord(ctx, data)
-		if err != nil {
-			return rec, fmt.Errorf("failed to build record: %w", err)
-		}
-
+	case err := <-c.parsedRecordsErrC:
+		return rec, err
+	case rec := <-c.parsedRecordsC:
 		return rec, nil
 	}
 }
@@ -157,88 +243,117 @@ func (c *cdcIterator) Teardown(ctx context.Context) error {
 	return nil
 }
 
-func (c *cdcIterator) buildRecord(ctx context.Context, e rowEvent) (opencdc.Record, error) {
-	pos := common.CdcPosition{
-		Name: e.binlogName,
-		Pos:  e.Header.LogPos,
-	}.ToSDKPosition()
-
-	avroCols := make([]*avroNamedType, len(e.Table.Columns))
-	for i, col := range e.Table.Columns {
+func (c *cdcIterator) createMetadata(
+	ctx context.Context,
+	e rowEvent,
+	keySchema *schemaMapper,
+	payloadSchema *schemaMapper,
+) (opencdc.Metadata, error) {
+	avroCols := make([]*avroNamedType, len(e.table.Columns))
+	for i, col := range e.table.Columns {
 		avroCol, err := mysqlSchemaToAvroCol(col)
 		if err != nil {
-			return opencdc.Record{}, fmt.Errorf("failed to parse avro cols: %w", err)
+			return nil, fmt.Errorf("failed to parse avro cols: %w", err)
 		}
 		avroCols[i] = avroCol
 	}
 
-	payloadSchema, keySchema := newSchemaMapper(), newSchemaMapper()
-	tableName := e.Table.Name
+	tableName := e.table.Name
 
 	payloadSubver, err := payloadSchema.createPayloadSchema(ctx, tableName, avroCols)
 	if err != nil {
-		return opencdc.Record{}, fmt.Errorf("failed to create cdc payload schema for table %s: %w", tableName, err)
+		return nil, fmt.Errorf("failed to create cdc payload schema for table %s: %w", tableName, err)
 	}
 
 	metadata := opencdc.Metadata{}
-	metadata.SetCollection(e.Table.Name)
-	metadata.SetCreatedAt(time.Unix(int64(e.Header.Timestamp), 0).UTC())
-	metadata[common.ServerIDKey] = strconv.FormatUint(uint64(e.Header.ServerID), 10)
+	metadata.SetCollection(e.table.Name)
+	metadata.SetCreatedAt(time.Unix(int64(e.header.Timestamp), 0).UTC())
+	metadata[common.ServerIDKey] = strconv.FormatUint(uint64(e.header.ServerID), 10)
 
 	metadata.SetPayloadSchemaSubject(payloadSubver.subject)
 	metadata.SetPayloadSchemaVersion(payloadSubver.version)
 
-	var payloadBefore, payloadAfter, payload opencdc.StructuredData
-	payloadBefore = c.buildPayload(ctx, payloadSchema, e.Table.Columns, e.Rows[0])
-	if len(e.Rows) > 1 {
-		payloadAfter = c.buildPayload(ctx, payloadSchema, e.Table.Columns, e.Rows[1])
-	}
-
-	// payload really is just an alias, but makes buildRecord easier to understand.
-	payload = payloadBefore
-
-	keyCol := c.config.tableSortCols[tableName]
-	var key opencdc.Data
-
-	if keyCol == "" {
-		keyVal := fmt.Sprintf("%s_%d", e.binlogName, e.Header.LogPos)
-		key = opencdc.RawData(keyVal)
-	} else {
+	if keyCol := c.config.tableSortCols[tableName]; keyCol != "" {
 		keyColType, found := findKeyColType(avroCols, keyCol)
 		if !found {
-			return opencdc.Record{}, fmt.Errorf("failed to find key schema column type for table %s", tableName)
+			return nil, fmt.Errorf("failed to find key schema column type for table %s", tableName)
 		}
 
 		keySubver, err := keySchema.createKeySchema(ctx, tableName, keyColType)
 		if err != nil {
-			return opencdc.Record{}, fmt.Errorf("failed to create key schema for table %s: %w", tableName, err)
+			return nil, fmt.Errorf("failed to create key schema for table %s: %w", tableName, err)
 		}
-
-		keyVal := payload[keyCol]
-
-		// In update events, the key has to be the value after the update,
-		// otherwise we could use a stale value.
-		if e.Action == canal.UpdateAction {
-			keyVal = payloadAfter[keyCol]
-		}
-
-		keyVal = keySchema.formatValue(ctx, keyCol, keyVal)
-		key = opencdc.StructuredData{keyCol: keyVal}
 
 		metadata.SetKeySchemaSubject(keySubver.subject)
 		metadata.SetKeySchemaVersion(keySubver.version)
 	}
 
-	switch e.Action {
-	case canal.InsertAction:
-		return sdk.Util.Source.NewRecordCreate(pos, metadata, key, payload), nil
-	case canal.UpdateAction:
-		return sdk.Util.Source.NewRecordUpdate(pos, metadata, key, payloadBefore, payloadAfter), nil
-	case canal.DeleteAction:
-		return sdk.Util.Source.NewRecordDelete(pos, metadata, key, payload), nil
-	default:
-		return opencdc.Record{}, fmt.Errorf("unknown action type: %v", e.Action)
+	return metadata, nil
+}
+
+func (c *cdcIterator) buildKey(
+	ctx context.Context,
+	e rowEvent,
+	payload opencdc.StructuredData,
+	keySchema *schemaMapper,
+) opencdc.Data {
+	keyCol := c.config.tableSortCols[e.table.Name]
+
+	if keyCol == "" {
+		keyVal := fmt.Sprintf("%s_%d", e.binlogName, e.header.LogPos)
+		return opencdc.RawData(keyVal)
 	}
+
+	keyVal := keySchema.formatValue(ctx, keyCol, payload[keyCol])
+	return opencdc.StructuredData{keyCol: keyVal}
+}
+
+func (c *cdcIterator) buildRecords(
+	ctx context.Context,
+	e rowEvent,
+	prevPos common.ReplicationEventPosition,
+) ([]opencdc.Record, error) {
+	keySchema := newSchemaMapper()
+	payloadSchema := newSchemaMapper()
+
+	metadata, err := c.createMetadata(ctx, e, keySchema, payloadSchema)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create metadata: %w", err)
+	}
+
+	records := make([]opencdc.Record, 0, len(e.rows))
+	for i, row := range e.rows {
+		payloadAfter := c.buildPayload(ctx, payloadSchema, e.table.Columns, row.after)
+		key := c.buildKey(ctx, e, payloadAfter, keySchema)
+
+		var payloadBefore opencdc.StructuredData
+		if row.before != nil {
+			payloadBefore = c.buildPayload(ctx, payloadSchema, e.table.Columns, row.before)
+		}
+
+		pos := common.CdcPosition{
+			ReplicationEventPosition: common.ReplicationEventPosition{
+				Name: e.binlogName,
+				Pos:  e.header.LogPos,
+			},
+			PrevPosition: &prevPos,
+			Index:        i,
+		}.ToSDKPosition()
+
+		var rec opencdc.Record
+		switch e.action {
+		case canal.InsertAction:
+			rec = sdk.Util.Source.NewRecordCreate(pos, metadata, key, payloadAfter)
+		case canal.UpdateAction:
+			rec = sdk.Util.Source.NewRecordUpdate(pos, metadata, key, payloadBefore, payloadAfter)
+		case canal.DeleteAction:
+			rec = sdk.Util.Source.NewRecordDelete(pos, metadata, key, payloadAfter)
+		}
+
+		records = append(records, rec)
+	}
+
+	return records, nil
 }
 
 func findKeyColType(avroCols []*avroNamedType, keyCol string) (*avroNamedType, bool) {
@@ -262,9 +377,17 @@ func (c *cdcIterator) buildPayload(
 	return payload
 }
 
+type replicationEventRow struct {
+	before []any
+	after  []any
+}
+
 type rowEvent struct {
-	*canal.RowsEvent
 	binlogName string
+	action     string
+	table      *schema.Table
+	rows       []replicationEventRow
+	header     *replication.EventHeader
 }
 
 type cdcEventHandler struct {
@@ -291,7 +414,37 @@ func newCdcEventHandler(
 
 func (h *cdcEventHandler) OnRow(e *canal.RowsEvent) error {
 	binlogName := h.canal.SyncedPosition().Name
-	rowEvent := rowEvent{e, binlogName}
+
+	rowEvent := rowEvent{
+		binlogName: binlogName,
+		table:      e.Table,
+		header:     e.Header,
+		action:     e.Action,
+		rows:       make([]replicationEventRow, 0, len(e.Rows)),
+	}
+
+	if e.Action == canal.UpdateAction && len(e.Rows)%2 != 0 {
+		return fmt.Errorf("even number of rows is expected in replication event")
+	}
+
+	for i := 0; i < len(e.Rows); i++ {
+		row := replicationEventRow{}
+		switch e.Action {
+		case canal.InsertAction, canal.DeleteAction:
+			row.after = e.Rows[i]
+		case canal.UpdateAction:
+			// updated rows are going in pairs:
+			// [ row_before, row_after, row_before, row_after ]
+			row.before = e.Rows[i]
+			row.after = e.Rows[i+1]
+			i++
+		default:
+			return fmt.Errorf("unknown action type: %v", e.Action)
+		}
+
+		rowEvent.rows = append(rowEvent.rows, row)
+	}
+
 	select {
 	case <-h.canalDoneC:
 	case h.rowsEventsC <- rowEvent:

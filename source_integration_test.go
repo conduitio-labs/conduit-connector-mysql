@@ -56,7 +56,7 @@ func TestSource_ConsistentSnapshot(t *testing.T) {
 
 	db := testutils.NewDB(t)
 
-	testutils.RecreateUsersTable(is, db)
+	testutils.CreateUserTable(is, db)
 
 	// insert 4 rows, the whole snapshot
 
@@ -99,7 +99,7 @@ func TestSource_NonZeroSnapshotStart(t *testing.T) {
 
 	db := testutils.NewDB(t)
 
-	testutils.RecreateUsersTable(is, db)
+	testutils.CreateUserTable(is, db)
 
 	// Insert 80 users starting from the 20th so that the starting row's primary key
 	// is greater than 0. This ensures a more realistic dataset where
@@ -128,7 +128,7 @@ func TestSource_EmptyChunkRead(t *testing.T) {
 
 	db := testutils.NewDB(t)
 
-	testutils.RecreateUsersTable(is, db)
+	testutils.CreateUserTable(is, db)
 
 	var expected []testutils.User
 	for i := range 100 {
@@ -157,7 +157,6 @@ func TestSource_EmptyChunkRead(t *testing.T) {
 func TestSource_UnsafeSnapshot(t *testing.T) {
 	is := is.New(t)
 	db := testutils.NewDB(t)
-	var err error
 
 	type TableWithoutPK struct {
 		// No id field, forcing gorm to not create a primary key
@@ -165,11 +164,7 @@ func TestSource_UnsafeSnapshot(t *testing.T) {
 		Data string `gorm:"size:100"`
 	}
 
-	err = db.Migrator().DropTable(&TableWithoutPK{})
-	is.NoErr(err)
-
-	err = db.AutoMigrate(&TableWithoutPK{})
-	is.NoErr(err)
+	testutils.CreateTables(is, db, &TableWithoutPK{})
 
 	db.Create([]TableWithoutPK{
 		{Data: "record A"},
@@ -216,8 +211,8 @@ func TestSource_CompositeKey(t *testing.T) {
 	}
 
 	tableName := testutils.TableName(is, db, &CompositeKeyTable{})
-	is.NoErr(db.Migrator().DropTable(&CompositeKeyTable{}))
-	is.NoErr(db.AutoMigrate(&CompositeKeyTable{}))
+
+	testutils.CreateTables(is, db, &CompositeKeyTable{})
 
 	testData := []CompositeKeyTable{
 		{UserID: 1, TenantID: "tenant1", Email: "user1@example.com", FirstName: "John", LastName: "Doe"},

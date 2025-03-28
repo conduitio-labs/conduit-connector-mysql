@@ -158,9 +158,16 @@ func (u User) StructuredData() opencdc.StructuredData {
 	}
 }
 
-func RecreateUsersTable(is *is.I, db DB) {
-	is.NoErr(db.Migrator().DropTable(&User{}))
-	is.NoErr(db.AutoMigrate(&User{}))
+func CreateTables(is *is.I, db DB, tables ...any) {
+	is.Helper()
+
+	// First drop the table, previous tests might have left it created.
+	is.NoErr(db.Migrator().DropTable(tables...))
+	is.NoErr(db.AutoMigrate(tables...))
+}
+
+func CreateUserTable(is *is.I, db DB) {
+	CreateTables(is, db, User{})
 }
 
 func CreateUser(userID int) *User {

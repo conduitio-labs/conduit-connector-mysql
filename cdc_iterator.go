@@ -140,6 +140,19 @@ func (c *cdcIterator) Ack(context.Context, opencdc.Position) error {
 	return nil
 }
 
+func pushToChan[T any](
+	ctx context.Context,
+	canalDoneC <-chan struct{},
+	dataChan chan<- T,
+	data T,
+) {
+	select {
+	case <-ctx.Done():
+	case <-canalDoneC:
+	case dataChan <- data:
+	}
+}
+
 func (c *cdcIterator) readCDCEvents(ctx context.Context, startPosition common.CdcPosition) {
 	// MySQL replication event could contain multiple rows
 	// with the same position.
@@ -168,13 +181,9 @@ func (c *cdcIterator) readCDCEvents(ctx context.Context, startPosition common.Cd
 		case e := <-c.rowsEventsC:
 			recs, err := c.buildRecords(ctx, e, prevPosition)
 			if err != nil {
-				select {
-				case <-ctx.Done():
-					return
-				case <-c.canalDoneC:
-					return
-				case c.parsedRecordsErrC <- fmt.Errorf("unable to build record: %w", err):
-				}
+				pushToChan(ctx, c.canalDoneC, c.parsedRecordsErrC,
+					fmt.Errorf("unable to build record: %w", err),
+				)
 			}
 
 			if len(recs) < requiredOffset {
@@ -185,13 +194,7 @@ func (c *cdcIterator) readCDCEvents(ctx context.Context, startPosition common.Cd
 			}
 
 			for i := requiredOffset; i < len(recs); i++ {
-				select {
-				case <-ctx.Done():
-					return
-				case <-c.canalDoneC:
-					return
-				case c.parsedRecordsC <- recs[i]:
-				}
+				pushToChan(ctx, c.canalDoneC, c.parsedRecordsC, recs[i])
 			}
 
 			// Only a part of the first event could be skipped.

@@ -17,7 +17,6 @@ package mysql
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	testutils "github.com/conduitio-labs/conduit-connector-mysql/test"
@@ -33,7 +32,7 @@ func testCombinedIterator(ctx context.Context, t *testing.T, is *is.I) (common.I
 
 	iterator, err := newCombinedIterator(ctx, combinedIteratorConfig{
 		db:                  db,
-		tableSortCols:       testutils.TableSortCols,
+		primaryKeys:         testutils.TablePrimaryKeys,
 		database:            "meroxadb",
 		tables:              []string{"users"},
 		serverID:            testutils.ServerID,
@@ -58,10 +57,6 @@ func TestCombinedIterator_SnapshotAndCDC(t *testing.T) {
 
 	iterator, cleanup := testCombinedIterator(ctx, t, is)
 	defer cleanup()
-
-	// ci is slow, we need a bit of time for the setup to initialize canal.Canal.
-	// Theoretically it should not matter, as we get the position at the start.
-	time.Sleep(time.Second)
 
 	user1Updated := testutils.UpdateUser(is, db, user1.Update())
 	user2Updated := testutils.UpdateUser(is, db, user2.Update())

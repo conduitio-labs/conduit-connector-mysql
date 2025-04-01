@@ -1,6 +1,6 @@
 module github.com/conduitio-labs/conduit-connector-mysql
 
-go 1.24.1
+go 1.24.2
 
 require (
 	github.com/Masterminds/squirrel v1.5.4

@@ -141,13 +141,13 @@ func (c *cdcIterator) Ack(context.Context, opencdc.Position) error {
 	return nil
 }
 
-func (c *cdcIterator) Read(ctx context.Context) (rec opencdc.Record, _ error) {
+func (c *cdcIterator) Read(ctx context.Context) (opencdc.Record, error) {
 	select {
 	//nolint:wrapcheck // no need to wrap canceled error
 	case <-ctx.Done():
-		return rec, ctx.Err()
+		return opencdc.Record{}, ctx.Err()
 	case <-c.canalDoneC:
-		return rec, fmt.Errorf("canal is closed")
+		return opencdc.Record{}, fmt.Errorf("canal is closed")
 	case rec := <-c.parsedRecordsC:
 		return rec, nil
 	}

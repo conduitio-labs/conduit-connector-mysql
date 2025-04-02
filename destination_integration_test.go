@@ -274,3 +274,54 @@ func TestDestination_HandleUniqueConflicts(t *testing.T) {
 	verifyUserComposite("initial@example.com", 25, "newUser", 4)
 	verifyUser("newUniqueUser", "unique@example.com", 40)
 }
+
+func TestDestination_DeletesWithMultipleKeys(t *testing.T) {
+	type MultiKeyTable struct {
+		ID       int    `gorm:"primaryKey"`
+		Username string `gorm:"primaryKey"`
+		Email    string
+		Age      int
+	}
+
+	ctx := testutils.TestContext(t)
+	is := is.New(t)
+	db := testutils.NewDB(t)
+
+	testutils.CreateTables(is, db, &MultiKeyTable{})
+
+	initialUsers := []MultiKeyTable{
+		{ID: 1, Username: "user1", Email: "user1@example.com", Age: 25},
+		{ID: 2, Username: "user2", Email: "user2@example.com", Age: 30},
+		{ID: 3, Username: "user3", Email: "user3@example.com", Age: 35},
+	}
+	is.NoErr(db.Create(&initialUsers).Error)
+
+	createDeleteRecord := func(id int, username string) opencdc.Record {
+		return opencdc.Record{
+			Operation: opencdc.OperationDelete,
+			Metadata:  opencdc.Metadata{"opencdc.collection": "multi_key_tables"},
+			Key: opencdc.StructuredData{
+				"id":       id,
+				"username": username,
+			},
+		}
+	}
+
+	records := []opencdc.Record{
+		createDeleteRecord(1, "user1"),
+		createDeleteRecord(2, "user2"),
+	}
+
+	dest, cleanDest := testDestination(ctx, is)
+	defer cleanDest()
+
+	written, err := dest.Write(ctx, records)
+	is.NoErr(err)
+	is.Equal(len(records), written)
+
+	var remainingUsers []MultiKeyTable
+	is.NoErr(db.Find(&remainingUsers).Error)
+	is.Equal(1, len(remainingUsers))
+	is.Equal(3, remainingUsers[0].ID)
+	is.Equal("user3", remainingUsers[0].Username)
+}

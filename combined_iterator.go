@@ -42,6 +42,7 @@ type combinedIteratorConfig struct {
 	startCdcPosition      *common.CdcPosition
 	database              string
 	tables                []string
+	canalRegexes          []string
 	serverID              string
 	mysqlConfig           *mysqldriver.Config
 	disableCanalLogging   bool
@@ -52,7 +53,7 @@ func newCombinedIterator(
 	config combinedIteratorConfig,
 ) (common.Iterator, error) {
 	cdcIterator, err := newCdcIterator(ctx, cdcIteratorConfig{
-		tables:              config.tables,
+		tables:              config.canalRegexes,
 		mysqlConfig:         config.mysqlConfig,
 		tableSortCols:       config.tableSortCols,
 		disableCanalLogging: config.disableCanalLogging,

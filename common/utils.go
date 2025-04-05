@@ -155,12 +155,12 @@ func (t *TableKeyFetcher) GetKeys(tx *sqlx.Tx, table string) (PrimaryKeys, error
 	return keys, nil
 }
 
-// selecter allows us to get primary keys from both a sqlx.DB and a tx transaction.
-type selecter interface {
+// keyQuerier allows us to select primary keys from both a sqlx.DB and an sqlx.Tx transaction.
+type keyQuerier interface {
 	Select(dest any, query string, args ...any) error
 }
 
-func GetPrimaryKeys(db selecter, database, table string) (PrimaryKeys, error) {
+func GetPrimaryKeys(db keyQuerier, database, table string) (PrimaryKeys, error) {
 	var primaryKeys []struct {
 		ColumnName string `db:"COLUMN_NAME"`
 	}

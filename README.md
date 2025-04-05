@@ -67,7 +67,7 @@ The source connector uses [avro](https://avro.apache.org/docs/1.11.1/specificati
 
 ## Destination
 
-The MySQL destination takes a `opencdc.Record` and parses it into a valid SQL query. Each record is individually parsed and upserted. Writing in batches is [planned](https://github.com/conduitio-labs/conduit-connector-mysql/issues/63) to be implemented, which should greatly improve performance over the current implementation.
+The MySQL destination takes a slice of `opencdc.Record` and writes them in batches to MySQL. It will use the `opencdc.collection` field in the metadata to determine the table to write to.
 
 ### Upsert Behavior
 
@@ -75,11 +75,7 @@ If the target table contains a column with a unique constraint (this includes PR
 
 If the target table already contains a record with the same key, the Destination will upsert with its current received values. Because Keys must be unique, this can overwrite and thus potentially lose data, so keys should be assigned correctly from the Source.
 
-If there is no key, the record will be simply appended.
-
-### Multicollection mode
-
-(Planned to do). You can upvote [the following issue](https://github.com/conduitio-labs/conduit-connector-mysql/issues/13) to add more interest on getting this feature implemented sooner.
+If a unique key is not present in the target table, the record will be simply appended.
 
 ## Requirements and compatibility
 
@@ -215,14 +211,6 @@ pipelines:
           # Type: string
           # Required: yes
           dsn: ""
-          # Key is the primary key of the specified table.
-          # Type: string
-          # Required: yes
-          key: ""
-          # Table is used as the target table into which records are inserted.
-          # Type: string
-          # Required: yes
-          table: ""
           # Maximum delay before an incomplete batch is written to the
           # destination.
           # Type: duration

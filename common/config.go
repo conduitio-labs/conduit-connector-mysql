@@ -54,12 +54,25 @@ type SourceConfig struct {
 	// nor a defined sorting column. The opencdc.Position won't record the last record
 	// read from a table.
 	UnsafeSnapshot bool `json:"unsafeSnapshot"`
+
+	mysqlCfg *mysql.Config
 }
 
-func (c SourceConfig) Validate(_ context.Context) error {
-	if _, err := mysql.ParseDSN(c.DSN); err != nil {
+func (s *SourceConfig) MysqlCfg() *mysql.Config {
+	return s.mysqlCfg
+}
+
+func (s *SourceConfig) Validate(context.Context) error {
+	mysqlCfg, err := mysql.ParseDSN(s.DSN)
+	if err != nil {
 		return fmt.Errorf("failed to parse DSN: %w", err)
 	}
+
+	// we need to take control over how do we handle time.Time values
+	mysqlCfg.ParseTime = true
+
+	s.mysqlCfg = mysqlCfg
+
 	return nil
 }
 
@@ -79,16 +92,26 @@ type DestinationConfig struct {
 
 	Config
 
-	// Table is used as the target table into which records are inserted.
-	Table string `json:"table" validate:"required"`
-
-	// Key is the primary key of the specified table.
-	Key string `json:"key" validate:"required"`
+	mysqlCfg        *mysql.Config
+	tableKeyFetcher *TableKeyFetcher
 }
 
-func (c DestinationConfig) Validate(_ context.Context) error {
-	if _, err := mysql.ParseDSN(c.DSN); err != nil {
+func (d *DestinationConfig) MysqlCfg() *mysql.Config {
+	return d.mysqlCfg
+}
+
+func (d *DestinationConfig) TableKeyFetcher() *TableKeyFetcher {
+	return d.tableKeyFetcher
+}
+
+func (d *DestinationConfig) Validate(context.Context) error {
+	mysqlCfg, err := mysql.ParseDSN(d.DSN)
+	if err != nil {
 		return fmt.Errorf("failed to parse DSN: %w", err)
 	}
+
+	d.mysqlCfg = mysqlCfg
+	d.tableKeyFetcher = NewTableKeyFetcher(mysqlCfg.DBName)
+
 	return nil
 }

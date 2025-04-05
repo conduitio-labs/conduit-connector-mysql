@@ -80,7 +80,7 @@ func TestCDCIterator_InsertAction(t *testing.T) {
 
 	db := testutils.NewDB(t)
 
-	testutils.RecreateUsersTable(is, db)
+	testutils.CreateUserTable(is, db)
 
 	iterator, teardown := testCdcIterator(ctx, t, is)
 	defer teardown()
@@ -100,7 +100,7 @@ func TestCDCIterator_DeleteAction(t *testing.T) {
 
 	db := testutils.NewDB(t)
 
-	testutils.RecreateUsersTable(is, db)
+	testutils.CreateUserTable(is, db)
 
 	user1 := testutils.InsertUser(is, db, 1)
 	user2 := testutils.InsertUser(is, db, 2)
@@ -124,7 +124,7 @@ func TestCDCIterator_UpdateAction(t *testing.T) {
 
 	db := testutils.NewDB(t)
 
-	testutils.RecreateUsersTable(is, db)
+	testutils.CreateUserTable(is, db)
 
 	user1 := testutils.InsertUser(is, db, 1)
 	user2 := testutils.InsertUser(is, db, 2)
@@ -148,7 +148,7 @@ func TestCDCIterator_RestartOnPosition(t *testing.T) {
 
 	db := testutils.NewDB(t)
 
-	testutils.RecreateUsersTable(is, db)
+	testutils.CreateUserTable(is, db)
 
 	// start the iterator at the beginning
 

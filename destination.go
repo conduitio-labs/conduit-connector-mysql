@@ -121,7 +121,12 @@ func (d *Destination) upsertRecords(ctx context.Context, tx *sqlx.Tx, table stri
 
 		values := make([]any, 0, len(columns))
 		for _, col := range columns {
-			values = append(values, payload[col])
+			colValue, ok := payload[col]
+			if !ok {
+				return 0, fmt.Errorf("column %q not found in record %q", col, string(rec.Key.Bytes()))
+			}
+
+			values = append(values, colValue)
 		}
 		insert = insert.Values(values...)
 	}

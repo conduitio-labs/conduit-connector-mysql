@@ -45,7 +45,7 @@ type cdcIteratorConfig struct {
 	db                  *sqlx.DB
 	tables              []string
 	mysqlConfig         *mysqldriver.Config
-	tableSortCols       map[string]string
+	primaryKeys         map[string]common.PrimaryKeys
 	disableCanalLogging bool
 	startPosition       *common.CdcPosition
 }
@@ -97,7 +97,7 @@ func (c *cdcIterator) start(ctx context.Context) error {
 		c.canal,
 		c.canalDoneC,
 		c.parsedRecordsC,
-		c.config.tableSortCols,
+		c.config.primaryKeys,
 		startPosition,
 	)
 
@@ -193,7 +193,7 @@ type cdcEventHandler struct {
 	canalDoneC     chan struct{}
 	parsedRecordsC chan opencdc.Record
 
-	tableSortCols map[string]string
+	tablePrimaryKeys map[string]common.PrimaryKeys
 
 	onRowsChange onRowChangeFn
 }
@@ -203,14 +203,14 @@ func newCdcEventHandler(
 	canal *canal.Canal,
 	canalDoneC chan struct{},
 	parsedRecordsC chan opencdc.Record,
-	tableSortCols map[string]string,
+	tablesPrimaryKeys map[string]common.PrimaryKeys,
 	startPosition common.CdcPosition,
 ) *cdcEventHandler {
 	h := &cdcEventHandler{
-		canal:          canal,
-		canalDoneC:     canalDoneC,
-		parsedRecordsC: parsedRecordsC,
-		tableSortCols:  tableSortCols,
+		canal:            canal,
+		canalDoneC:       canalDoneC,
+		parsedRecordsC:   parsedRecordsC,
+		tablePrimaryKeys: tablesPrimaryKeys,
 	}
 
 	h.onRowsChange = h.handleSingleRowChange(ctx, startPosition)
@@ -224,18 +224,18 @@ func (h *cdcEventHandler) createMetadata(
 	keySchema *schemaMapper,
 	payloadSchema *schemaMapper,
 ) (opencdc.Metadata, error) {
-	avroCols := make([]*avroNamedType, len(e.Table.Columns))
+	payloadAvroCols := make([]*avroNamedType, len(e.Table.Columns))
 	for i, col := range e.Table.Columns {
 		avroCol, err := mysqlSchemaToAvroCol(col)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse avro cols: %w", err)
 		}
-		avroCols[i] = avroCol
+		payloadAvroCols[i] = avroCol
 	}
 
 	tableName := e.Table.Name
 
-	payloadSubver, err := payloadSchema.createPayloadSchema(ctx, tableName, avroCols)
+	payloadSubver, err := payloadSchema.createPayloadSchema(ctx, tableName, payloadAvroCols)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cdc payload schema for table %s: %w", tableName, err)
 	}
@@ -248,13 +248,17 @@ func (h *cdcEventHandler) createMetadata(
 	metadata.SetPayloadSchemaSubject(payloadSubver.subject)
 	metadata.SetPayloadSchemaVersion(payloadSubver.version)
 
-	if keyCol := h.tableSortCols[tableName]; keyCol != "" {
-		keyColType, found := findKeyColType(avroCols, keyCol)
-		if !found {
-			return nil, fmt.Errorf("failed to find key schema column type for table %s", tableName)
+	if keyCols := h.tablePrimaryKeys[tableName]; len(keyCols) != 0 {
+		keyAvroCols := make([]*avroNamedType, 0, len(keyCols))
+		for _, keyCol := range keyCols {
+			keyColType, found := findKeyColType(payloadAvroCols, keyCol)
+			if !found {
+				return nil, fmt.Errorf("failed to find key schema column type for table %s", tableName)
+			}
+			keyAvroCols = append(keyAvroCols, keyColType)
 		}
 
-		keySubver, err := keySchema.createKeySchema(ctx, tableName, keyColType)
+		keySubver, err := keySchema.createKeySchema(ctx, tableName, keyAvroCols)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create key schema for table %s: %w", tableName, err)
 		}
@@ -272,15 +276,21 @@ func (h *cdcEventHandler) buildKey(
 	payload opencdc.StructuredData,
 	keySchema *schemaMapper,
 ) opencdc.Data {
-	keyCol := h.tableSortCols[e.Table.Name]
+	keyCols := h.tablePrimaryKeys[e.Table.Name]
 
-	if keyCol == "" {
+	if len(keyCols) == 0 {
 		keyVal := fmt.Sprintf("%s_%d", h.canal.SyncedPosition().Name, e.Header.LogPos)
 		return opencdc.RawData(keyVal)
 	}
 
-	keyVal := keySchema.formatValue(ctx, keyCol, payload[keyCol])
-	return opencdc.StructuredData{keyCol: keyVal}
+	key := opencdc.StructuredData{}
+
+	for _, keyCol := range keyCols {
+		keyVal := keySchema.formatValue(ctx, keyCol, payload[keyCol])
+		key[keyCol] = keyVal
+	}
+
+	return key
 }
 
 func (h *cdcEventHandler) buildRecords(

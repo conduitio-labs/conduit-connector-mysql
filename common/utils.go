@@ -64,7 +64,7 @@ type zerologHandler struct {
 	logger *zerolog.Logger
 }
 
-func (h *zerologHandler) Enabled(_ context.Context, level slog.Level) bool {
+func (h *zerologHandler) Enabled(_ context.Context, _ slog.Level) bool {
 	return true
 }
 

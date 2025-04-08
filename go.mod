@@ -6,14 +6,13 @@ require (
 	github.com/Masterminds/squirrel v1.5.4
 	github.com/conduitio/conduit-commons v0.5.2
 	github.com/conduitio/conduit-connector-sdk v0.13.3
-	github.com/go-mysql-org/go-mysql v1.11.0
+	github.com/go-mysql-org/go-mysql v1.12.0
 	github.com/go-sql-driver/mysql v1.9.2
 	github.com/google/go-cmp v0.7.0
 	github.com/hamba/avro/v2 v2.28.0
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/matryer/is v1.4.1
 	github.com/rs/zerolog v1.34.0
-	github.com/siddontang/go-log v0.0.0-20190221022429-1e957dd83bed
 	go.uber.org/goleak v1.3.0
 	gopkg.in/tomb.v2 v2.0.0-20161208151619-d5d1b5820637
 	gorm.io/driver/mysql v1.5.7

@@ -17,6 +17,8 @@ package common
 import (
 	"context"
 	"fmt"
+	"io"
+	"log/slog"
 	"strconv"
 
 	sdk "github.com/conduitio/conduit-connector-sdk"
@@ -24,7 +26,6 @@ import (
 	"github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 	"github.com/rs/zerolog"
-	"github.com/siddontang/go-log/log"
 )
 
 type CanalConfig struct {
@@ -41,9 +42,10 @@ func NewCanal(ctx context.Context, config CanalConfig) (*canal.Canal, error) {
 
 	cfg.IncludeTableRegex = config.Tables
 	if config.DisableLogging {
-		cfg.Logger = log.NewDefault(&log.NullHandler{})
+		cfg.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	} else {
-		cfg.Logger = zerologCanalLogger{sdk.Logger(ctx)}
+		zerologLogger := sdk.Logger(ctx)
+		cfg.Logger = slog.New(&zerologHandler{logger: zerologLogger})
 	}
 
 	// Disable dumping
@@ -58,92 +60,49 @@ func NewCanal(ctx context.Context, config CanalConfig) (*canal.Canal, error) {
 	return c, nil
 }
 
-type zerologCanalLogger struct {
+type zerologHandler struct {
 	logger *zerolog.Logger
 }
 
-func (z zerologCanalLogger) Debug(args ...any) {
-	z.logger.Debug().Msg(fmt.Sprint(args...))
+func (h *zerologHandler) Enabled(_ context.Context, _ slog.Level) bool {
+	return true
 }
 
-func (z zerologCanalLogger) Debugf(format string, args ...any) {
-	z.logger.Debug().Msgf(format, args...)
+func (h *zerologHandler) Handle(_ context.Context, r slog.Record) error {
+	event := h.logger.With()
+
+	r.Attrs(func(a slog.Attr) bool {
+		event = event.Interface(a.Key, a.Value.Any())
+		return true
+	})
+
+	logger := event.Logger()
+	switch r.Level {
+	case slog.LevelDebug:
+		logger.Debug().Msg(r.Message)
+	case slog.LevelInfo:
+		logger.Info().Msg(r.Message)
+	case slog.LevelWarn:
+		logger.Warn().Msg(r.Message)
+	case slog.LevelError:
+		logger.Error().Msg(r.Message)
+	}
+
+	return nil
 }
 
-func (z zerologCanalLogger) Debugln(args ...any) {
-	z.logger.Debug().Msg(fmt.Sprintln(args...))
+func (h *zerologHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	event := h.logger.With()
+	for _, a := range attrs {
+		event = event.Interface(a.Key, a.Value.Any())
+	}
+	logger := event.Logger()
+	return &zerologHandler{logger: &logger}
 }
 
-func (z zerologCanalLogger) Error(args ...any) {
-	z.logger.Error().Msg(fmt.Sprint(args...))
-}
-
-func (z zerologCanalLogger) Errorf(format string, args ...any) {
-	z.logger.Error().Msgf(format, args...)
-}
-
-func (z zerologCanalLogger) Errorln(args ...any) {
-	z.logger.Error().Msg(fmt.Sprintln(args...))
-}
-
-func (z zerologCanalLogger) Fatal(args ...any) {
-	z.logger.Fatal().Msg(fmt.Sprint(args...))
-}
-
-func (z zerologCanalLogger) Fatalf(format string, args ...any) {
-	z.logger.Fatal().Msgf(format, args...)
-}
-
-func (z zerologCanalLogger) Fatalln(args ...any) {
-	z.logger.Fatal().Msg(fmt.Sprintln(args...))
-}
-
-func (z zerologCanalLogger) Info(args ...any) {
-	z.logger.Info().Msg(fmt.Sprint(args...))
-}
-
-func (z zerologCanalLogger) Infof(format string, args ...any) {
-	z.logger.Info().Msgf(format, args...)
-}
-
-func (z zerologCanalLogger) Infoln(args ...any) {
-	z.logger.Info().Msg(fmt.Sprintln(args...))
-}
-
-func (z zerologCanalLogger) Panic(args ...any) {
-	z.logger.Panic().Msg(fmt.Sprint(args...))
-}
-
-func (z zerologCanalLogger) Panicf(format string, args ...any) {
-	z.logger.Panic().Msgf(format, args...)
-}
-
-func (z zerologCanalLogger) Panicln(args ...any) {
-	z.logger.Panic().Msg(fmt.Sprintln(args...))
-}
-
-func (z zerologCanalLogger) Print(args ...any) {
-	z.logger.Info().Msg(fmt.Sprint(args...))
-}
-
-func (z zerologCanalLogger) Printf(format string, args ...any) {
-	z.logger.Info().Msgf(format, args...)
-}
-
-func (z zerologCanalLogger) Println(args ...any) {
-	z.logger.Info().Msg(fmt.Sprintln(args...))
-}
-
-func (z zerologCanalLogger) Warn(args ...any) {
-	z.logger.Warn().Msg(fmt.Sprint(args...))
-}
-
-func (z zerologCanalLogger) Warnf(format string, args ...any) {
-	z.logger.Warn().Msgf(format, args...)
-}
-
-func (z zerologCanalLogger) Warnln(args ...any) {
-	z.logger.Warn().Msg(fmt.Sprintln(args...))
+func (h *zerologHandler) WithGroup(name string) slog.Handler {
+	logger := h.logger.With().Str("group", name).Logger()
+	return &zerologHandler{logger: &logger}
 }
 
 const ServerIDKey = "mysql.serverID"

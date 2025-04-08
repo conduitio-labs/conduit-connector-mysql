@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -38,9 +39,29 @@ import (
 	gormschema "gorm.io/gorm/schema"
 )
 
+// Constants.
 const DSN = "root:meroxaadmin@tcp(127.0.0.1:3306)/meroxadb"
 
+// Database types supported by this connector.
+const (
+	DatabaseTypeMySQL   = "mysql"
+	DatabaseTypeMariaDB = "mariadb"
+
+	// Avro type constants.
+	AvroTypeLong = "long"
+	AvroTypeInt  = "int"
+)
+
+// Global Variables.
 var ServerID = "1"
+
+// DetectedDBType stores the database type (MySQL or MariaDB) detected at initialization.
+var DetectedDBType string
+
+// schemaInitOnce ensures schema initialization happens only once.
+var schemaInitOnce sync.Once
+
+// Type Definitions
 
 // DB is a gorm wrapper that also holds a sqlx DB. Iterators
 // don't manage sql connections, so we need to store them somehow.
@@ -49,6 +70,110 @@ type DB struct {
 	SqlxDB *sqlx.DB
 }
 
+// Initialize schemas at runtime (instead of init).
+var (
+	userPayloadSchema = AvroSchema{
+		Name: "mysql.users_payload",
+		Type: "record",
+		Fields: []AvroSchemaField{
+			{Name: "id", Type: AvroTypeLong},
+			{Name: "username", Type: "string"},
+			{Name: "email", Type: "string"},
+			{Name: "created_at", Type: "string"},
+		},
+	}
+	userKeySchema = AvroSchema{
+		Name:   "mysql.users_key",
+		Type:   "record",
+		Fields: []AvroSchemaField{{Name: "id", Type: AvroTypeLong}},
+	}
+)
+
+// ensureSchemas sets up schemas based on database type detection and caches database type.
+// It's designed to run only once even if called multiple times.
+func ensureSchemas(db *sqlx.DB) error {
+	var initErr error
+	// Use sync.Once to ensure this runs only one time, no matter how many goroutines call it
+	schemaInitOnce.Do(func() {
+		payload, key, err := createSchemas(db)
+		if err != nil {
+			initErr = fmt.Errorf("failed to create schemas: %w", err)
+			return
+		}
+
+		// Update the schema definitions with the results from createSchemas
+		userPayloadSchema = payload
+		userKeySchema = key
+	})
+	if initErr != nil {
+		return initErr
+	}
+	return nil
+}
+
+// Database type detection functions.
+func detectDatabaseType(db *sqlx.DB) (string, error) {
+	// If we already detected the type, return the cached value
+	if DetectedDBType != "" {
+		return DetectedDBType, nil
+	}
+
+	var version string
+	err := db.Get(&version, "SELECT VERSION()")
+	if err != nil {
+		return "", fmt.Errorf("failed to get database version: %w", err)
+	}
+
+	if strings.Contains(version, "MariaDB") {
+		DetectedDBType = DatabaseTypeMariaDB
+		return DatabaseTypeMariaDB, nil
+	}
+
+	DetectedDBType = DatabaseTypeMySQL
+	return DatabaseTypeMySQL, nil
+}
+
+// getAvroIntegerType returns the appropriate Avro type based on database type.
+func getAvroIntegerType(db *sqlx.DB) (string, error) {
+	dbType, err := detectDatabaseType(db)
+	if err != nil {
+		return AvroTypeLong, fmt.Errorf("failed to detect database type: %w", err)
+	}
+
+	if dbType == DatabaseTypeMariaDB {
+		return AvroTypeInt, nil
+	}
+	return AvroTypeLong, nil
+}
+
+// createSchemas generates the schema for the current database.
+func createSchemas(db *sqlx.DB) (AvroSchema, AvroSchema, error) {
+	idType, err := getAvroIntegerType(db)
+	if err != nil {
+		return AvroSchema{}, AvroSchema{}, err
+	}
+
+	payloadSchema := AvroSchema{
+		Name: "mysql.users_payload",
+		Type: "record",
+		Fields: []AvroSchemaField{
+			{Name: "id", Type: idType},
+			{Name: "username", Type: "string"},
+			{Name: "email", Type: "string"},
+			{Name: "created_at", Type: "string"},
+		},
+	}
+
+	keySchema := AvroSchema{
+		Name:   "mysql.users_key",
+		Type:   "record",
+		Fields: []AvroSchemaField{{Name: "id", Type: idType}},
+	}
+
+	return payloadSchema, keySchema, nil
+}
+
+// Database connection functions.
 func NewDB(t *testing.T) DB {
 	is := is.New(t)
 
@@ -67,6 +192,15 @@ func NewDB(t *testing.T) DB {
 	sqlDB, err := db.DB()
 	is.NoErr(err)
 	sqlxDB := sqlx.NewDb(sqlDB, "mysql")
+
+	// Fixes sporadic connection issues, as per https://github.com/go-sql-driver/mysql/issues/674
+	sqlxDB.SetConnMaxLifetime(time.Second)
+	// sqlxDB.SetMaxIdleConns(0)
+
+	// Ensure schemas are initialized when creating a new DB
+	// This will only do the actual work once
+	err = ensureSchemas(sqlxDB)
+	is.NoErr(err)
 
 	t.Cleanup(func() {
 		sqlxDB.Close()
@@ -113,24 +247,6 @@ type User struct {
 	Email     string    `db:"email"`
 	CreatedAt time.Time `db:"created_at"`
 }
-
-var (
-	userPayloadSchema = AvroSchema{
-		Name: "mysql.users_payload",
-		Type: "record",
-		Fields: []AvroSchemaField{
-			{Name: "id", Type: "long"},
-			{Name: "username", Type: "string"},
-			{Name: "email", Type: "string"},
-			{Name: "created_at", Type: "string"},
-		},
-	}
-	userKeySchema = AvroSchema{
-		Name:   "mysql.users_key",
-		Type:   "record",
-		Fields: []AvroSchemaField{{Name: "id", Type: "long"}},
-	}
-)
 
 type AvroSchema struct {
 	Name   string            `json:"name"`
@@ -274,7 +390,9 @@ func ReadAndAssertDelete(
 }
 
 func isDataEqual(is *is.I, actual, expected any) {
-	is.Equal("", cmp.Diff(actual, expected)) // actual (-) != expected (+)
+	normalizedActual := normalizeData(actual)
+	normalizedExpected := normalizeData(expected)
+	is.Equal("", cmp.Diff(normalizedActual, normalizedExpected)) // actual (-) != expected (+)
 }
 
 func ReadAndAssertSnapshot(
@@ -323,7 +441,10 @@ func assertSchema(ctx context.Context, is *is.I, metadata opencdc.Metadata) {
 		var actualSchema AvroSchema
 		is.NoErr(json.Unmarshal(s.Bytes, &actualSchema))
 
-		isDataEqual(is, actualSchema, userPayloadSchema)
+		// Normalize schema before comparing
+		normalizeSchemaTypes(&actualSchema)
+		normalizeSchemaTypes(&userPayloadSchema)
+		is.Equal("", cmp.Diff(actualSchema, userPayloadSchema))
 	}
 
 	{ // key schema
@@ -338,10 +459,82 @@ func assertSchema(ctx context.Context, is *is.I, metadata opencdc.Metadata) {
 		var actualSchema AvroSchema
 		is.NoErr(json.Unmarshal(s.Bytes, &actualSchema))
 
-		isDataEqual(is, actualSchema, userKeySchema)
+		// Normalize schema before comparing
+		normalizeSchemaTypes(&actualSchema)
+		normalizeSchemaTypes(&userKeySchema)
+		is.Equal("", cmp.Diff(actualSchema, userKeySchema))
 	}
 }
 
+// normalizeSchemaTypes normalizes int/long types for comparison.
+func normalizeSchemaTypes(schema *AvroSchema) {
+	for i := range schema.Fields {
+		if schema.Fields[i].Type == "int" || schema.Fields[i].Type == "long" {
+			schema.Fields[i].Type = "integer" // neutral name for comparison
+		}
+	}
+}
+
+func normalizeData(data interface{}) interface{} {
+	switch v := data.(type) {
+	case opencdc.StructuredData:
+		result := opencdc.StructuredData{}
+		for k, val := range v {
+			result[k] = normalizeData(val)
+		}
+		return result
+	case map[string]interface{}:
+		result := map[string]interface{}{}
+		for k, val := range v {
+			result[k] = normalizeData(val)
+		}
+		return result
+	case int32:
+		return int64(v)
+	case uint64:
+		// Convert uint64 to int64 for MariaDB compatibility
+		// Using conditional for overflow check
+		if v <= 9223372036854775807 { // Max value for int64
+			return int64(v)
+		}
+		return v // Keep as uint64 if it would overflow
+	case uint32:
+		// Convert uint32 to int64 for MariaDB compatibility
+		return int64(v) // uint32 max value fits in int64, no overflow possible
+	default:
+		return v
+	}
+}
+
+func normalizeMapData(data map[string]any) map[string]any {
+	result := make(map[string]any, len(data))
+	for k, v := range data {
+		switch val := v.(type) {
+		case int32:
+			result[k] = int64(val)
+		case uint32:
+			result[k] = int64(val)
+		case uint64:
+			// Using conditional for overflow check
+			if val <= 9223372036854775807 { // Max value for int64
+				result[k] = int64(val)
+			} else {
+				result[k] = val // Keep as uint64 if it would overflow
+			}
+		default:
+			result[k] = val
+		}
+	}
+	return result
+}
+
+func CompareData(is *is.I, actual, expected map[string]any) {
+	normalizedActual := normalizeMapData(actual)
+	normalizedExpected := normalizeMapData(expected)
+	is.Equal("", cmp.Diff(normalizedExpected, normalizedActual))
+}
+
+// Canal helper functions.
 func newCanal(ctx context.Context, is *is.I, tablename string) *canal.Canal {
 	is.Helper()
 
@@ -412,6 +605,7 @@ func (h *testEventHandler) OnRow(e *canal.RowsEvent) error {
 	}
 }
 
-func (h *testEventHandler) String() string {
-	return "testEventHandler"
-}
+// Note: this doesnt seem to be used anywhere
+// func (h *testEventHandler) String() string {
+// 	return "testEventHandler"
+// }

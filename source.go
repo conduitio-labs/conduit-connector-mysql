@@ -27,10 +27,75 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
+type Config struct {
+	// DSN is the connection string for the MySQL database.
+	DSN string `json:"dsn" validate:"required"`
+}
+
+type SourceConfig struct {
+	sdk.DefaultSourceMiddleware
+
+	Config
+
+	// TableConfig holds the custom configuration that each table can have.
+	TableConfig map[string]TableConfig `json:"tableConfig"`
+
+	// Tables represents the tables to read from.
+	//  - By default, no tables are included, but can be modified by adding a comma-separated string of regex patterns.
+	//  - They are applied in the order that they are provided, so the final regex supersedes all previous ones.
+	//  - To include all tables, use "*". You can then filter that list by adding a comma-separated string of regex patterns.
+	//  - To set an "include" regex, add "+" or nothing in front of the regex.
+	//  - To set an "exclude" regex, add "-" in front of the regex.
+	//  - e.g. "-.*meta$, wp_postmeta" will exclude all tables ending with "meta" but include the table "wp_postmeta".
+	Tables []string `json:"tables" validate:"required"`
+
+	// DisableCanalLogs disables verbose logs.
+	DisableCanalLogs bool `json:"disableCanalLogs"`
+
+	// FetchSize limits how many rows should be retrieved on each database fetch.
+	FetchSize uint64 `json:"fetchSize" default:"10000"`
+
+	// UnsafeSnapshot allows a snapshot of a table with neither a primary key
+	// nor a defined sorting column. The opencdc.Position won't record the last record
+	// read from a table.
+	UnsafeSnapshot bool `json:"unsafeSnapshot"`
+
+	mysqlCfg *mysql.Config
+}
+
+func (s *SourceConfig) MysqlCfg() *mysql.Config {
+	return s.mysqlCfg
+}
+
+func (s *SourceConfig) Validate(context.Context) error {
+	mysqlCfg, err := mysql.ParseDSN(s.DSN)
+	if err != nil {
+		return fmt.Errorf("failed to parse DSN: %w", err)
+	}
+
+	// we need to take control over how do we handle time.Time values
+	mysqlCfg.ParseTime = true
+
+	s.mysqlCfg = mysqlCfg
+
+	return nil
+}
+
+type TableConfig struct {
+	// SortingColumn allows to force using a custom column to sort the snapshot.
+	SortingColumn string `json:"sortingColumn"`
+}
+
+const (
+	DefaultFetchSize = 50000
+	// AllTablesWildcard can be used if you'd like to listen to all tables.
+	AllTablesWildcard = "*"
+)
+
 type Source struct {
 	sdk.UnimplementedSource
 
-	config common.SourceConfig
+	config SourceConfig
 
 	db *sqlx.DB
 
@@ -47,22 +112,13 @@ func (s *Source) Config() sdk.SourceConfig {
 }
 
 func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) {
-	mysqlCfg, err := mysql.ParseDSN(s.config.DSN)
-	if err != nil {
-		return fmt.Errorf("failed to parse given URL: %w", err)
-	}
-
-	// force parse time to true, as we need to take control over how do we
-	// handle time.Time values
-	mysqlCfg.ParseTime = true
-
-	s.db, err = sqlx.Open("mysql", mysqlCfg.FormatDSN())
+	s.db, err = sqlx.Open("mysql", s.config.MysqlCfg().FormatDSN())
 	if err != nil {
 		return fmt.Errorf("failed to connect to mysql: %w", err)
 	}
 
 	sdk.Logger(ctx).Info().Msg("Parsing table regexes...")
-	s.config.Tables, err = s.getAndFilterTables(ctx, s.db, mysqlCfg.DBName)
+	s.config.Tables, err = s.getAndFilterTables(ctx, s.db, s.config.MysqlCfg().DBName)
 	if err != nil {
 		return err
 	}
@@ -72,7 +128,7 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 		Int("count", len(s.config.Tables)).
 		Msgf("Successfully detected tables")
 
-	tableKeys, err := s.getTableKeys(ctx, mysqlCfg.DBName)
+	tableKeys, err := s.getTableKeys(ctx, s.config.MysqlCfg().DBName)
 	if err != nil {
 		return fmt.Errorf("failed to get table keys: %w", err)
 	}
@@ -97,10 +153,10 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 		primaryKeys:           tableKeys,
 		startSnapshotPosition: pos.SnapshotPosition,
 		startCdcPosition:      pos.CdcPosition,
-		database:              mysqlCfg.DBName,
+		database:              s.config.MysqlCfg().DBName,
 		tables:                s.config.Tables,
 		serverID:              serverID,
-		mysqlConfig:           mysqlCfg,
+		mysqlConfig:           s.config.MysqlCfg(),
 		disableCanalLogging:   s.config.DisableCanalLogs,
 		fetchSize:             s.config.FetchSize,
 	})
@@ -185,7 +241,7 @@ func (s *Source) processTableRule(rule string, tables []string, includedTables m
 	// trim leading and trailing spaces from rule
 	rule = strings.TrimSpace(rule)
 
-	if rule == common.AllTablesWildcard {
+	if rule == AllTablesWildcard {
 		for _, table := range tables {
 			includedTables[table] = true
 		}
@@ -242,31 +298,6 @@ func ParseRule(rule string) (Action, string, error) {
 	return action, rule, nil // Return action and regex (without the action prefix)
 }
 
-func getPrimaryKeys(db *sqlx.DB, database, table string) (common.PrimaryKeys, error) {
-	var primaryKeys []struct {
-		ColumnName string `db:"COLUMN_NAME"`
-	}
-
-	err := db.Select(&primaryKeys, `
-		SELECT COLUMN_NAME
-		FROM information_schema.key_column_usage
-		WHERE constraint_name = 'PRIMARY'
-			AND table_schema = ?
-			AND table_name = ?
-		ORDER BY ORDINAL_POSITION
-	`, database, table)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get primary key(s) from table %s: %w", table, err)
-	}
-
-	var keys common.PrimaryKeys
-	for _, pk := range primaryKeys {
-		keys = append(keys, pk.ColumnName)
-	}
-
-	return keys, nil
-}
-
 func (s *Source) getTableKeys(ctx context.Context, dbName string) (map[string]common.PrimaryKeys, error) {
 	tableKeys := make(map[string]common.PrimaryKeys)
 
@@ -277,7 +308,7 @@ func (s *Source) getTableKeys(ctx context.Context, dbName string) (map[string]co
 			continue
 		}
 
-		primaryKeys, err := getPrimaryKeys(s.db, dbName, table)
+		primaryKeys, err := common.GetPrimaryKeys(s.db, dbName, table)
 		if err != nil {
 			if s.config.UnsafeSnapshot {
 				sdk.Logger(ctx).Warn().Msgf(

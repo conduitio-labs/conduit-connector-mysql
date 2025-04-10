@@ -80,7 +80,7 @@ func TestCDCIterator_InsertAction(t *testing.T) {
 
 	db := testutils.NewDB(t)
 
-	testutils.RecreateUsersTable(is, db)
+	testutils.CreateUserTable(is, db)
 
 	iterator, teardown := testCdcIterator(ctx, t, is)
 	defer teardown()
@@ -100,7 +100,7 @@ func TestCDCIterator_MultiInsertAction(t *testing.T) {
 
 	db := testutils.NewDB(t)
 
-	testutils.RecreateUsersTable(is, db)
+	testutils.CreateUserTable(is, db)
 
 	iterator, teardown := testCdcIterator(ctx, t, is)
 	defer teardown()
@@ -126,7 +126,7 @@ func TestCDCIterator_DeleteAction(t *testing.T) {
 
 	db := testutils.NewDB(t)
 
-	testutils.RecreateUsersTable(is, db)
+	testutils.CreateUserTable(is, db)
 
 	user1 := testutils.InsertUser(is, db, 1)
 	user2 := testutils.InsertUser(is, db, 2)
@@ -150,7 +150,7 @@ func TestCDCIterator_MultiDeleteAction(t *testing.T) {
 
 	db := testutils.NewDB(t)
 
-	testutils.RecreateUsersTable(is, db)
+	testutils.CreateUserTable(is, db)
 
 	var users []*testutils.User
 	for i := 15; i < 100; i++ {
@@ -178,7 +178,7 @@ func TestCDCIterator_UpdateAction(t *testing.T) {
 
 	db := testutils.NewDB(t)
 
-	testutils.RecreateUsersTable(is, db)
+	testutils.CreateUserTable(is, db)
 
 	user1 := testutils.InsertUser(is, db, 1)
 	user2 := testutils.InsertUser(is, db, 2)
@@ -202,7 +202,7 @@ func TestCDCIterator_MultiUpdateAction(t *testing.T) {
 
 	db := testutils.NewDB(t)
 
-	testutils.RecreateUsersTable(is, db)
+	testutils.CreateUserTable(is, db)
 
 	var users []*testutils.User
 	for i := 15; i < 100; i++ {
@@ -241,7 +241,7 @@ func TestCDCIterator_RestartOnPosition(t *testing.T) {
 
 	db := testutils.NewDB(t)
 
-	testutils.RecreateUsersTable(is, db)
+	testutils.CreateUserTable(is, db)
 
 	// start the iterator at the beginning
 
@@ -282,7 +282,7 @@ func TestCDCIterator_RestartOnEventCenter(t *testing.T) {
 
 	db := testutils.NewDB(t)
 
-	testutils.RecreateUsersTable(is, db)
+	testutils.CreateUserTable(is, db)
 
 	// start the iterator at the beginning
 

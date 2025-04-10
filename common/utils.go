@@ -126,12 +126,61 @@ func GetServerID(ctx context.Context, db *sqlx.DB) (string, error) {
 // order is important, so that we can properly build ORDER BY clauses.
 type PrimaryKeys []string
 
-func (p PrimaryKeys) GetValuesFromRow(row map[string]any) []any {
-	values := make([]any, 0, len(p))
-	for _, key := range p {
-		if value, ok := row[key]; ok {
-			values = append(values, value)
-		}
+// TableKeyFetcher fetches primary keys from the database and caches them.
+type TableKeyFetcher struct {
+	database string
+	cache    map[string]PrimaryKeys
+}
+
+func NewTableKeyFetcher(database string) *TableKeyFetcher {
+	return &TableKeyFetcher{
+		database: database,
+		cache:    make(map[string]PrimaryKeys),
 	}
-	return values
+}
+
+func (t *TableKeyFetcher) GetKeys(tx *sqlx.Tx, table string) (PrimaryKeys, error) {
+	keys, ok := t.cache[table]
+	if ok {
+		return keys, nil
+	}
+
+	keys, err := GetPrimaryKeys(tx, t.database, table)
+	if err != nil {
+		return nil, err
+	}
+
+	t.cache[table] = keys
+
+	return keys, nil
+}
+
+// keyQuerier allows us to select primary keys from both a sqlx.DB and an sqlx.Tx transaction.
+type keyQuerier interface {
+	Select(dest any, query string, args ...any) error
+}
+
+func GetPrimaryKeys(db keyQuerier, database, table string) (PrimaryKeys, error) {
+	var primaryKeys []struct {
+		ColumnName string `db:"COLUMN_NAME"`
+	}
+
+	err := db.Select(&primaryKeys, `
+		SELECT COLUMN_NAME
+		FROM information_schema.key_column_usage
+		WHERE constraint_name = 'PRIMARY'
+			AND table_schema = ?
+			AND table_name = ?
+		ORDER BY ORDINAL_POSITION
+	`, database, table)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get primary key(s) from table %s: %w", table, err)
+	}
+
+	keys := make(PrimaryKeys, 0, len(primaryKeys))
+	for _, pk := range primaryKeys {
+		keys = append(keys, pk.ColumnName)
+	}
+
+	return keys, nil
 }

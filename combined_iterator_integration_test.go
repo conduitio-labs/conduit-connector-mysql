@@ -49,7 +49,7 @@ func TestCombinedIterator_SnapshotAndCDC(t *testing.T) {
 	is := is.New(t)
 	db := testutils.NewDB(t)
 
-	testutils.RecreateUsersTable(is, db)
+	testutils.CreateUserTable(is, db)
 
 	user1 := testutils.InsertUser(is, db, 1)
 	user2 := testutils.InsertUser(is, db, 2)

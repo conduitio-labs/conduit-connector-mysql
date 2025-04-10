@@ -19,7 +19,6 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	testutils "github.com/conduitio-labs/conduit-connector-mysql/test"
 	"github.com/matryer/is"
 )
@@ -115,7 +114,7 @@ func TestSource_TableFilterRegex(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			is := is.New(t)
 			source := &Source{
-				config: common.SourceConfig{
+				config: SourceConfig{
 					Tables: tc.tablePatterns,
 				},
 				db: db.SqlxDB,

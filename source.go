@@ -92,35 +92,6 @@ const (
 	AllTablesWildcard = "*"
 )
 
-type DestinationConfig struct {
-	sdk.DefaultDestinationMiddleware
-
-	Config
-
-	mysqlCfg        *mysql.Config
-	tableKeyFetcher *common.TableKeyFetcher
-}
-
-func (d *DestinationConfig) MysqlCfg() *mysql.Config {
-	return d.mysqlCfg
-}
-
-func (d *DestinationConfig) TableKeyFetcher() *common.TableKeyFetcher {
-	return d.tableKeyFetcher
-}
-
-func (d *DestinationConfig) Validate(context.Context) error {
-	mysqlCfg, err := mysql.ParseDSN(d.DSN)
-	if err != nil {
-		return fmt.Errorf("failed to parse DSN: %w", err)
-	}
-
-	d.mysqlCfg = mysqlCfg
-	d.tableKeyFetcher = common.NewTableKeyFetcher(mysqlCfg.DBName)
-
-	return nil
-}
-
 type Source struct {
 	sdk.UnimplementedSource
 

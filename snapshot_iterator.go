@@ -73,7 +73,7 @@ func (config *snapshotIteratorConfig) validate() error {
 	}
 
 	if config.fetchSize == 0 {
-		config.fetchSize = common.DefaultFetchSize
+		config.fetchSize = DefaultFetchSize
 	}
 
 	if config.database == "" {

@@ -23,13 +23,108 @@ import (
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	"github.com/conduitio/conduit-commons/opencdc"
 	sdk "github.com/conduitio/conduit-connector-sdk"
+	"github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 )
+
+type Config struct {
+	// DSN is the connection string for the MySQL database.
+	DSN string `json:"dsn" validate:"required"`
+}
+
+type SourceConfig struct {
+	sdk.DefaultSourceMiddleware
+
+	Config
+
+	// TableConfig holds the custom configuration that each table can have.
+	TableConfig map[string]TableConfig `json:"tableConfig"`
+
+	// Tables represents the tables to read from.
+	//  - By default, no tables are included, but can be modified by adding a comma-separated string of regex patterns.
+	//  - They are applied in the order that they are provided, so the final regex supersedes all previous ones.
+	//  - To include all tables, use "*". You can then filter that list by adding a comma-separated string of regex patterns.
+	//  - To set an "include" regex, add "+" or nothing in front of the regex.
+	//  - To set an "exclude" regex, add "-" in front of the regex.
+	//  - e.g. "-.*meta$, wp_postmeta" will exclude all tables ending with "meta" but include the table "wp_postmeta".
+	Tables []string `json:"tables" validate:"required"`
+
+	// DisableCanalLogs disables verbose logs.
+	DisableCanalLogs bool `json:"disableCanalLogs"`
+
+	// FetchSize limits how many rows should be retrieved on each database fetch.
+	FetchSize uint64 `json:"fetchSize" default:"10000"`
+
+	// UnsafeSnapshot allows a snapshot of a table with neither a primary key
+	// nor a defined sorting column. The opencdc.Position won't record the last record
+	// read from a table.
+	UnsafeSnapshot bool `json:"unsafeSnapshot"`
+
+	mysqlCfg *mysql.Config
+}
+
+func (s *SourceConfig) MysqlCfg() *mysql.Config {
+	return s.mysqlCfg
+}
+
+func (s *SourceConfig) Validate(context.Context) error {
+	mysqlCfg, err := mysql.ParseDSN(s.DSN)
+	if err != nil {
+		return fmt.Errorf("failed to parse DSN: %w", err)
+	}
+
+	// we need to take control over how do we handle time.Time values
+	mysqlCfg.ParseTime = true
+
+	s.mysqlCfg = mysqlCfg
+
+	return nil
+}
+
+type TableConfig struct {
+	// SortingColumn allows to force using a custom column to sort the snapshot.
+	SortingColumn string `json:"sortingColumn"`
+}
+
+const (
+	DefaultFetchSize = 50000
+	// AllTablesWildcard can be used if you'd like to listen to all tables.
+	AllTablesWildcard = "*"
+)
+
+type DestinationConfig struct {
+	sdk.DefaultDestinationMiddleware
+
+	Config
+
+	mysqlCfg        *mysql.Config
+	tableKeyFetcher *common.TableKeyFetcher
+}
+
+func (d *DestinationConfig) MysqlCfg() *mysql.Config {
+	return d.mysqlCfg
+}
+
+func (d *DestinationConfig) TableKeyFetcher() *common.TableKeyFetcher {
+	return d.tableKeyFetcher
+}
+
+func (d *DestinationConfig) Validate(context.Context) error {
+	mysqlCfg, err := mysql.ParseDSN(d.DSN)
+	if err != nil {
+		return fmt.Errorf("failed to parse DSN: %w", err)
+	}
+
+	d.mysqlCfg = mysqlCfg
+	d.tableKeyFetcher = common.NewTableKeyFetcher(mysqlCfg.DBName)
+
+	return nil
+}
 
 type Source struct {
 	sdk.UnimplementedSource
 
-	config common.SourceConfig
+	config SourceConfig
 
 	db *sqlx.DB
 
@@ -175,7 +270,7 @@ func (s *Source) processTableRule(rule string, tables []string, includedTables m
 	// trim leading and trailing spaces from rule
 	rule = strings.TrimSpace(rule)
 
-	if rule == common.AllTablesWildcard {
+	if rule == AllTablesWildcard {
 		for _, table := range tables {
 			includedTables[table] = true
 		}

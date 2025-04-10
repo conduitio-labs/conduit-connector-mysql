@@ -24,13 +24,43 @@ import (
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	"github.com/conduitio/conduit-commons/opencdc"
 	sdk "github.com/conduitio/conduit-connector-sdk"
+	"github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 )
+
+type DestinationConfig struct {
+	sdk.DefaultDestinationMiddleware
+
+	Config
+
+	mysqlCfg        *mysql.Config
+	tableKeyFetcher *common.TableKeyFetcher
+}
+
+func (d *DestinationConfig) MysqlCfg() *mysql.Config {
+	return d.mysqlCfg
+}
+
+func (d *DestinationConfig) TableKeyFetcher() *common.TableKeyFetcher {
+	return d.tableKeyFetcher
+}
+
+func (d *DestinationConfig) Validate(context.Context) error {
+	mysqlCfg, err := mysql.ParseDSN(d.DSN)
+	if err != nil {
+		return fmt.Errorf("failed to parse DSN: %w", err)
+	}
+
+	d.mysqlCfg = mysqlCfg
+	d.tableKeyFetcher = common.NewTableKeyFetcher(mysqlCfg.DBName)
+
+	return nil
+}
 
 type Destination struct {
 	sdk.UnimplementedDestination
 	db     *sqlx.DB
-	config common.DestinationConfig
+	config DestinationConfig
 }
 
 func NewDestination() sdk.Destination {

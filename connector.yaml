@@ -134,6 +134,13 @@ specification:
         type: int
         default: "10000"
         validations: []
+      - name: noSnapshot
+        description: |-
+          NoSnapshot prevents the connector from doing table snapshots and makes it
+          start directly in cdc mode.
+        type: bool
+        default: ""
+        validations: []
       - name: tableConfig.*.sortingColumn
         description: SortingColumn allows to force using a custom column to sort the snapshot.
         type: string

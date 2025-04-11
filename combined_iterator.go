@@ -45,6 +45,7 @@ type combinedIteratorConfig struct {
 	serverID              string
 	mysqlConfig           *mysqldriver.Config
 	disableCanalLogging   bool
+	noSnapshot            bool
 }
 
 func newCombinedIterator(
@@ -61,6 +62,21 @@ func newCombinedIterator(
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cdc iterator: %w", err)
+	}
+
+	if config.noSnapshot {
+		if err := cdcIterator.start(ctx); err != nil {
+			return nil, fmt.Errorf("failed to start cdc iterator: %w", err)
+		}
+
+		sdk.Logger(ctx).Info().Msg("started cdc iterator")
+
+		iterator := &combinedIterator{
+			cdcIterator:     cdcIterator,
+			currentIterator: cdcIterator,
+		}
+
+		return iterator, nil
 	}
 
 	snapshotIterator, err := newSnapshotIterator(snapshotIteratorConfig{

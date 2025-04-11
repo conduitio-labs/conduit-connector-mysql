@@ -60,6 +60,10 @@ type SourceConfig struct {
 	// read from a table.
 	UnsafeSnapshot bool `json:"unsafeSnapshot"`
 
+	// NoSnapshot prevents the connector from doing table snapshots and makes it
+	// start directly in cdc mode.
+	NoSnapshot bool `json:"noSnapshot"`
+
 	mysqlCfg *mysql.Config
 }
 
@@ -159,6 +163,7 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 		mysqlConfig:           s.config.MysqlCfg(),
 		disableCanalLogging:   s.config.DisableCanalLogs,
 		fetchSize:             s.config.FetchSize,
+		noSnapshot:            s.config.NoSnapshot,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create snapshot iterator: %w", err)

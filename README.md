@@ -137,6 +137,11 @@ pipelines:
           # Type: int
           # Required: no
           fetchSize: "10000"
+          # NoSnapshot prevents the connector from doing table snapshots and
+          # makes it start directly in cdc mode.
+          # Type: bool
+          # Required: no
+          noSnapshot: "false"
           # SortingColumn allows to force using a custom column to sort the
           # snapshot.
           # Type: string

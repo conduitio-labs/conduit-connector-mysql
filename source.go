@@ -60,6 +60,10 @@ type SourceConfig struct {
 	// read from a table.
 	UnsafeSnapshot bool `json:"unsafeSnapshot"`
 
+	// NoSnapshot prevents the connector from doing table snapshots and makes it
+	// start directly in cdc mode.
+	NoSnapshot bool `json:"noSnapshot"`
+
 	mysqlCfg *mysql.Config
 }
 

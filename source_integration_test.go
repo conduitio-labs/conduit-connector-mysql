@@ -347,3 +347,7 @@ func TestSource_CompositeKey(t *testing.T) {
 		is.Equal(len(parsedKeySchema.Fields), 2) // Both parts of the composite key
 	}
 }
+
+func TestNoSnapshot(t *testing.T) {
+
+}

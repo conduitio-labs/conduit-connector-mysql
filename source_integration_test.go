@@ -17,8 +17,10 @@ package mysql
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"testing"
+	"time"
 
 	testutils "github.com/conduitio-labs/conduit-connector-mysql/test"
 	"github.com/conduitio/conduit-commons/opencdc"
@@ -349,5 +351,38 @@ func TestSource_CompositeKey(t *testing.T) {
 }
 
 func TestNoSnapshot(t *testing.T) {
+	ctx := testutils.TestContext(t)
+	is := is.New(t)
 
+	db := testutils.NewDB(t)
+
+	testutils.CreateUserTable(is, db)
+
+	user1 := testutils.InsertUser(is, db, 1)
+	user2 := testutils.InsertUser(is, db, 2)
+
+	source, teardown := testSource(ctx, is, map[string]string{
+		"tables":     "users",
+		"noSnapshot": "true",
+	})
+	defer teardown()
+
+	user3 := testutils.InsertUser(is, db, 3)
+
+	user1Before := user1
+	user1Updated := user1.Update()
+	testutils.UpdateUser(is, db, user1Updated)
+
+	testutils.DeleteUser(is, db, user2)
+
+	// We should only get CDC events (no snapshot records)
+	testutils.ReadAndAssertCreate(ctx, is, source, user3)
+	testutils.ReadAndAssertUpdate(ctx, is, source, user1Before, user1Updated)
+	testutils.ReadAndAssertDelete(ctx, is, source, user2)
+
+	ctx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+	defer cancel()
+
+	_, err := source.Read(ctx)
+	is.True(errors.Is(err, context.DeadlineExceeded))
 }

@@ -49,20 +49,20 @@ type SourceConfig struct {
 	//  - e.g. "-.*meta$, wp_postmeta" will exclude all tables ending with "meta" but include the table "wp_postmeta".
 	Tables []string `json:"tables" validate:"required"`
 
-	// DisableCanalLogs disables verbose logs.
-	DisableCanalLogs bool `json:"disableCanalLogs"`
+	// DisableLogs disables verbose cdc driver logs.
+	DisableLogs bool `json:"cdc.disableLogs"`
 
-	// FetchSize limits how many rows should be retrieved on each database fetch.
-	FetchSize uint64 `json:"fetchSize" default:"10000"`
+	// FetchSize limits how many rows should be retrieved on each database fetch on snapshot mode.
+	FetchSize uint64 `json:"snapshot.fetchSize" default:"10000"`
 
 	// UnsafeSnapshot allows a snapshot of a table with neither a primary key
 	// nor a defined sorting column. The opencdc.Position won't record the last record
 	// read from a table.
-	UnsafeSnapshot bool `json:"unsafeSnapshot"`
+	UnsafeSnapshot bool `json:"snapshot.unsafe"`
 
-	// NoSnapshot prevents the connector from doing table snapshots and makes it
+	// EnabledSnapshot prevents the connector from doing table snapshots and makes it
 	// start directly in cdc mode.
-	NoSnapshot bool `json:"noSnapshot"`
+	EnabledSnapshot bool `json:"snapshot.enabled"`
 
 	mysqlCfg *mysql.Config
 }
@@ -161,9 +161,9 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 		tables:                s.config.Tables,
 		serverID:              serverID,
 		mysqlConfig:           s.config.MysqlCfg(),
-		disableCanalLogging:   s.config.DisableCanalLogs,
+		disableCanalLogging:   s.config.DisableLogs,
 		fetchSize:             s.config.FetchSize,
-		noSnapshot:            s.config.NoSnapshot,
+		noSnapshot:            s.config.EnabledSnapshot,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create snapshot iterator: %w", err)

@@ -65,6 +65,48 @@ The source connector uses [avro](https://avro.apache.org/docs/1.11.1/specificati
 | SET        | string    |
 | JSON       | string    |
 
+### Record structure
+
+Records produced by the MySQL source connector contain the following components:
+
+*   **Operation**: Indicates the type of change (`create`, `update`, `delete`, `snapshot`).
+*   **Payload**:
+    *   `Before`: (Only for `update` operations) `opencdc.StructuredData` representing the row state before the change.
+    *   `After`: `opencdc.StructuredData` representing the row state after the change (or the current state for `snapshot` and `create`).
+*   **Key**: Identifies the specific row. See Snapshot/CDC sections below for details.
+*   **Position**: Represents the point in the data stream. It's a JSON object containing *either* a `snapshot_position` field *or* a `cdc_position` field, structured as described below.
+*   **Metadata**: Contains standard OpenCDC fields plus:
+    *   `mysql.server.id`: (CDC only) The originating MySQL server ID from the replication event header.
+    *   Schema registry information (`opencdc.payload.schema.*`, `opencdc.key.schema.*`).
+
+#### Snapshot Records
+
+*   **Operation**: `snapshot`.
+*   **Payload `After`**: `opencdc.StructuredData` with all column values.
+*   **Key**:
+    *   With Primary Key(s): `opencdc.StructuredData` using primary key columns and values.
+    *   Without Primary Key(s) (using `LIMIT`/`OFFSET`): `opencdc.RawData` string `"<table_name>_<row_offset>"`.
+*   **Position (`snapshot_position` field)**: A JSON object containing:
+    *   `snapshots`: (object) Maps table names to their specific snapshot position object.
+        *   *(Single Primary Key Table)*: Contains `last_read` (any) and `snapshot_end` (any).
+        *   *(Multiple Primary Key Table)*: Contains an array of objects, each with `key_name` (string), `last_read` (any), and `snapshot_end` (any).
+        *   *(No Primary Key Table)*: Table entry might be missing or empty (offset is not persisted).
+
+#### CDC Records
+
+*   **Operation**: Either `create`, `update` or `delete`.
+*   **Key**:
+    *   With Primary Key(s): `opencdc.StructuredData` using primary key columns and values (from the `After` state).
+    *   Without Primary Key(s): `opencdc.RawData` string `"<binlog_file_name>_<log_position>"`.
+*   **Payload**:
+    *   `Before`: (For `update` only) `opencdc.StructuredData` with pre-update column values.
+    *   `After`: `opencdc.StructuredData` with post-change column values (for `create`, `update`) or pre-deletion values (for `delete`).
+*   **Position (`cdc_position` field)**: Encodes the binlog location in a JSON object with the following fields.
+    *   `name`: (string) Binlog file name.
+    *   `pos`: (uint32) Position within the binlog file.
+    *   `prev`: (object, optional) Position of the preceding event, containing `name` (string) and `pos` (uint32). Omitted if not applicable.
+    *   `idx`: (int, optional) Row index within a potentially multi-row MySQL replication event. Omitted if zero or not applicable.
+
 ## Destination
 
 The MySQL destination takes a slice of `opencdc.Record` and writes them in batches to MySQL. It will use the `opencdc.collection` field in the metadata to determine the table to write to.

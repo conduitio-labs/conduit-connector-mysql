@@ -28,7 +28,7 @@ import (
 )
 
 type Config struct {
-	// DSN is the connection string for the MySQL database.
+	// The connection string for the MySQL database.
 	DSN string `json:"dsn" validate:"required"`
 }
 
@@ -37,10 +37,10 @@ type SourceConfig struct {
 
 	Config
 
-	// TableConfig holds the custom configuration that each table can have.
+	// Holds the custom configuration that each table can have.
 	TableConfig map[string]TableConfig `json:"tableConfig"`
 
-	// Tables represents the tables to read from.
+	// Represents the tables to read from.
 	//  - By default, no tables are included, but can be modified by adding a comma-separated string of regex patterns.
 	//  - They are applied in the order that they are provided, so the final regex supersedes all previous ones.
 	//  - To include all tables, use "*". You can then filter that list by adding a comma-separated string of regex patterns.
@@ -49,18 +49,18 @@ type SourceConfig struct {
 	//  - e.g. "-.*meta$, wp_postmeta" will exclude all tables ending with "meta" but include the table "wp_postmeta".
 	Tables []string `json:"tables" validate:"required"`
 
-	// DisableLogs disables verbose cdc driver logs.
+	// Disables verbose cdc driver logs.
 	DisableLogs bool `json:"cdc.disableLogs"`
 
-	// FetchSize limits how many rows should be retrieved on each database fetch on snapshot mode.
+	// Limits how many rows should be retrieved on each database fetch on snapshot mode.
 	FetchSize uint64 `json:"snapshot.fetchSize" default:"10000"`
 
-	// UnsafeSnapshot allows a snapshot of a table with neither a primary key
+	// Allows a snapshot of a table with neither a primary key
 	// nor a defined sorting column. The opencdc.Position won't record the last record
 	// read from a table.
 	UnsafeSnapshot bool `json:"snapshot.unsafe"`
 
-	// EnabledSnapshot prevents the connector from doing table snapshots and makes it
+	// Prevents the connector from doing table snapshots and makes it
 	// start directly in cdc mode.
 	EnabledSnapshot bool `json:"snapshot.enabled"`
 
@@ -86,7 +86,7 @@ func (s *SourceConfig) Validate(context.Context) error {
 }
 
 type TableConfig struct {
-	// SortingColumn allows to force using a custom column to sort the snapshot.
+	// Allows to force using a custom column to sort the snapshot.
 	SortingColumn string `json:"sortingColumn"`
 }
 

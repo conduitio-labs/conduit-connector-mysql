@@ -39,24 +39,17 @@ type Source struct {
 	iterator common.Iterator
 }
 
-const (
+var (
 	defaultBatchDelay = time.Second * 5
-	defaultBatchSize  = 1000
+	defaultBatchSize  = 100000
 )
-
-func intPtr(v int) *int {
-	return &v
-}
-func durationPtr(v time.Duration) *time.Duration {
-	return &v
-}
 
 func NewSource() sdk.Source {
 	// Create Source and wrap it in the default middleware.
 	return sdk.SourceWithMiddleware(&Source{
 		SourceWithBatch: sdk.SourceWithBatch{
-			BatchSize:  intPtr(defaultBatchSize),
-			BatchDelay: durationPtr(defaultBatchDelay),
+			BatchSize:  &defaultBatchSize,
+			BatchDelay: &defaultBatchDelay,
 		},
 	})
 }
@@ -132,9 +125,6 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 }
 
 func (s *Source) ReadN(ctx context.Context, n int) ([]opencdc.Record, error) {
-	sdk.Logger(ctx).Debug().
-		Int("readn", n).
-		Msgf("Readn source")
 	//nolint:wrapcheck // error already wrapped in iterator
 	return s.iterator.ReadN(ctx, n)
 }

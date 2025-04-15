@@ -141,16 +141,35 @@ func (c *cdcIterator) Ack(context.Context, opencdc.Position) error {
 	return nil
 }
 
-func (c *cdcIterator) Read(ctx context.Context) (opencdc.Record, error) {
+func (c *cdcIterator) ReadN(ctx context.Context, n int) ([]opencdc.Record, error) {
+	var recs []opencdc.Record
+
+	// Block until at least one record is received or context is canceled
 	select {
-	//nolint:wrapcheck // no need to wrap canceled error
 	case <-ctx.Done():
-		return opencdc.Record{}, ctx.Err()
+		return nil, ctx.Err()
 	case <-c.canalDoneC:
-		return opencdc.Record{}, fmt.Errorf("canal is closed")
+		return nil, fmt.Errorf("canal is closed")
 	case rec := <-c.parsedRecordsC:
-		return rec, nil
+		recs = append(recs, rec)
 	}
+
+	// try getting the remaining (n-1) records without blocking
+	for len(recs) < n {
+		select {
+		case rec := <-c.parsedRecordsC:
+			recs = append(recs, rec)
+		case <-ctx.Done():
+			return recs, ctx.Err()
+		case <-c.canalDoneC:
+			return recs, fmt.Errorf("canal is closed")
+		default:
+			// No more records currently available
+			return recs, nil
+		}
+	}
+
+	return recs, nil
 }
 
 func (c *cdcIterator) Teardown(ctx context.Context) error {

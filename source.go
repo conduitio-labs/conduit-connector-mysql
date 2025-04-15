@@ -112,9 +112,9 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 	return nil
 }
 
-func (s *Source) Read(ctx context.Context) (opencdc.Record, error) {
+func (s *Source) ReadN(ctx context.Context, n int) ([]opencdc.Record, error) {
 	//nolint:wrapcheck // error already wrapped in iterator
-	return s.iterator.Read(ctx)
+	return s.iterator.ReadN(ctx, n)
 }
 
 func (s *Source) Ack(ctx context.Context, _ opencdc.Position) error {

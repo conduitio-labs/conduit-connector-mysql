@@ -147,6 +147,7 @@ func (c *cdcIterator) ReadN(ctx context.Context, n int) ([]opencdc.Record, error
 	// Block until at least one record is received or context is canceled
 	select {
 	case <-ctx.Done():
+		//nolint:wrapcheck // no need to wrap canceled error
 		return nil, ctx.Err()
 	case <-c.canalDoneC:
 		return nil, fmt.Errorf("canal is closed")
@@ -160,6 +161,7 @@ func (c *cdcIterator) ReadN(ctx context.Context, n int) ([]opencdc.Record, error
 		case rec := <-c.parsedRecordsC:
 			recs = append(recs, rec)
 		case <-ctx.Done():
+			//nolint:wrapcheck // no need to wrap canceled error
 			return recs, ctx.Err()
 		case <-c.canalDoneC:
 			return recs, fmt.Errorf("canal is closed")

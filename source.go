@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	"github.com/conduitio/conduit-commons/opencdc"
@@ -29,6 +30,7 @@ import (
 
 type Source struct {
 	sdk.UnimplementedSource
+	sdk.SourceWithBatch
 
 	config common.SourceConfig
 
@@ -37,9 +39,26 @@ type Source struct {
 	iterator common.Iterator
 }
 
+const (
+	defaultBatchDelay = time.Second * 5
+	defaultBatchSize  = 1000
+)
+
+func intPtr(v int) *int {
+	return &v
+}
+func durationPtr(v time.Duration) *time.Duration {
+	return &v
+}
+
 func NewSource() sdk.Source {
 	// Create Source and wrap it in the default middleware.
-	return sdk.SourceWithMiddleware(&Source{})
+	return sdk.SourceWithMiddleware(&Source{
+		SourceWithBatch: sdk.SourceWithBatch{
+			BatchSize:  intPtr(defaultBatchSize),
+			BatchDelay: durationPtr(defaultBatchDelay),
+		},
+	})
 }
 
 func (s *Source) Config() sdk.SourceConfig {
@@ -113,6 +132,9 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 }
 
 func (s *Source) ReadN(ctx context.Context, n int) ([]opencdc.Record, error) {
+	sdk.Logger(ctx).Debug().
+		Int("readn", n).
+		Msgf("Readn source")
 	//nolint:wrapcheck // error already wrapped in iterator
 	return s.iterator.ReadN(ctx, n)
 }

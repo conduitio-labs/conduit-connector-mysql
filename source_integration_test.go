@@ -33,7 +33,7 @@ func testSource(ctx context.Context, is *is.I, cfg map[string]string) (sdk.Sourc
 	source := &Source{}
 
 	cfg["dsn"] = testutils.DSN
-	cfg["disableCanalLogs"] = "true"
+	cfg["cdc.disableLogs"] = "true"
 
 	err := sdk.Util.ParseConfig(ctx,
 		cfg, source.Config(),
@@ -114,8 +114,8 @@ func TestSource_NonZeroSnapshotStart(t *testing.T) {
 	}
 
 	source, teardown := testSource(ctx, is, map[string]string{
-		"tables":    "users",
-		"fetchSize": "10",
+		"tables":             "users",
+		"snapshot.fetchSize": "10",
 	})
 	defer teardown()
 
@@ -146,8 +146,8 @@ func TestSource_EmptyChunkRead(t *testing.T) {
 	}
 
 	source, teardown := testSource(ctx, is, map[string]string{
-		"tables":    "users",
-		"fetchSize": "10",
+		"tables":             "users",
+		"snapshot.fetchSize": "10",
 	})
 	defer teardown()
 
@@ -178,8 +178,8 @@ func TestSource_UnsafeSnapshot(t *testing.T) {
 
 	ctx := testutils.TestContext(t)
 	source, teardown := testSource(ctx, is, map[string]string{
-		"tables":         "table_without_pk",
-		"unsafeSnapshot": "true",
+		"tables":          "table_without_pk",
+		"snapshot.unsafe": "true",
 	})
 	defer teardown()
 
@@ -362,8 +362,8 @@ func TestNoSnapshot(t *testing.T) {
 	user2 := testutils.InsertUser(is, db, 2)
 
 	source, teardown := testSource(ctx, is, map[string]string{
-		"tables":     "users",
-		"noSnapshot": "true",
+		"tables":           "users",
+		"snapshot.enabled": "true",
 	})
 	defer teardown()
 

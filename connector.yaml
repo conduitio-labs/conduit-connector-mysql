@@ -146,7 +146,7 @@ specification:
   source:
     parameters:
       - name: dsn
-        description: DSN is the connection string for the MySQL database.
+        description: The connection string for the MySQL database.
         type: string
         default: ""
         validations:
@@ -154,7 +154,7 @@ specification:
             value: ""
       - name: tables
         description: |-
-          Tables represents the tables to read from.
+          Represents the tables to read from.
            - By default, no tables are included, but can be modified by adding a comma-separated string of regex patterns.
            - They are applied in the order that they are provided, so the final regex supersedes all previous ones.
            - To include all tables, use "*". You can then filter that list by adding a comma-separated string of regex patterns.
@@ -167,32 +167,32 @@ specification:
           - type: required
             value: ""
       - name: cdc.disableLogs
-        description: DisableLogs disables verbose cdc driver logs.
+        description: Disables verbose cdc driver logs.
         type: bool
         default: ""
         validations: []
       - name: snapshot.enabled
         description: |-
-          EnabledSnapshot prevents the connector from doing table snapshots and makes it
+          Prevents the connector from doing table snapshots and makes it
           start directly in cdc mode.
         type: bool
         default: ""
         validations: []
       - name: snapshot.fetchSize
-        description: FetchSize limits how many rows should be retrieved on each database fetch on snapshot mode.
+        description: Limits how many rows should be retrieved on each database fetch on snapshot mode.
         type: int
         default: "10000"
         validations: []
       - name: snapshot.unsafe
         description: |-
-          UnsafeSnapshot allows a snapshot of a table with neither a primary key
+          Allows a snapshot of a table with neither a primary key
           nor a defined sorting column. The opencdc.Position won't record the last record
           read from a table.
         type: bool
         default: ""
         validations: []
       - name: tableConfig.*.sortingColumn
-        description: SortingColumn allows to force using a custom column to sort the snapshot.
+        description: Allows to force using a custom column to sort the snapshot.
         type: string
         default: ""
         validations: []
@@ -259,7 +259,7 @@ specification:
   destination:
     parameters:
       - name: dsn
-        description: DSN is the connection string for the MySQL database.
+        description: The connection string for the MySQL database.
         type: string
         default: ""
         validations:

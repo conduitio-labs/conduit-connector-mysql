@@ -153,13 +153,13 @@ pipelines:
       - id: example
         plugin: "mysql"
         settings:
-          # DSN is the connection string for the MySQL database.
+          # The connection string for the MySQL database.
           # Type: string
           # Required: yes
           dsn: ""
-          # Tables represents the tables to read from. - By default, no tables
-          # are included, but can be modified by adding a comma-separated string
-          # of regex patterns. - They are applied in the order that they are
+          # Represents the tables to read from. - By default, no tables are
+          # included, but can be modified by adding a comma-separated string of
+          # regex patterns. - They are applied in the order that they are
           # provided, so the final regex supersedes all previous ones. - To
           # include all tables, use "*". You can then filter that list by adding
           # a comma-separated string of regex patterns. - To set an "include"
@@ -170,28 +170,27 @@ pipelines:
           # Type: string
           # Required: yes
           tables: ""
-          # DisableLogs disables verbose cdc driver logs.
+          # Disables verbose cdc driver logs.
           # Type: bool
           # Required: no
           cdc.disableLogs: "false"
-          # EnabledSnapshot prevents the connector from doing table snapshots
-          # and makes it start directly in cdc mode.
+          # Prevents the connector from doing table snapshots and makes it start
+          # directly in cdc mode.
           # Type: bool
           # Required: no
           snapshot.enabled: "false"
-          # FetchSize limits how many rows should be retrieved on each database
-          # fetch on snapshot mode.
+          # Limits how many rows should be retrieved on each database fetch on
+          # snapshot mode.
           # Type: int
           # Required: no
           snapshot.fetchSize: "10000"
-          # UnsafeSnapshot allows a snapshot of a table with neither a primary
-          # key nor a defined sorting column. The opencdc.Position won't record
-          # the last record read from a table.
+          # Allows a snapshot of a table with neither a primary key nor a
+          # defined sorting column. The opencdc.Position won't record the last
+          # record read from a table.
           # Type: bool
           # Required: no
           snapshot.unsafe: "false"
-          # SortingColumn allows to force using a custom column to sort the
-          # snapshot.
+          # Allows to force using a custom column to sort the snapshot.
           # Type: string
           # Required: no
           tableConfig.*.sortingColumn: ""
@@ -254,7 +253,7 @@ pipelines:
       - id: example
         plugin: "mysql"
         settings:
-          # DSN is the connection string for the MySQL database.
+          # The connection string for the MySQL database.
           # Type: string
           # Required: yes
           dsn: ""

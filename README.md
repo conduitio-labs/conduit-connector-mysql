@@ -128,26 +128,31 @@ pipelines:
           # Type: string
           # Required: yes
           tables: ""
-          # DisableCanalLogs disables verbose logs.
+          # DisableLogs disables verbose cdc driver logs.
           # Type: bool
           # Required: no
-          disableCanalLogs: "false"
+          cdc.disableLogs: "false"
+          # EnabledSnapshot prevents the connector from doing table snapshots
+          # and makes it start directly in cdc mode.
+          # Type: bool
+          # Required: no
+          snapshot.enabled: "false"
           # FetchSize limits how many rows should be retrieved on each database
-          # fetch.
+          # fetch on snapshot mode.
           # Type: int
           # Required: no
-          fetchSize: "10000"
-          # SortingColumn allows to force using a custom column to sort the
-          # snapshot.
-          # Type: string
-          # Required: no
-          tableConfig.*.sortingColumn: ""
+          snapshot.fetchSize: "10000"
           # UnsafeSnapshot allows a snapshot of a table with neither a primary
           # key nor a defined sorting column. The opencdc.Position won't record
           # the last record read from a table.
           # Type: bool
           # Required: no
-          unsafeSnapshot: "false"
+          snapshot.unsafe: "false"
+          # SortingColumn allows to force using a custom column to sort the
+          # snapshot.
+          # Type: string
+          # Required: no
+          tableConfig.*.sortingColumn: ""
           # Maximum delay before an incomplete batch is read from the source.
           # Type: duration
           # Required: no

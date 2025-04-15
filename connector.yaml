@@ -124,27 +124,34 @@ specification:
         validations:
           - type: required
             value: ""
-      - name: disableCanalLogs
-        description: DisableCanalLogs disables verbose logs.
+      - name: cdc.disableLogs
+        description: DisableLogs disables verbose cdc driver logs.
         type: bool
         default: ""
         validations: []
-      - name: fetchSize
-        description: FetchSize limits how many rows should be retrieved on each database fetch.
+      - name: snapshot.enabled
+        description: |-
+          EnabledSnapshot prevents the connector from doing table snapshots and makes it
+          start directly in cdc mode.
+        type: bool
+        default: ""
+        validations: []
+      - name: snapshot.fetchSize
+        description: FetchSize limits how many rows should be retrieved on each database fetch on snapshot mode.
         type: int
         default: "10000"
         validations: []
-      - name: tableConfig.*.sortingColumn
-        description: SortingColumn allows to force using a custom column to sort the snapshot.
-        type: string
-        default: ""
-        validations: []
-      - name: unsafeSnapshot
+      - name: snapshot.unsafe
         description: |-
           UnsafeSnapshot allows a snapshot of a table with neither a primary key
           nor a defined sorting column. The opencdc.Position won't record the last record
           read from a table.
         type: bool
+        default: ""
+        validations: []
+      - name: tableConfig.*.sortingColumn
+        description: SortingColumn allows to force using a custom column to sort the snapshot.
+        type: string
         default: ""
         validations: []
       - name: sdk.batch.delay

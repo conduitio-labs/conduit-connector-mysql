@@ -186,11 +186,12 @@ func TestSource_UnsafeSnapshot(t *testing.T) {
 
 	var recs []opencdc.Record
 	for range expectedData {
-		rec, err := source.Read(ctx)
+		rec, err := source.ReadN(ctx, 1)
 		is.NoErr(err)
-		is.NoErr(source.Ack(ctx, rec.Position))
+		is.True(len(rec) == 1)
+		is.NoErr(source.Ack(ctx, rec[0].Position))
 
-		recs = append(recs, rec)
+		recs = append(recs, rec[0])
 	}
 
 	for i, expectedData := range expectedData {
@@ -232,8 +233,10 @@ func TestSource_CompositeKey(t *testing.T) {
 
 	var snapshotRecords []opencdc.Record
 	for range testData {
-		rec, err := source.Read(ctx)
+		recs, err := source.ReadN(ctx, 1)
 		is.NoErr(err)
+		is.True(len(recs) == 1)
+		rec := recs[0]
 		is.NoErr(source.Ack(ctx, rec.Position))
 
 		is.Equal(rec.Operation, opencdc.OperationSnapshot)
@@ -305,21 +308,27 @@ func TestSource_CompositeKey(t *testing.T) {
 
 	is.NoErr(db.Delete(&testData[3]).Error)
 
-	updateRec, err := source.Read(ctx)
+	recs, err := source.ReadN(ctx, 1)
 	is.NoErr(err)
+	is.True(len(recs) == 1)
+	updateRec := recs[0]
 	is.NoErr(source.Ack(ctx, updateRec.Position))
 	is.Equal(updateRec.Operation, opencdc.OperationUpdate)
 
 	is.True(updateRec.Payload.Before != nil)
 	is.True(updateRec.Payload.After != nil)
 
-	createRec, err := source.Read(ctx)
+	createRecs, err := source.ReadN(ctx, 1)
 	is.NoErr(err)
+	is.True(len(createRecs) == 1)
+	createRec := createRecs[0]
 	is.NoErr(source.Ack(ctx, createRec.Position))
 	is.Equal(createRec.Operation, opencdc.OperationCreate)
 
-	deleteRec, err := source.Read(ctx)
+	deleteRecs, err := source.ReadN(ctx, 1)
 	is.NoErr(err)
+	is.True(len(deleteRecs) == 1)
+	deleteRec := deleteRecs[0]
 	is.NoErr(source.Ack(ctx, deleteRec.Position))
 	is.Equal(deleteRec.Operation, opencdc.OperationDelete)
 

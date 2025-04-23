@@ -67,17 +67,17 @@ The source connector uses [avro](https://avro.apache.org/docs/1.11.1/specificati
 
 ### Record structure
 
-Records produced by the MySQL source connector contain the following components:
+Records produced by the MySQL source connector contain the following [opencdc record structure](https://conduit.io/docs/using/opencdc-record):
 
 *   **Operation**: Indicates the type of change (`create`, `update`, `delete`, `snapshot`).
 *   **Payload**:
-    *   `Before`: (Only for `update` operations) `opencdc.StructuredData` representing the row state before the change.
+    *   `Before`: (Only present on CDC `update` operations) `opencdc.StructuredData` representing the row state before the change.
     *   `After`: `opencdc.StructuredData` representing the row state after the change (or the current state for `snapshot` and `create`).
 *   **Key**: Identifies the specific row. See Snapshot/CDC sections below for details.
 *   **Position**: Represents the point in the data stream. It's a JSON object containing *either* a `snapshot_position` field *or* a `cdc_position` field, structured as described below.
 *   **Metadata**: Contains standard OpenCDC fields plus:
     *   `mysql.server.id`: (CDC only) The originating MySQL server ID from the replication event header.
-    *   Schema registry information (`opencdc.payload.schema.*`, `opencdc.key.schema.*`).
+    *   [Key](https://conduit.io/docs/using/opencdc-record/#opencdckeyschema) and [payload](https://conduit.io/docs/using/opencdc-record/#opencdcpayloadschema) schema registry data.
 
 #### Snapshot Records
 

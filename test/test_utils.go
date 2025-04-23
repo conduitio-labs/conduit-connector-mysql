@@ -103,8 +103,8 @@ func TestContext(t *testing.T) context.Context {
 	return logger.WithContext(context.Background())
 }
 
-var TableSortCols = map[string]string{
-	"users": "id",
+var TablePrimaryKeys = map[string]common.PrimaryKeys{
+	"users": {"id"},
 }
 
 type User struct {
@@ -158,25 +158,38 @@ func (u User) StructuredData() opencdc.StructuredData {
 	}
 }
 
-func RecreateUsersTable(is *is.I, db DB) {
-	is.NoErr(db.Migrator().DropTable(&User{}))
-	is.NoErr(db.AutoMigrate(&User{}))
+func CreateTables(is *is.I, db DB, tables ...any) {
+	is.Helper()
+
+	// Previous tests might have left leftover data, this makes sure clean a slate.
+	is.NoErr(db.Migrator().DropTable(tables...))
+	is.NoErr(db.AutoMigrate(tables...))
 }
 
-func InsertUser(is *is.I, db DB, userID int) User {
+func CreateUserTable(is *is.I, db DB) {
+	CreateTables(is, db, &User{})
+}
+
+func CreateUser(userID int) *User {
 	username := fmt.Sprint("user-", userID)
 	email := fmt.Sprint(username, "@example.com")
 
-	user := User{
+	// That's easier to work with pointer during
+	// multiple rows insertion/modification
+	return &User{
 		ID:       int64(userID),
 		Username: username,
 		Email:    email,
 	}
+}
 
-	err := db.Create(&user).Error
+func InsertUser(is *is.I, db DB, userID int) User {
+	user := CreateUser(userID)
+
+	err := db.Create(user).Error
 	is.NoErr(err)
 
-	return user
+	return *user
 }
 
 func GetUser(is *is.I, db DB, userID int64) User {

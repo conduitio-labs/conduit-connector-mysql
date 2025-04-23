@@ -299,8 +299,7 @@ func TestSchema_Payload_SQLX_Rows(t *testing.T) {
 	db := testutils.NewDB(t)
 	ctx := context.Background()
 
-	is.NoErr(db.Migrator().DropTable(&SchemaAllTypes{}))
-	is.NoErr(db.AutoMigrate(&SchemaAllTypes{}))
+	testutils.CreateTables(is, db, &SchemaAllTypes{})
 
 	testData := allTypesSnapshotTestData()
 
@@ -341,8 +340,7 @@ func TestSchema_Payload_canal_RowsEvent(t *testing.T) {
 	db := testutils.NewDB(t)
 	ctx := context.Background()
 
-	is.NoErr(db.Migrator().DropTable(&SchemaAllTypes{}))
-	is.NoErr(db.AutoMigrate(&SchemaAllTypes{}))
+	testutils.CreateTables(is, db, &SchemaAllTypes{})
 
 	testData := allTypesCDCTestData()
 
@@ -388,8 +386,7 @@ func TestSchema_Key(t *testing.T) {
 		F1 string `gorm:"column:f1;type:varchar(255)"`
 	}
 
-	is.NoErr(db.Migrator().DropTable(&SchemaExample{}))
-	is.NoErr(db.AutoMigrate(&SchemaExample{}))
+	testutils.CreateTables(is, db, &SchemaExample{})
 
 	is.NoErr(db.Create(&SchemaExample{ID: 1, F1: "test"}).Error)
 	tableName := testutils.TableName(is, db, &SchemaExample{})
@@ -410,7 +407,7 @@ func TestSchema_Key(t *testing.T) {
 		}
 	}
 
-	_, err = keySchemaManager.createKeySchema(ctx, tableName, f1Col)
+	_, err = keySchemaManager.createKeySchema(ctx, tableName, []*avroNamedType{f1Col})
 	is.NoErr(err)
 
 	s, err := schema.Get(ctx, tableName+"_key", 1)

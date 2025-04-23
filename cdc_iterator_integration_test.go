@@ -34,14 +34,14 @@ func testCdcIterator(ctx context.Context, t *testing.T, is *is.I) (common.Iterat
 	iterator, err := newCdcIterator(ctx, cdcIteratorConfig{
 		mysqlConfig:         config,
 		tables:              []string{"users"},
-		tableSortCols:       testutils.TableSortCols,
+		primaryKeys:         testutils.TablePrimaryKeys,
 		db:                  db,
 		disableCanalLogging: true,
 	})
 	is.NoErr(err)
 
 	is.NoErr(iterator.obtainStartPosition())
-	is.NoErr(iterator.start())
+	is.NoErr(iterator.start(ctx))
 
 	return iterator, func() { is.NoErr(iterator.Teardown(ctx)) }
 }
@@ -57,19 +57,19 @@ func testCdcIteratorAtPosition(
 
 	pos, err := common.ParseSDKPosition(sdkPos)
 	is.NoErr(err)
-	is.Equal(pos.Kind, common.PositionTypeCDC)
+	is.True(pos.CdcPosition != nil)
 
 	iterator, err := newCdcIterator(ctx, cdcIteratorConfig{
 		db:                  db,
 		mysqlConfig:         config,
 		tables:              []string{"users"},
-		tableSortCols:       testutils.TableSortCols,
+		primaryKeys:         testutils.TablePrimaryKeys,
 		startPosition:       pos.CdcPosition,
 		disableCanalLogging: true,
 	})
 	is.NoErr(err)
 
-	is.NoErr(iterator.start())
+	is.NoErr(iterator.start(ctx))
 
 	return iterator, func() { is.NoErr(iterator.Teardown(ctx)) }
 }
@@ -80,7 +80,7 @@ func TestCDCIterator_InsertAction(t *testing.T) {
 
 	db := testutils.NewDB(t)
 
-	testutils.RecreateUsersTable(is, db)
+	testutils.CreateUserTable(is, db)
 
 	iterator, teardown := testCdcIterator(ctx, t, is)
 	defer teardown()
@@ -94,13 +94,39 @@ func TestCDCIterator_InsertAction(t *testing.T) {
 	testutils.ReadAndAssertCreate(ctx, is, iterator, user3)
 }
 
+func TestCDCIterator_MultiInsertAction(t *testing.T) {
+	ctx := testutils.TestContext(t)
+	is := is.New(t)
+
+	db := testutils.NewDB(t)
+
+	testutils.CreateUserTable(is, db)
+
+	iterator, teardown := testCdcIterator(ctx, t, is)
+	defer teardown()
+
+	var users []*testutils.User
+	for i := 15; i < 100; i++ {
+		users = append(users, testutils.CreateUser(i))
+	}
+
+	// Following call triggers a single mysql request:
+	//   INSERT INTO users (col1, col2) VALUES (val1, val2), (val3, val4), ...
+	// which generates multiple rows in a single CDC event.
+	is.NoErr(db.Create(users).Error)
+
+	for _, user := range users {
+		testutils.ReadAndAssertCreate(ctx, is, iterator, *user)
+	}
+}
+
 func TestCDCIterator_DeleteAction(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 
 	db := testutils.NewDB(t)
 
-	testutils.RecreateUsersTable(is, db)
+	testutils.CreateUserTable(is, db)
 
 	user1 := testutils.InsertUser(is, db, 1)
 	user2 := testutils.InsertUser(is, db, 2)
@@ -118,13 +144,41 @@ func TestCDCIterator_DeleteAction(t *testing.T) {
 	testutils.ReadAndAssertDelete(ctx, is, iterator, user3)
 }
 
+func TestCDCIterator_MultiDeleteAction(t *testing.T) {
+	ctx := testutils.TestContext(t)
+	is := is.New(t)
+
+	db := testutils.NewDB(t)
+
+	testutils.CreateUserTable(is, db)
+
+	var users []*testutils.User
+	for i := 15; i < 100; i++ {
+		users = append(users, testutils.CreateUser(i))
+	}
+
+	is.NoErr(db.Create(users).Error)
+
+	iterator, teardown := testCdcIterator(ctx, t, is)
+	defer teardown()
+
+	// Following call triggers a single mysql request:
+	//  DELETE FROM users WHERE id IN (15,16,17,....)
+	// which generates multiple rows in a single CDC event.
+	is.NoErr(db.Delete(users).Error)
+
+	for _, user := range users {
+		testutils.ReadAndAssertDelete(ctx, is, iterator, *user)
+	}
+}
+
 func TestCDCIterator_UpdateAction(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 
 	db := testutils.NewDB(t)
 
-	testutils.RecreateUsersTable(is, db)
+	testutils.CreateUserTable(is, db)
 
 	user1 := testutils.InsertUser(is, db, 1)
 	user2 := testutils.InsertUser(is, db, 2)
@@ -142,13 +196,52 @@ func TestCDCIterator_UpdateAction(t *testing.T) {
 	testutils.ReadAndAssertUpdate(ctx, is, iterator, user3, user3Updated)
 }
 
+func TestCDCIterator_MultiUpdateAction(t *testing.T) {
+	ctx := testutils.TestContext(t)
+	is := is.New(t)
+
+	db := testutils.NewDB(t)
+
+	testutils.CreateUserTable(is, db)
+
+	var users []*testutils.User
+	for i := 15; i < 100; i++ {
+		users = append(users, testutils.CreateUser(i))
+	}
+
+	is.NoErr(db.Create(users).Error)
+
+	iterator, teardown := testCdcIterator(ctx, t, is)
+	defer teardown()
+
+	var modifiedUsers []*testutils.User
+	for _, u := range users {
+		uu := *u
+		uu.Username = "updated"
+		modifiedUsers = append(modifiedUsers, &uu)
+	}
+
+	// Following call triggers a single mysql request:
+	//   UPDATE users SET username='updated' WHERE 1 = 1
+	// which generates multiple rows in a single CDC event.
+	is.NoErr(db.Model(&testutils.User{}).
+		Where("1 = 1").
+		Update("username", "updated").
+		Error,
+	)
+
+	for i := 0; i < len(users); i++ {
+		testutils.ReadAndAssertUpdate(ctx, is, iterator, *users[i], *modifiedUsers[i])
+	}
+}
+
 func TestCDCIterator_RestartOnPosition(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 
 	db := testutils.NewDB(t)
 
-	testutils.RecreateUsersTable(is, db)
+	testutils.CreateUserTable(is, db)
 
 	// start the iterator at the beginning
 
@@ -181,4 +274,60 @@ func TestCDCIterator_RestartOnPosition(t *testing.T) {
 	testutils.ReadAndAssertCreate(ctx, is, iterator, user3)
 	testutils.ReadAndAssertCreate(ctx, is, iterator, user4)
 	testutils.ReadAndAssertCreate(ctx, is, iterator, user5)
+}
+
+func TestCDCIterator_RestartOnEventCenter(t *testing.T) {
+	ctx := testutils.TestContext(t)
+	is := is.New(t)
+
+	db := testutils.NewDB(t)
+
+	testutils.CreateUserTable(is, db)
+
+	// start the iterator at the beginning
+
+	iterator, teardown := testCdcIterator(ctx, t, is)
+
+	// and trigger some insert actions
+
+	var users []*testutils.User
+	for i := 10; i < 100; i++ { // 90 items
+		users = append(users, testutils.CreateUser(i))
+	}
+
+	// Following call triggers a single mysql request:
+	//   INSERT INTO users (col1, col2) VALUES (val1, val2), (val3, val4), ...
+	// which generates multiple rows in a single CDC event.
+	is.NoErr(db.Create(users).Error)
+
+	var latestPosition opencdc.Position
+	lastIdx := 15
+
+	{ // read and ack some records
+		for i := 0; i < lastIdx; i++ {
+			testutils.ReadAndAssertCreate(ctx, is, iterator, *users[i])
+		}
+
+		rec := testutils.ReadAndAssertCreate(ctx, is, iterator, *users[lastIdx])
+		teardown()
+
+		lastIdx++
+		latestPosition = rec.Position
+	}
+
+	// then, try to read from the next record
+
+	iterator, teardown = testCdcIteratorAtPosition(ctx, t, is, latestPosition)
+	defer teardown()
+
+	var newUsers []*testutils.User
+	for i := 110; i < 130; i++ {
+		newUsers = append(newUsers, testutils.CreateUser(i))
+	}
+	is.NoErr(db.Create(newUsers).Error)
+
+	users = append(users, newUsers...)
+	for i := lastIdx; i < len(users); i++ {
+		testutils.ReadAndAssertCreate(ctx, is, iterator, *users[i])
+	}
 }

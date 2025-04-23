@@ -17,6 +17,7 @@ package common
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 
 	"github.com/conduitio/conduit-commons/opencdc"
 	"github.com/go-mysql-org/go-mysql/mysql"
@@ -30,7 +31,6 @@ const (
 )
 
 type Position struct {
-	Kind             PositionType      `json:"kind"`
 	SnapshotPosition *SnapshotPosition `json:"snapshot_position,omitempty"`
 	CdcPosition      *CdcPosition      `json:"cdc_position,omitempty"`
 }
@@ -40,10 +40,7 @@ type SnapshotPosition struct {
 }
 
 func (p SnapshotPosition) ToSDKPosition() opencdc.Position {
-	v, err := json.Marshal(Position{
-		Kind:             PositionTypeSnapshot,
-		SnapshotPosition: &p,
-	})
+	v, err := json.Marshal(Position{SnapshotPosition: &p})
 	if err != nil {
 		// This should never happen, all Position structs should be valid.
 		panic(err)
@@ -54,9 +51,7 @@ func (p SnapshotPosition) ToSDKPosition() opencdc.Position {
 func (p SnapshotPosition) Clone() SnapshotPosition {
 	var newPosition SnapshotPosition
 	newPosition.Snapshots = make(SnapshotPositions)
-	for k, v := range p.Snapshots {
-		newPosition.Snapshots[k] = v
-	}
+	maps.Copy(newPosition.Snapshots, p.Snapshots)
 	return newPosition
 }
 
@@ -73,17 +68,41 @@ func ParseSDKPosition(p opencdc.Position) (Position, error) {
 type SnapshotPositions map[string]TablePosition
 
 type TablePosition struct {
+	SingleKey   *TablePositionSingleKey
+	MultipleKey *TablePositionMultipleKey
+}
+
+type TablePositionSingleKey struct {
 	LastRead    any `json:"last_read"`
 	SnapshotEnd any `json:"snapshot_end"`
 }
 
-type CdcPosition struct {
+type TablePositionMultipleKey []TablePositionMultipleKeyItem
+
+type TablePositionMultipleKeyItem struct {
+	KeyName     string `json:"key_name"`
+	LastRead    any    `json:"last_read"`
+	SnapshotEnd any    `json:"snapshot_end"`
+}
+
+type ReplicationEventPosition struct {
 	// Name represents the mysql binlog filename.
 	Name string `json:"name"`
 	Pos  uint32 `json:"pos"`
 }
 
-func (p CdcPosition) ToMysqlPos() mysql.Position {
+type CdcPosition struct {
+	ReplicationEventPosition
+
+	// Index represents the row index in the mysql replication event.
+	Index int `json:"idx,omitempty"`
+
+	// PrevPosition represents position of the mysql replication
+	// event just before the current one.
+	PrevPosition *ReplicationEventPosition `json:"prev,omitempty"`
+}
+
+func (p ReplicationEventPosition) ToMysqlPos() mysql.Position {
 	return mysql.Position{
 		Name: p.Name,
 		Pos:  p.Pos,
@@ -91,10 +110,7 @@ func (p CdcPosition) ToMysqlPos() mysql.Position {
 }
 
 func (p CdcPosition) ToSDKPosition() opencdc.Position {
-	v, err := json.Marshal(Position{
-		Kind:        PositionTypeCDC,
-		CdcPosition: &p,
-	})
+	v, err := json.Marshal(Position{CdcPosition: &p})
 	if err != nil {
 		// This should never happen, all Position structs should be valid.
 		panic(err)

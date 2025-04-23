@@ -24,13 +24,43 @@ import (
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	"github.com/conduitio/conduit-commons/opencdc"
 	sdk "github.com/conduitio/conduit-connector-sdk"
+	"github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 )
+
+type DestinationConfig struct {
+	sdk.DefaultDestinationMiddleware
+
+	Config
+
+	mysqlCfg        *mysql.Config
+	tableKeyFetcher *common.TableKeyFetcher
+}
+
+func (d *DestinationConfig) MysqlCfg() *mysql.Config {
+	return d.mysqlCfg
+}
+
+func (d *DestinationConfig) TableKeyFetcher() *common.TableKeyFetcher {
+	return d.tableKeyFetcher
+}
+
+func (d *DestinationConfig) Validate(context.Context) error {
+	mysqlCfg, err := mysql.ParseDSN(d.DSN)
+	if err != nil {
+		return fmt.Errorf("failed to parse DSN: %w", err)
+	}
+
+	d.mysqlCfg = mysqlCfg
+	d.tableKeyFetcher = common.NewTableKeyFetcher(mysqlCfg.DBName)
+
+	return nil
+}
 
 type Destination struct {
 	sdk.UnimplementedDestination
 	db     *sqlx.DB
-	config common.DestinationConfig
+	config DestinationConfig
 }
 
 func NewDestination() sdk.Destination {
@@ -59,24 +89,22 @@ func (d *Destination) Write(ctx context.Context, recs []opencdc.Record) (written
 	//nolint:errcheck // will always error if committed, no need to check
 	defer tx.Rollback()
 
-	for _, rec := range recs {
-		switch rec.Operation {
-		case opencdc.OperationSnapshot:
-			if err := d.upsertRecord(ctx, tx, rec); err != nil {
-				return 0, err
-			}
-		case opencdc.OperationCreate:
-			if err := d.upsertRecord(ctx, tx, rec); err != nil {
-				return 0, err
-			}
-		case opencdc.OperationUpdate:
-			if err := d.upsertRecord(ctx, tx, rec); err != nil {
-				return 0, err
-			}
-		case opencdc.OperationDelete:
-			if err := d.deleteRecord(ctx, tx, rec); err != nil {
-				return 0, err
-			}
+	batches, err := batchRecords(recs)
+	if err != nil {
+		return 0, fmt.Errorf("failed to batch records: %w", err)
+	}
+
+	for _, batch := range batches {
+		var n int
+		switch batch.kind {
+		case upsertBatchKind:
+			n, err = d.upsertRecords(ctx, tx, batch.table, batch.recs)
+		case deleteBatchKind:
+			n, err = d.deleteRecords(ctx, tx, batch.table, batch.recs)
+		}
+		written += n
+		if err != nil {
+			return written, fmt.Errorf(`failed to process "%s" batch: %w`, batch.kind, err)
 		}
 	}
 
@@ -97,84 +125,208 @@ func (d *Destination) Teardown(_ context.Context) error {
 	return nil
 }
 
-func (d *Destination) upsertRecord(ctx context.Context, tx *sqlx.Tx, rec opencdc.Record) error {
-	payload, isStructured := rec.Payload.After.(opencdc.StructuredData)
-	if !isStructured {
-		data := make(opencdc.StructuredData)
-		if err := json.Unmarshal(rec.Payload.After.Bytes(), &data); err != nil {
-			return fmt.Errorf("failed to json unmarshal non structured data: %w", err)
-		}
+func (d *Destination) upsertRecords(ctx context.Context, tx *sqlx.Tx, table string, recs []opencdc.Record) (int, error) {
+	if len(recs) == 0 {
+		return 0, nil
+	}
 
-		payload = data
+	firstRec := recs[0]
+	payload, isStructured := firstRec.Payload.After.(opencdc.StructuredData)
+	if !isStructured {
+		return 0, fmt.Errorf("record payload is not structured data")
 	}
 
 	columns := make([]string, 0, len(payload))
-	values := make([]any, 0, len(payload))
-
-	for col, val := range payload {
+	for col := range payload {
 		columns = append(columns, col)
-		values = append(values, val)
 	}
 
-	query := squirrel.Insert(d.config.Table).
-		Columns(columns...).
-		Values(values...).
-		Suffix("ON DUPLICATE KEY UPDATE " + buildUpsertSuffix(payload))
+	insert := squirrel.Insert(table).Columns(columns...)
 
-	sql, args, err := query.ToSql()
+	for _, rec := range recs {
+		payload, isStructured := rec.Payload.After.(opencdc.StructuredData)
+		if !isStructured {
+			return 0, fmt.Errorf("record payload is not structured data")
+		}
+
+		values := make([]any, 0, len(columns))
+		for _, col := range columns {
+			colValue, ok := payload[col]
+			if !ok {
+				return 0, fmt.Errorf("column %q not found in record %q", col, string(rec.Key.Bytes()))
+			}
+
+			values = append(values, colValue)
+		}
+		insert = insert.Values(values...)
+	}
+
+	updateParts := make([]string, 0, len(payload))
+	for col := range payload {
+		updateParts = append(updateParts, fmt.Sprintf("%s=VALUES(%s)", col, col))
+	}
+	insert = insert.Suffix("ON DUPLICATE KEY UPDATE " + strings.Join(updateParts, ", "))
+
+	sql, args, err := insert.ToSql()
 	if err != nil {
-		return fmt.Errorf("failed to build query: %w", err)
+		return 0, fmt.Errorf("failed to build query: %w", err)
 	}
 
 	_, err = tx.ExecContext(ctx, sql, args...)
 	if err != nil {
-		return fmt.Errorf("failed to upsert record: %w", err)
+		return 0, fmt.Errorf("failed to execute batch upsert: %w", err)
 	}
 
-	return nil
+	return len(recs), nil
 }
 
-func buildUpsertSuffix(upsertList opencdc.StructuredData) string {
-	parts := make([]string, 0, len(upsertList))
-	for col := range upsertList {
-		parts = append(parts, fmt.Sprintf("%s = VALUES(%s)", col, col))
+func (d *Destination) deleteRecords(ctx context.Context, tx *sqlx.Tx, table string, recs []opencdc.Record) (int, error) {
+	if len(recs) == 0 {
+		return 0, nil
 	}
-	return strings.Join(parts, ", ")
-}
 
-func (d *Destination) deleteRecord(ctx context.Context, tx *sqlx.Tx, rec opencdc.Record) error {
-	val, err := d.parseRecordKey(rec.Key)
+	primaryKeys, err := d.config.TableKeyFetcher().GetKeys(tx, table)
 	if err != nil {
-		return err
+		return 0, fmt.Errorf("failed to get keys when deleting record batch: %w", err)
 	}
 
-	query := squirrel.
-		Delete(d.config.Table).
-		Where(squirrel.Eq{d.config.Key: val})
+	if len(primaryKeys) == 1 {
+		// single key
 
+		keyName := primaryKeys[0]
+
+		values := make([]any, 0, len(recs))
+		for _, rec := range recs {
+			val, err := d.parseRecordKey(keyName, rec.Key)
+			if err != nil {
+				return 0, fmt.Errorf("failed to parse key: %w", err)
+			}
+			values = append(values, val)
+		}
+
+		query := squirrel.
+			Delete(table).
+			Where(squirrel.Eq{keyName: values})
+
+		sql, args, err := query.ToSql()
+		if err != nil {
+			return 0, fmt.Errorf("failed to build query: %w", err)
+		}
+
+		_, err = tx.ExecContext(ctx, sql, args...)
+		if err != nil {
+			return 0, fmt.Errorf("failed to execute batch delete: %w", err)
+		}
+
+		return len(recs), nil
+	}
+
+	// multiple keys
+
+	orConditions := squirrel.Or{}
+	for _, rec := range recs {
+		andConditions := squirrel.And{}
+		for _, keyName := range primaryKeys {
+			val, err := d.parseRecordKey(keyName, rec.Key)
+			if err != nil {
+				return 0, fmt.Errorf("failed to parse key: %w", err)
+			}
+			andConditions = append(andConditions, squirrel.Eq{keyName: val})
+		}
+		orConditions = append(orConditions, andConditions)
+	}
+
+	query := squirrel.Delete(table).Where(orConditions)
 	sql, args, err := query.ToSql()
 	if err != nil {
-		return fmt.Errorf("failed to build query: %w", err)
+		return 0, fmt.Errorf("failed to build query: %w", err)
 	}
 
 	_, err = tx.ExecContext(ctx, sql, args...)
 	if err != nil {
-		return fmt.Errorf("failed to delete record: %w", err)
+		return 0, fmt.Errorf("failed to execute batch delete: %w", err)
 	}
 
-	return nil
+	return len(recs), nil
 }
 
-func (d *Destination) parseRecordKey(key opencdc.Data) (any, error) {
+func (d *Destination) parseRecordKey(keyName string, keyVal opencdc.Data) (any, error) {
 	data := make(opencdc.StructuredData)
-	if err := json.Unmarshal(key.Bytes(), &data); err != nil {
+	if err := json.Unmarshal(keyVal.Bytes(), &data); err != nil {
 		return nil, fmt.Errorf("failed to parse key: %w", err)
 	}
 
-	val, ok := data[d.config.Key]
+	val, ok := data[keyName]
 	if !ok {
 		return nil, fmt.Errorf("primary key not found")
 	}
 
 	return val, nil
+}
+
+type recordBatchKind string
+
+const (
+	upsertBatchKind recordBatchKind = "upsert"
+	deleteBatchKind recordBatchKind = "delete"
+)
+
+func newRecordKind(op opencdc.Operation) recordBatchKind {
+	switch op {
+	case opencdc.OperationSnapshot, opencdc.OperationCreate, opencdc.OperationUpdate:
+		return upsertBatchKind
+	case opencdc.OperationDelete:
+		return deleteBatchKind
+	}
+	return ""
+}
+
+type recordBatch struct {
+	kind  recordBatchKind
+	table string
+	recs  []opencdc.Record
+}
+
+func batchRecords(recs []opencdc.Record) ([]recordBatch, error) {
+	if len(recs) == 0 {
+		return nil, nil
+	}
+
+	firstRec := recs[0]
+	table, err := firstRec.Metadata.GetCollection()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get collection: %w", err)
+	}
+
+	var batches []recordBatch
+	currBatch := recordBatch{
+		kind:  newRecordKind(recs[0].Operation),
+		table: table,
+		recs:  []opencdc.Record{firstRec},
+	}
+
+	recs = recs[1:]
+
+	for _, rec := range recs {
+		table, err := rec.Metadata.GetCollection()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get collection: %w", err)
+		}
+
+		kind := newRecordKind(rec.Operation)
+		if currBatch.kind == kind && currBatch.table == table {
+			currBatch.recs = append(currBatch.recs, rec)
+		} else {
+			batches = append(batches, currBatch)
+			currBatch = recordBatch{
+				kind:  kind,
+				table: table,
+				recs:  []opencdc.Record{rec},
+			}
+		}
+	}
+
+	batches = append(batches, currBatch)
+
+	return batches, nil
 }

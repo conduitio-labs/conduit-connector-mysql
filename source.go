@@ -245,7 +245,7 @@ func (s *Source) getAndFilterTables(ctx context.Context, db *sqlx.DB, database s
 	return finalTables, nil
 }
 
-// createCanalRegexes creates regex patterns for Canal from the filtered table names
+// createCanalRegexes creates regex patterns for Canal from the filtered table names.
 func (s *Source) createCanalRegexes(database string, tables []string) []string {
 	canalRegexes := make([]string, 0, len(tables))
 	for _, table := range tables {

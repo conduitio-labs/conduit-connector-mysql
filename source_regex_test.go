@@ -122,7 +122,7 @@ func TestSource_TableFilterRegex(t *testing.T) {
 				db: db.SqlxDB,
 			}
 
-			tables, regexes, err := source.getAndFilterTables(ctx, db.SqlxDB, "meroxadb")
+			tables, err := source.getAndFilterTables(ctx, db.SqlxDB, "meroxadb")
 			is.NoErr(err)
 
 			// Sort both slices to ensure consistent comparison
@@ -131,11 +131,14 @@ func TestSource_TableFilterRegex(t *testing.T) {
 
 			is.Equal(tables, tc.expectedTables)
 
+			// Test the createCanalRegexes function separately
+			regexes := source.createCanalRegexes("meroxadb", tables)
 			var expectedRegexes []string
 			for _, expectedTable := range tc.expectedTables {
 				expectedRegexes = append(expectedRegexes, fmt.Sprintf("^%s.%s$", "meroxadb", regexp.QuoteMeta(expectedTable)))
 			}
 			sortStrings(regexes)
+			sortStrings(expectedRegexes)
 			if len(expectedRegexes) == 0 && len(regexes) == 0 {
 				// Both are empty, considered equal regardless of nil vs empty slice
 				is.True(true) // Always passes

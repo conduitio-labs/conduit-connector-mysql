@@ -17,8 +17,10 @@ package mysql
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"testing"
+	"time"
 
 	testutils "github.com/conduitio-labs/conduit-connector-mysql/test"
 	"github.com/conduitio/conduit-commons/opencdc"
@@ -31,7 +33,7 @@ func testSource(ctx context.Context, is *is.I, cfg map[string]string) (sdk.Sourc
 	source := &Source{}
 
 	cfg["dsn"] = testutils.DSN
-	cfg["disableCanalLogs"] = "true"
+	cfg["cdc.disableLogs"] = "true"
 
 	err := sdk.Util.ParseConfig(ctx,
 		cfg, source.Config(),
@@ -112,8 +114,8 @@ func TestSource_NonZeroSnapshotStart(t *testing.T) {
 	}
 
 	source, teardown := testSource(ctx, is, map[string]string{
-		"tables":    "users",
-		"fetchSize": "10",
+		"tables":             "users",
+		"snapshot.fetchSize": "10",
 	})
 	defer teardown()
 
@@ -144,8 +146,8 @@ func TestSource_EmptyChunkRead(t *testing.T) {
 	}
 
 	source, teardown := testSource(ctx, is, map[string]string{
-		"tables":    "users",
-		"fetchSize": "10",
+		"tables":             "users",
+		"snapshot.fetchSize": "10",
 	})
 	defer teardown()
 
@@ -176,8 +178,8 @@ func TestSource_UnsafeSnapshot(t *testing.T) {
 
 	ctx := testutils.TestContext(t)
 	source, teardown := testSource(ctx, is, map[string]string{
-		"tables":         "table_without_pk",
-		"unsafeSnapshot": "true",
+		"tables":          "table_without_pk",
+		"snapshot.unsafe": "true",
 	})
 	defer teardown()
 
@@ -346,4 +348,41 @@ func TestSource_CompositeKey(t *testing.T) {
 		is.Equal(parsedKeySchema.Type, "record")
 		is.Equal(len(parsedKeySchema.Fields), 2) // Both parts of the composite key
 	}
+}
+
+func TestNoSnapshot(t *testing.T) {
+	ctx := testutils.TestContext(t)
+	is := is.New(t)
+
+	db := testutils.NewDB(t)
+
+	testutils.CreateUserTable(is, db)
+
+	user1 := testutils.InsertUser(is, db, 1)
+	user2 := testutils.InsertUser(is, db, 2)
+
+	source, teardown := testSource(ctx, is, map[string]string{
+		"tables":           "users",
+		"snapshot.enabled": "true",
+	})
+	defer teardown()
+
+	user3 := testutils.InsertUser(is, db, 3)
+
+	user1Before := user1
+	user1Updated := user1.Update()
+	testutils.UpdateUser(is, db, user1Updated)
+
+	testutils.DeleteUser(is, db, user2)
+
+	// We should only get CDC events (no snapshot records)
+	testutils.ReadAndAssertCreate(ctx, is, source, user3)
+	testutils.ReadAndAssertUpdate(ctx, is, source, user1Before, user1Updated)
+	testutils.ReadAndAssertDelete(ctx, is, source, user2)
+
+	ctx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+	defer cancel()
+
+	_, err := source.Read(ctx)
+	is.True(errors.Is(err, context.DeadlineExceeded))
 }

@@ -65,6 +65,48 @@ The source connector uses [avro](https://avro.apache.org/docs/1.11.1/specificati
 | SET        | string    |
 | JSON       | string    |
 
+### Record structure
+
+Records produced by the MySQL source connector contain the following [opencdc record structure](https://conduit.io/docs/using/opencdc-record):
+
+*   **Operation**: Indicates the type of change (`create`, `update`, `delete`, `snapshot`).
+*   **Payload**:
+    *   `Before`: (Only present on CDC `update` operations) `opencdc.StructuredData` representing the row state before the change.
+    *   `After`: `opencdc.StructuredData` representing the row state after the change (or the current state for `snapshot` and `create`).
+*   **Key**: Identifies the specific row. See Snapshot/CDC sections below for details.
+*   **Position**: Represents the point in the data stream. It's a JSON object containing *either* a `snapshot_position` field *or* a `cdc_position` field, structured as described below.
+*   **Metadata**: Contains standard OpenCDC fields plus:
+    *   `mysql.server.id`: (CDC only) The originating MySQL server ID from the replication event header.
+    *   [Key](https://conduit.io/docs/using/opencdc-record/#opencdckeyschema) and [payload](https://conduit.io/docs/using/opencdc-record/#opencdcpayloadschema) schema registry data.
+
+#### Snapshot Records
+
+*   **Operation**: `snapshot`.
+*   **Payload `After`**: `opencdc.StructuredData` with all column values.
+*   **Key**:
+    *   With Primary Key(s): `opencdc.StructuredData` using primary key columns and values.
+    *   Without Primary Key(s) (using `LIMIT`/`OFFSET`): `opencdc.RawData` string `"<table_name>_<row_offset>"`.
+*   **Position (`snapshot_position` field)**: A JSON object containing:
+    *   `snapshots`: (object) Maps table names to their specific snapshot position object.
+        *   *(Single Primary Key Table)*: Contains `last_read` (any) and `snapshot_end` (any).
+        *   *(Multiple Primary Key Table)*: Contains an array of objects, each with `key_name` (string), `last_read` (any), and `snapshot_end` (any).
+        *   *(No Primary Key Table)*: Table entry might be missing or empty (offset is not persisted).
+
+#### CDC Records
+
+*   **Operation**: Either `create`, `update` or `delete`.
+*   **Key**:
+    *   With Primary Key(s): `opencdc.StructuredData` using primary key columns and values (from the `After` state).
+    *   Without Primary Key(s): `opencdc.RawData` string `"<binlog_file_name>_<log_position>"`.
+*   **Payload**:
+    *   `Before`: (For `update` only) `opencdc.StructuredData` with pre-update column values.
+    *   `After`: `opencdc.StructuredData` with post-change column values (for `create`, `update`) or pre-deletion values (for `delete`).
+*   **Position (`cdc_position` field)**: Encodes the binlog location in a JSON object with the following fields.
+    *   `name`: (string) Binlog file name.
+    *   `pos`: (uint32) Position within the binlog file.
+    *   `prev`: (object, optional) Position of the preceding event, containing `name` (string) and `pos` (uint32). Omitted if not applicable.
+    *   `idx`: (int, optional) Row index within a potentially multi-row MySQL replication event. Omitted if zero or not applicable.
+
 ## Destination
 
 The MySQL destination takes a slice of `opencdc.Record` and writes them in batches to MySQL. It will use the `opencdc.collection` field in the metadata to determine the table to write to.
@@ -111,13 +153,13 @@ pipelines:
       - id: example
         plugin: "mysql"
         settings:
-          # DSN is the connection string for the MySQL database.
+          # The connection string for the MySQL database.
           # Type: string
           # Required: yes
           dsn: ""
-          # Tables represents the tables to read from. - By default, no tables
-          # are included, but can be modified by adding a comma-separated string
-          # of regex patterns. - They are applied in the order that they are
+          # Represents the tables to read from. - By default, no tables are
+          # included, but can be modified by adding a comma-separated string of
+          # regex patterns. - They are applied in the order that they are
           # provided, so the final regex supersedes all previous ones. - To
           # include all tables, use "*". You can then filter that list by adding
           # a comma-separated string of regex patterns. - To set an "include"
@@ -128,28 +170,27 @@ pipelines:
           # Type: string
           # Required: yes
           tables: ""
-          # DisableLogs disables verbose cdc driver logs.
+          # Disables verbose cdc driver logs.
           # Type: bool
           # Required: no
           cdc.disableLogs: "false"
-          # EnabledSnapshot prevents the connector from doing table snapshots
-          # and makes it start directly in cdc mode.
+          # Prevents the connector from doing table snapshots and makes it start
+          # directly in cdc mode.
           # Type: bool
           # Required: no
           snapshot.enabled: "false"
-          # FetchSize limits how many rows should be retrieved on each database
-          # fetch on snapshot mode.
+          # Limits how many rows should be retrieved on each database fetch on
+          # snapshot mode.
           # Type: int
           # Required: no
           snapshot.fetchSize: "10000"
-          # UnsafeSnapshot allows a snapshot of a table with neither a primary
-          # key nor a defined sorting column. The opencdc.Position won't record
-          # the last record read from a table.
+          # Allows a snapshot of a table with neither a primary key nor a
+          # defined sorting column. The opencdc.Position won't record the last
+          # record read from a table.
           # Type: bool
           # Required: no
           snapshot.unsafe: "false"
-          # SortingColumn allows to force using a custom column to sort the
-          # snapshot.
+          # Allows to force using a custom column to sort the snapshot.
           # Type: string
           # Required: no
           tableConfig.*.sortingColumn: ""
@@ -212,7 +253,7 @@ pipelines:
       - id: example
         plugin: "mysql"
         settings:
-          # DSN is the connection string for the MySQL database.
+          # The connection string for the MySQL database.
           # Type: string
           # Required: yes
           dsn: ""

@@ -127,7 +127,7 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 		return err
 	}
 
-	canalRegexes := s.createCanalRegexes(s.config.MysqlCfg().DBName, s.config.Tables)
+	canalRegexes := createCanalRegexes(s.config.MysqlCfg().DBName, s.config.Tables)
 
 	sdk.Logger(ctx).Info().
 		Strs("tables", s.config.Tables).
@@ -246,7 +246,7 @@ func (s *Source) getAndFilterTables(ctx context.Context, db *sqlx.DB, database s
 }
 
 // createCanalRegexes creates regex patterns for Canal from the filtered table names.
-func (s *Source) createCanalRegexes(database string, tables []string) []string {
+func createCanalRegexes(database string, tables []string) []string {
 	canalRegexes := make([]string, 0, len(tables))
 	for _, table := range tables {
 		// prefix with db name because Canal does the same for the key, so we can't prefix with ^ to prevent undesired matches.

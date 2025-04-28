@@ -127,6 +127,8 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 		return err
 	}
 
+	canalRegexes := createCanalRegexes(s.config.MysqlCfg().DBName, s.config.Tables)
+
 	sdk.Logger(ctx).Info().
 		Strs("tables", s.config.Tables).
 		Int("count", len(s.config.Tables)).
@@ -159,6 +161,7 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 		startCdcPosition:      pos.CdcPosition,
 		database:              s.config.MysqlCfg().DBName,
 		tables:                s.config.Tables,
+		canalRegexes:          canalRegexes,
 		serverID:              serverID,
 		mysqlConfig:           s.config.MysqlCfg(),
 		disableCanalLogging:   s.config.DisableLogs,
@@ -231,15 +234,26 @@ func (s *Source) getAndFilterTables(ctx context.Context, db *sqlx.DB, database s
 		}
 	}
 
-	var result []string
+	var finalTables []string
 	// Collect all the tables that were included (true in map)
 	for table, included := range includedTables {
 		if included {
-			result = append(result, table)
+			finalTables = append(finalTables, table)
 		}
 	}
 
-	return result, nil
+	return finalTables, nil
+}
+
+// createCanalRegexes creates regex patterns for Canal from the filtered table names.
+func createCanalRegexes(database string, tables []string) []string {
+	canalRegexes := make([]string, 0, len(tables))
+	for _, table := range tables {
+		// prefix with db name because Canal does the same for the key, so we can't prefix with ^ to prevent undesired matches.
+		// Append $ to prevent undesired matches.
+		canalRegexes = append(canalRegexes, fmt.Sprintf("^%s.%s$", database, regexp.QuoteMeta(table)))
+	}
+	return canalRegexes
 }
 
 func (s *Source) processTableRule(rule string, tables []string, includedTables map[string]bool) error {

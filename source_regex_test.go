@@ -16,6 +16,8 @@ package mysql
 
 import (
 	"context"
+	"fmt"
+	"regexp"
 	"sort"
 	"testing"
 
@@ -124,16 +126,27 @@ func TestSource_TableFilterRegex(t *testing.T) {
 			is.NoErr(err)
 
 			// Sort both slices to ensure consistent comparison
-			sortStrings(tables)
-			sortStrings(tc.expectedTables)
+			sort.Strings(tables)
+			sort.Strings(tc.expectedTables)
 
 			is.Equal(tables, tc.expectedTables)
+
+			// Test the createCanalRegexes function separately
+			regexes := createCanalRegexes("meroxadb", tables)
+			var expectedRegexes []string
+			for _, expectedTable := range tc.expectedTables {
+				expectedRegexes = append(expectedRegexes, fmt.Sprintf("^%s.%s$", "meroxadb", regexp.QuoteMeta(expectedTable)))
+			}
+			sort.Strings(regexes)
+			sort.Strings(expectedRegexes)
+			if len(expectedRegexes) == 0 && len(regexes) == 0 {
+				// Both are empty, considered equal regardless of nil vs empty slice
+				is.True(true) // Always passes
+			} else {
+				is.Equal(regexes, expectedRegexes)
+			}
 		})
 	}
-}
-
-func sortStrings(strs []string) {
-	sort.Strings(strs)
 }
 
 func TestSource_RegexParseRule(t *testing.T) {

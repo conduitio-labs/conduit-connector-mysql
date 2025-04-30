@@ -5,7 +5,7 @@ build:
 	go build -ldflags "-X 'github.com/conduitio-labs/conduit-connector-mysql.version=${VERSION}'" -o conduit-connector-mysql cmd/connector/main.go
 
 .PHONY: test
-test: up-database
+test: up
 	go test $(GOTEST_FLAGS) -v -race ./...
 
 .PHONY: generate
@@ -23,17 +23,13 @@ install-tools:
 lint:
 	golangci-lint run
 
-.PHONY: up-database
-up-database:
-	docker compose -f test/docker-compose.yml up --quiet-pull -d db --wait
-
-.PHONY: up-adminer
-up-adminer:
-	docker compose -f test/docker-compose.yml up --quiet-pull -d adminer --wait
-
 .PHONY: up
 up:
-	docker compose -f test/docker-compose.yml up --wait
+	docker compose -f test/docker-compose.yml up mysql --wait
+
+.PHONY: up-mariadb
+up-mariadb:
+	docker compose -f test/docker-compose.yml up mariadb --wait
 
 .PHONY: down
 down:
@@ -42,6 +38,10 @@ down:
 .PHONY: connect
 connect:
 	docker exec -it mysql_db mysql -u root -p'meroxaadmin' meroxadb
+
+.PHONY: connect-mariadb
+connect-mariadb:
+	docker exec -it mariadb_db mariadb -u root -p'meroxaadmin' meroxadb
 
 .PHONY: fmt
 fmt:

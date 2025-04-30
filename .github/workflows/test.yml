@@ -6,7 +6,7 @@ on:
   pull_request:
 
 jobs:
-  test:
+  test-mysql:
     runs-on: ubuntu-latest
     services:
       mysql:
@@ -33,4 +33,42 @@ jobs:
           go-version-file: 'go.mod'
 
       - name: Test
+        run: go test -v -race -count=1 ./...
+
+  test-mariadb:
+    runs-on: ubuntu-latest
+    services:
+      mariadb:
+        image: mariadb:11.4
+        env:
+          MARIADB_DATABASE: meroxadb
+          MARIADB_USER: meroxauser
+          MARIADB_PASSWORD: meroxapass
+          MARIADB_ROOT_PASSWORD: meroxaadmin
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost"
+          --health-interval=1s
+          --health-timeout=20s
+          --health-retries=30
+          --health-start-period=10s
+          --binlog-format=ROW
+          --log-bin=mysql-bin
+          --server-id=1
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Test MariaDB
+        env:
+          MYSQL_TEST_USER: meroxauser
+          MYSQL_TEST_PASSWORD: meroxapass
+          MYSQL_TEST_DB: meroxadb
+          MYSQL_TEST_HOST: 127.0.0.1
+          MYSQL_TEST_PORT: 3306
         run: go test -v -race -count=1 ./...

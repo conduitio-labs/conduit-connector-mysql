@@ -32,6 +32,7 @@ type CanalConfig struct {
 	*mysql.Config
 	Tables         []string
 	DisableLogging bool
+	Flavor         string // "mysql" or "mariadb"
 }
 
 func NewCanal(ctx context.Context, config CanalConfig) (*canal.Canal, error) {
@@ -39,8 +40,9 @@ func NewCanal(ctx context.Context, config CanalConfig) (*canal.Canal, error) {
 	cfg.Addr = config.Addr
 	cfg.User = config.User
 	cfg.Password = config.Passwd
-
 	cfg.IncludeTableRegex = config.Tables
+	cfg.Flavor = config.Flavor
+
 	if config.DisableLogging {
 		cfg.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	} else {

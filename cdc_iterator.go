@@ -19,12 +19,14 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	"github.com/conduitio/conduit-commons/opencdc"
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/go-mysql-org/go-mysql/canal"
+	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/replication"
 	"github.com/go-mysql-org/go-mysql/schema"
 	mysqldriver "github.com/go-sql-driver/mysql"
@@ -35,6 +37,7 @@ type cdcIterator struct {
 	config   cdcIteratorConfig
 	canal    *canal.Canal
 	position *common.CdcPosition
+	flavor   string
 
 	canalDoneC     chan struct{}
 	canalRunErrC   chan error
@@ -51,10 +54,20 @@ type cdcIteratorConfig struct {
 }
 
 func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (*cdcIterator, error) {
+	flavor := mysql.MySQLFlavor
+	var version string
+	err := config.db.QueryRowContext(ctx, "SELECT VERSION()").Scan(&version)
+	if err != nil {
+		sdk.Logger(ctx).Warn().Err(err).Msg("failed to detect database version, defaulting to MySQL")
+	} else if strings.Contains(version, "MariaDB") {
+		flavor = mysql.MariaDBFlavor
+	}
+
 	canal, err := common.NewCanal(ctx, common.CanalConfig{
 		Config:         config.mysqlConfig,
 		Tables:         config.tables,
 		DisableLogging: config.disableCanalLogging,
+		Flavor:         flavor,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to start canal at combined iterator: %w", err)
@@ -64,16 +77,34 @@ func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (*cdcIterator
 		config:         config,
 		canal:          canal,
 		position:       config.startPosition,
+		flavor:         flavor,
 		canalRunErrC:   make(chan error),
 		canalDoneC:     make(chan struct{}),
 		parsedRecordsC: make(chan opencdc.Record),
 	}, nil
 }
 
-func (c *cdcIterator) obtainStartPosition() error {
-	masterPos, err := c.canal.GetMasterPos()
-	if err != nil {
-		return fmt.Errorf("failed to get mysql master position after acquiring locks: %w", err)
+func (c *cdcIterator) obtainStartPosition() (err error) {
+	var masterPos mysql.Position
+	if c.flavor == mysql.MariaDBFlavor {
+		// Inlined from here:
+		// https://github.com/go-mysql-org/go-mysql/blob/34b6b0998dde44e51dff0bbcc1ac88339f57f830/canal/sync.go#L327-L342
+		// This is a workaround for this issue:
+		// https://github.com/go-mysql-org/go-mysql/issues/1029
+		rr, err := c.canal.Execute("SHOW MASTER STATUS")
+		if err != nil {
+			return fmt.Errorf("failed to get mysql master position after acquiring locks: %w", err)
+		}
+
+		name, _ := rr.GetString(0, 0)
+		pos, _ := rr.GetInt(0, 1)
+
+		masterPos = mysql.Position{Name: name, Pos: uint32(pos)}
+	} else {
+		masterPos, err = c.canal.GetMasterPos()
+		if err != nil {
+			return fmt.Errorf("failed to get mysql master position after acquiring locks: %w", err)
+		}
 	}
 
 	c.position = &common.CdcPosition{

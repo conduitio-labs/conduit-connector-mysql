@@ -42,9 +42,11 @@ type combinedIteratorConfig struct {
 	startCdcPosition      *common.CdcPosition
 	database              string
 	tables                []string
+	canalRegexes          []string
 	serverID              string
 	mysqlConfig           *mysqldriver.Config
 	disableCanalLogging   bool
+	noSnapshot            bool
 }
 
 func newCombinedIterator(
@@ -52,7 +54,7 @@ func newCombinedIterator(
 	config combinedIteratorConfig,
 ) (common.Iterator, error) {
 	cdcIterator, err := newCdcIterator(ctx, cdcIteratorConfig{
-		tables:              config.tables,
+		tables:              config.canalRegexes,
 		mysqlConfig:         config.mysqlConfig,
 		primaryKeys:         config.primaryKeys,
 		disableCanalLogging: config.disableCanalLogging,
@@ -61,6 +63,21 @@ func newCombinedIterator(
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cdc iterator: %w", err)
+	}
+
+	if config.noSnapshot {
+		if err := cdcIterator.start(ctx); err != nil {
+			return nil, fmt.Errorf("failed to start cdc iterator: %w", err)
+		}
+
+		sdk.Logger(ctx).Info().Msg("started cdc iterator")
+
+		iterator := &combinedIterator{
+			cdcIterator:     cdcIterator,
+			currentIterator: cdcIterator,
+		}
+
+		return iterator, nil
 	}
 
 	snapshotIterator, err := newSnapshotIterator(snapshotIteratorConfig{

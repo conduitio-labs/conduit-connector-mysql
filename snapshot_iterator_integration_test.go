@@ -92,7 +92,7 @@ func TestSnapshotIterator_EmptyTable(t *testing.T) {
 	is := is.New(t)
 	db := testutils.NewDB(t)
 
-	testutils.RecreateUsersTable(is, db)
+	testutils.CreateUserTable(is, db)
 
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 
@@ -111,7 +111,7 @@ func TestSnapshotIterator_WithData(t *testing.T) {
 
 	db := testutils.NewDB(t)
 
-	testutils.RecreateUsersTable(is, db)
+	testutils.CreateUserTable(is, db)
 
 	var users []testutils.User
 	for i := 1; i <= 100; i++ {
@@ -138,7 +138,7 @@ func TestSnapshotIterator_RestartOnPosition(t *testing.T) {
 
 	db := testutils.NewDB(t)
 
-	testutils.RecreateUsersTable(is, db)
+	testutils.CreateUserTable(is, db)
 	var users []testutils.User
 	for i := 1; i <= 100; i++ {
 		user := testutils.InsertUser(is, db, i)
@@ -223,8 +223,7 @@ func TestSnapshotIterator_CustomTableKeys(t *testing.T) {
 		Data      string    `gorm:"size:100"`
 	}
 
-	is.NoErr(db.Migrator().DropTable(&CompositeWithAutoInc{}, &UlidPk{}, &TimestampOrdered{}))
-	is.NoErr(db.AutoMigrate(&CompositeWithAutoInc{}, &UlidPk{}, &TimestampOrdered{}))
+	testutils.CreateTables(is, db, &CompositeWithAutoInc{}, &UlidPk{}, &TimestampOrdered{})
 
 	compositeWithAutoIncData := []CompositeWithAutoInc{
 		{TenantID: "tenant1", Data: "record 1"},
@@ -325,7 +324,7 @@ func TestSnapshotIterator_DeleteEndWhileSnapshotting(t *testing.T) {
 
 	db := testutils.NewDB(t)
 	conn := db.SqlxDB
-	testutils.RecreateUsersTable(is, db)
+	testutils.CreateUserTable(is, db)
 
 	var users []testutils.User
 	for i := 1; i <= 100; i++ {
@@ -386,9 +385,7 @@ func TestSnapshotIterator_StringSorting(t *testing.T) {
 	}
 	tablename := testutils.TableName(is, db, &Table{})
 
-	is.NoErr(db.Migrator().DropTable(&Table{}))
-
-	is.NoErr(db.AutoMigrate(&Table{}))
+	testutils.CreateTables(is, db, &Table{})
 
 	data := []Table{
 		{Str: "Zebra"},
@@ -469,8 +466,7 @@ func TestSnapshotIterator_FetchByLimit(t *testing.T) {
 	table1name := testutils.TableName(is, db, &Table1{})
 	table2name := testutils.TableName(is, db, &Table2{})
 
-	is.NoErr(db.Migrator().DropTable(&Table1{}, &Table2{}))
-	is.NoErr(db.AutoMigrate(&Table1{}, &Table2{}))
+	testutils.CreateTables(is, db, &Table1{}, &Table2{})
 
 	var table1Data []Table1
 	var table2Data []Table2

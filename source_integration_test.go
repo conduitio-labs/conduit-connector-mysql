@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -392,6 +393,7 @@ func TestNoSnapshot(t *testing.T) {
 	ctx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
 	defer cancel()
 
-	_, err := source.Read(ctx)
+	_, err := source.ReadN(ctx, 1)
+	fmt.Println(err)
 	is.True(errors.Is(err, context.DeadlineExceeded))
 }

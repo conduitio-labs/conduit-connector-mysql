@@ -83,8 +83,6 @@ func NewCanal(ctx context.Context, config CanalConfig) (*Canal, error) {
 		return nil, fmt.Errorf("failed to create mysql canal: %w", err)
 	}
 
-	c.GetMasterPos()
-
 	return &Canal{
 		Canal:         c,
 		flavor:        flavor,

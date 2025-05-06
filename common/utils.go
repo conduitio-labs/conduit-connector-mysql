@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"strconv"
 	"strings"
 
@@ -100,6 +101,14 @@ func (c *Canal) GetMasterPos() (mysqlPos gomysqlorg.Position, err error) {
 
 	name, _ := rr.GetString(0, 0)
 	pos, _ := rr.GetInt(0, 1)
+
+	if pos < 0 {
+		return mysqlPos, fmt.Errorf("received negative binary log position: %d", pos)
+	}
+
+	if pos > math.MaxUint32 {
+		return mysqlPos, fmt.Errorf("binary log position %d exceeds maximum uint32 value (%d)", pos, math.MaxUint32)
+	}
 
 	return gomysqlorg.Position{Name: name, Pos: uint32(pos)}, nil
 }

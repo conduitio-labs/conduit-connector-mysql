@@ -1,7 +1,6 @@
 # Conduit Connector for MySQL
 
 <!-- readmegen:description -->
-
 ## Source
 
 A source connector pulls data from an external resource and pushes it to
@@ -70,43 +69,43 @@ The source connector uses [avro](https://avro.apache.org/docs/1.11.1/specificati
 
 Records produced by the MySQL source connector contain the following [opencdc record structure](https://conduit.io/docs/using/opencdc-record):
 
-- **Operation**: Indicates the type of change (`create`, `update`, `delete`, `snapshot`).
-- **Payload**:
-  - `Before`: (Only present on CDC `update` operations) `opencdc.StructuredData` representing the row state before the change.
-  - `After`: `opencdc.StructuredData` representing the row state after the change (or the current state for `snapshot` and `create`).
-- **Key**: Identifies the specific row. See Snapshot/CDC sections below for details.
-- **Position**: Represents the point in the data stream. It's a JSON object containing _either_ a `snapshot_position` field _or_ a `cdc_position` field, structured as described below.
-- **Metadata**: Contains standard OpenCDC fields plus:
-  - `mysql.server.id`: (CDC only) The originating MySQL server ID from the replication event header.
-  - [Key](https://conduit.io/docs/using/opencdc-record/#opencdckeyschema) and [payload](https://conduit.io/docs/using/opencdc-record/#opencdcpayloadschema) schema registry data.
+*   **Operation**: Indicates the type of change (`create`, `update`, `delete`, `snapshot`).
+*   **Payload**:
+    *   `Before`: (Only present on CDC `update` operations) `opencdc.StructuredData` representing the row state before the change.
+    *   `After`: `opencdc.StructuredData` representing the row state after the change (or the current state for `snapshot` and `create`).
+*   **Key**: Identifies the specific row. See Snapshot/CDC sections below for details.
+*   **Position**: Represents the point in the data stream. It's a JSON object containing *either* a `snapshot_position` field *or* a `cdc_position` field, structured as described below.
+*   **Metadata**: Contains standard OpenCDC fields plus:
+    *   `mysql.server.id`: (CDC only) The originating MySQL server ID from the replication event header.
+    *   [Key](https://conduit.io/docs/using/opencdc-record/#opencdckeyschema) and [payload](https://conduit.io/docs/using/opencdc-record/#opencdcpayloadschema) schema registry data.
 
 #### Snapshot Records
 
-- **Operation**: `snapshot`.
-- **Payload `After`**: `opencdc.StructuredData` with all column values.
-- **Key**:
-  - With Primary Key(s): `opencdc.StructuredData` using primary key columns and values.
-  - Without Primary Key(s) (using `LIMIT`/`OFFSET`): `opencdc.RawData` string `"<table_name>_<row_offset>"`.
-- **Position (`snapshot_position` field)**: A JSON object containing:
-  - `snapshots`: (object) Maps table names to their specific snapshot position object.
-    - _(Single Primary Key Table)_: Contains `last_read` (any) and `snapshot_end` (any).
-    - _(Multiple Primary Key Table)_: Contains an array of objects, each with `key_name` (string), `last_read` (any), and `snapshot_end` (any).
-    - _(No Primary Key Table)_: Table entry might be missing or empty (offset is not persisted).
+*   **Operation**: `snapshot`.
+*   **Payload `After`**: `opencdc.StructuredData` with all column values.
+*   **Key**:
+    *   With Primary Key(s): `opencdc.StructuredData` using primary key columns and values.
+    *   Without Primary Key(s) (using `LIMIT`/`OFFSET`): `opencdc.RawData` string `"<table_name>_<row_offset>"`.
+*   **Position (`snapshot_position` field)**: A JSON object containing:
+    *   `snapshots`: (object) Maps table names to their specific snapshot position object.
+        *   *(Single Primary Key Table)*: Contains `last_read` (any) and `snapshot_end` (any).
+        *   *(Multiple Primary Key Table)*: Contains an array of objects, each with `key_name` (string), `last_read` (any), and `snapshot_end` (any).
+        *   *(No Primary Key Table)*: Table entry might be missing or empty (offset is not persisted).
 
 #### CDC Records
 
-- **Operation**: Either `create`, `update` or `delete`.
-- **Key**:
-  - With Primary Key(s): `opencdc.StructuredData` using primary key columns and values (from the `After` state).
-  - Without Primary Key(s): `opencdc.RawData` string `"<binlog_file_name>_<log_position>"`.
-- **Payload**:
-  - `Before`: (For `update` only) `opencdc.StructuredData` with pre-update column values.
-  - `After`: `opencdc.StructuredData` with post-change column values (for `create`, `update`) or pre-deletion values (for `delete`).
-- **Position (`cdc_position` field)**: Encodes the binlog location in a JSON object with the following fields.
-  - `name`: (string) Binlog file name.
-  - `pos`: (uint32) Position within the binlog file.
-  - `prev`: (object, optional) Position of the preceding event, containing `name` (string) and `pos` (uint32). Omitted if not applicable.
-  - `idx`: (int, optional) Row index within a potentially multi-row MySQL replication event. Omitted if zero or not applicable.
+*   **Operation**: Either `create`, `update` or `delete`.
+*   **Key**:
+    *   With Primary Key(s): `opencdc.StructuredData` using primary key columns and values (from the `After` state).
+    *   Without Primary Key(s): `opencdc.RawData` string `"<binlog_file_name>_<log_position>"`.
+*   **Payload**:
+    *   `Before`: (For `update` only) `opencdc.StructuredData` with pre-update column values.
+    *   `After`: `opencdc.StructuredData` with post-change column values (for `create`, `update`) or pre-deletion values (for `delete`).
+*   **Position (`cdc_position` field)**: Encodes the binlog location in a JSON object with the following fields.
+    *   `name`: (string) Binlog file name.
+    *   `pos`: (uint32) Position within the binlog file.
+    *   `prev`: (object, optional) Position of the preceding event, containing `name` (string) and `pos` (uint32). Omitted if not applicable.
+    *   `idx`: (int, optional) Row index within a potentially multi-row MySQL replication event. Omitted if zero or not applicable.
 
 ## Destination
 
@@ -145,7 +144,6 @@ For Snapshot and CDC modes, the following privileges are required:
 ## Source Configuration Parameters
 
 <!-- readmegen:source.parameters.yaml -->
-
 ```yaml
 version: 2.2
 pipelines:
@@ -153,12 +151,12 @@ pipelines:
     status: running
     connectors:
       - id: example
-        plugin: 'mysql'
+        plugin: "mysql"
         settings:
           # The connection string for the MySQL database.
           # Type: string
           # Required: yes
-          dsn: ''
+          dsn: ""
           # Represents the tables to read from. - By default, no tables are
           # included, but can be modified by adding a comma-separated string of
           # regex patterns. - They are applied in the order that they are
@@ -171,83 +169,81 @@ pipelines:
           # the table "wp_postmeta".
           # Type: string
           # Required: yes
-          tables: ''
+          tables: ""
           # Disables verbose cdc driver logs.
           # Type: bool
           # Required: no
-          cdc.disableLogs: 'false'
+          cdc.disableLogs: "false"
           # Prevents the connector from doing table snapshots and makes it start
           # directly in cdc mode.
           # Type: bool
           # Required: no
-          snapshot.enabled: 'false'
+          snapshot.enabled: "false"
           # Limits how many rows should be retrieved on each database fetch on
           # snapshot mode.
           # Type: int
           # Required: no
-          snapshot.fetchSize: '10000'
+          snapshot.fetchSize: "10000"
           # Allows a snapshot of a table with neither a primary key nor a
           # defined sorting column. The opencdc.Position won't record the last
           # record read from a table.
           # Type: bool
           # Required: no
-          snapshot.unsafe: 'false'
+          snapshot.unsafe: "false"
           # Allows to force using a custom column to sort the snapshot.
           # Type: string
           # Required: no
-          tableConfig.*.sortingColumn: ''
+          tableConfig.*.sortingColumn: ""
           # Maximum delay before an incomplete batch is read from the source.
           # Type: duration
           # Required: no
-          sdk.batch.delay: '0'
+          sdk.batch.delay: "0"
           # Maximum size of batch before it gets read from the source.
           # Type: int
           # Required: no
-          sdk.batch.size: '0'
+          sdk.batch.size: "0"
           # Specifies whether to use a schema context name. If set to false, no
           # schema context name will be used, and schemas will be saved with the
           # subject name specified in the connector (not safe because of name
           # conflicts).
           # Type: bool
           # Required: no
-          sdk.schema.context.enabled: 'true'
+          sdk.schema.context.enabled: "true"
           # Schema context name to be used. Used as a prefix for all schema
           # subject names. If empty, defaults to the connector ID.
           # Type: string
           # Required: no
-          sdk.schema.context.name: ''
+          sdk.schema.context.name: ""
           # Whether to extract and encode the record key with a schema.
           # Type: bool
           # Required: no
-          sdk.schema.extract.key.enabled: 'true'
+          sdk.schema.extract.key.enabled: "true"
           # The subject of the key schema. If the record metadata contains the
           # field "opencdc.collection" it is prepended to the subject name and
           # separated with a dot.
           # Type: string
           # Required: no
-          sdk.schema.extract.key.subject: 'key'
+          sdk.schema.extract.key.subject: "key"
           # Whether to extract and encode the record payload with a schema.
           # Type: bool
           # Required: no
-          sdk.schema.extract.payload.enabled: 'true'
+          sdk.schema.extract.payload.enabled: "true"
           # The subject of the payload schema. If the record metadata contains
           # the field "opencdc.collection" it is prepended to the subject name
           # and separated with a dot.
           # Type: string
           # Required: no
-          sdk.schema.extract.payload.subject: 'payload'
+          sdk.schema.extract.payload.subject: "payload"
           # The type of the payload schema.
           # Type: string
           # Required: no
-          sdk.schema.extract.type: 'avro'
+          sdk.schema.extract.type: "avro"
 ```
-
 <!-- /readmegen:source.parameters.yaml -->
 
 ## Destination Configuration Parameters
 
 <!-- readmegen:destination.parameters.yaml -->
-
 ```yaml
 version: 2.2
 pipelines:
@@ -255,56 +251,55 @@ pipelines:
     status: running
     connectors:
       - id: example
-        plugin: 'mysql'
+        plugin: "mysql"
         settings:
           # The connection string for the MySQL database.
           # Type: string
           # Required: yes
-          dsn: ''
+          dsn: ""
           # Maximum delay before an incomplete batch is written to the
           # destination.
           # Type: duration
           # Required: no
-          sdk.batch.delay: '0'
+          sdk.batch.delay: "0"
           # Maximum size of batch before it gets written to the destination.
           # Type: int
           # Required: no
-          sdk.batch.size: '0'
+          sdk.batch.size: "0"
           # Allow bursts of at most X records (0 or less means that bursts are
           # not limited). Only takes effect if a rate limit per second is set.
           # Note that if `sdk.batch.size` is bigger than `sdk.rate.burst`, the
           # effective batch size will be equal to `sdk.rate.burst`.
           # Type: int
           # Required: no
-          sdk.rate.burst: '0'
+          sdk.rate.burst: "0"
           # Maximum number of records written per second (0 means no rate
           # limit).
           # Type: float
           # Required: no
-          sdk.rate.perSecond: '0'
+          sdk.rate.perSecond: "0"
           # The format of the output record. See the Conduit documentation for a
           # full list of supported formats
           # (https://conduit.io/docs/using/connectors/configuration-parameters/output-format).
           # Type: string
           # Required: no
-          sdk.record.format: 'opencdc/json'
+          sdk.record.format: "opencdc/json"
           # Options to configure the chosen output record format. Options are
           # normally key=value pairs separated with comma (e.g.
           # opt1=val2,opt2=val2), except for the `template` record format, where
           # options are a Go template.
           # Type: string
           # Required: no
-          sdk.record.format.options: ''
+          sdk.record.format.options: ""
           # Whether to extract and decode the record key with a schema.
           # Type: bool
           # Required: no
-          sdk.schema.extract.key.enabled: 'true'
+          sdk.schema.extract.key.enabled: "true"
           # Whether to extract and decode the record payload with a schema.
           # Type: bool
           # Required: no
-          sdk.schema.extract.payload.enabled: 'true'
+          sdk.schema.extract.payload.enabled: "true"
 ```
-
 <!-- /readmegen:destination.parameters.yaml -->
 
 ## Testing

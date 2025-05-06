@@ -20,9 +20,11 @@ import (
 	"io"
 	"log/slog"
 	"strconv"
+	"strings"
 
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/go-mysql-org/go-mysql/canal"
+	gomysqlorg "github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 	"github.com/rs/zerolog"
@@ -32,16 +34,33 @@ type CanalConfig struct {
 	*mysql.Config
 	Tables         []string
 	DisableLogging bool
-	Flavor         string // "mysql" or "mariadb"
+	Version        string
 }
 
-func NewCanal(ctx context.Context, config CanalConfig) (*canal.Canal, error) {
+// Canal is a wrapper around the original *canal.Canal from go-mysql/canal
+// v1.12.0. This fixes `canal.GetMasterPos()`, which did not work with mariadb:
+//
+//	https://github.com/go-mysql-org/go-mysql/issues/1029
+//
+// It got fixed here:
+//
+//	https://github.com/go-mysql-org/go-mysql/pull/1030
+//
+// Until go-mysql-org/go-mysql v1.12.1 or later is released, we can just backport the fix here.
+//
+// NOTE: We should be able to easily remove this wrapper, the utility functions
+// added, and their tests once we upgrade to the new version.
+type Canal struct {
+	*canal.Canal
+	flavor, serverVersion string
+}
+
+func NewCanal(ctx context.Context, config CanalConfig) (*Canal, error) {
 	cfg := canal.NewDefaultConfig()
 	cfg.Addr = config.Addr
 	cfg.User = config.User
 	cfg.Password = config.Passwd
 	cfg.IncludeTableRegex = config.Tables
-	cfg.Flavor = config.Flavor
 
 	if config.DisableLogging {
 		cfg.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -54,12 +73,37 @@ func NewCanal(ctx context.Context, config CanalConfig) (*canal.Canal, error) {
 	cfg.Dump.ExecutionPath = ""
 	cfg.ParseTime = true
 
+	version, flavor, err := parseVersion(config.Version)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse version: %w", err)
+	}
+
 	c, err := canal.NewCanal(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create mysql canal: %w", err)
 	}
 
-	return c, nil
+	c.GetMasterPos()
+
+	return &Canal{
+		Canal:         c,
+		flavor:        flavor,
+		serverVersion: version,
+	}, nil
+}
+
+func (c *Canal) GetMasterPos() (mysqlPos gomysqlorg.Position, err error) {
+	query := getShowBinaryLogQuery(c.flavor, c.serverVersion)
+
+	rr, err := c.Execute(query)
+	if err != nil {
+		return mysqlPos, fmt.Errorf("failed to execute %q: %w", query, err)
+	}
+
+	name, _ := rr.GetString(0, 0)
+	pos, _ := rr.GetInt(0, 1)
+
+	return gomysqlorg.Position{Name: name, Pos: uint32(pos)}, nil
 }
 
 type zerologHandler struct {
@@ -185,4 +229,51 @@ func GetPrimaryKeys(db keyQuerier, database, table string) (PrimaryKeys, error) 
 	}
 
 	return keys, nil
+}
+
+func getShowBinaryLogQuery(flavor, serverVersion string) string {
+	switch flavor {
+	case gomysqlorg.MariaDBFlavor:
+		eq, err := gomysqlorg.CompareServerVersions(serverVersion, "10.5.2")
+		if (err == nil) && (eq >= 0) {
+			return "SHOW BINLOG STATUS"
+		}
+	case gomysqlorg.MySQLFlavor:
+		eq, err := gomysqlorg.CompareServerVersions(serverVersion, "8.4.0")
+		if (err == nil) && (eq >= 0) {
+			return "SHOW BINARY LOG STATUS"
+		}
+	}
+
+	return "SHOW MASTER STATUS"
+}
+
+func parseVersion(rawVersion string) (version, flavor string, err error) {
+	parts := strings.Split(rawVersion, "-")
+	if len(parts) == 0 {
+		return "", "", fmt.Errorf("invalid empty version string")
+	}
+
+	if strings.Contains(rawVersion, "MariaDB") {
+		flavor = gomysqlorg.MariaDBFlavor
+		if strings.HasPrefix(rawVersion, "5.5.5-") && len(parts) > 1 {
+			version = parts[1]
+		} else {
+			version = parts[0]
+		}
+	} else {
+		flavor = gomysqlorg.MySQLFlavor
+		version = parts[0]
+	}
+
+	if version == "" {
+		return "", "", fmt.Errorf("could not extract version from: %q", rawVersion)
+	}
+
+	_, err = gomysqlorg.CompareServerVersions(version, "0.0.0")
+	if err != nil {
+		return "", "", fmt.Errorf("extracted version %q from %q is not valid: %w", version, rawVersion, err)
+	}
+
+	return version, flavor, nil
 }

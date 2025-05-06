@@ -25,7 +25,6 @@ import (
 	"github.com/conduitio/conduit-commons/opencdc"
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/go-mysql-org/go-mysql/canal"
-	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/replication"
 	"github.com/go-mysql-org/go-mysql/schema"
 	mysqldriver "github.com/go-sql-driver/mysql"
@@ -36,7 +35,6 @@ type cdcIterator struct {
 	config   cdcIteratorConfig
 	canal    *common.Canal
 	position *common.CdcPosition
-	flavor   string
 
 	canalDoneC     chan struct{}
 	canalRunErrC   chan error
@@ -53,7 +51,6 @@ type cdcIteratorConfig struct {
 }
 
 func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (*cdcIterator, error) {
-	flavor := mysql.MySQLFlavor
 	var version string
 	err := config.db.QueryRowContext(ctx, "SELECT VERSION()").Scan(&version)
 	if err != nil {
@@ -74,7 +71,6 @@ func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (*cdcIterator
 		config:         config,
 		canal:          canal,
 		position:       config.startPosition,
-		flavor:         flavor,
 		canalRunErrC:   make(chan error),
 		canalDoneC:     make(chan struct{}),
 		parsedRecordsC: make(chan opencdc.Record),

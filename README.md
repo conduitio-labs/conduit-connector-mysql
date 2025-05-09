@@ -306,6 +306,6 @@ pipelines:
 
 Run `make test` to run all tests.
 
-The Docker compose file at `test/docker-compose.yml` can be used to run the required resource locally. It includes [adminer](https://www.adminer.org/) for database management.
+The Docker compose file at `test/docker-compose.yml` can be used to run the required resource locally.
 
 Use the `TRACE=true` environment variable to enable trace logs when running tests.

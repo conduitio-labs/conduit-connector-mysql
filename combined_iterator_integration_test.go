@@ -38,6 +38,7 @@ func testCombinedIterator(ctx context.Context, t *testing.T, is *is.I) (common.I
 		serverID:            testutils.ServerID,
 		mysqlConfig:         config,
 		disableCanalLogging: true,
+		snapshotEnabled:     true,
 	})
 	is.NoErr(err)
 

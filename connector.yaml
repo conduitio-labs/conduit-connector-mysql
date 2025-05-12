@@ -141,7 +141,7 @@ specification:
     - RELOAD
     - REPLICATION CLIENT
     - REPLICATION SLAVE
-  version: (devel)
+  version: v0.1.4
   author: Meroxa, Inc.
   source:
     parameters:

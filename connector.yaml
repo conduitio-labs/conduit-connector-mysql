@@ -141,7 +141,7 @@ specification:
     - RELOAD
     - REPLICATION CLIENT
     - REPLICATION SLAVE
-  version: (devel)
+  version: v0.2.0
   author: Meroxa, Inc.
   source:
     parameters:
@@ -172,11 +172,9 @@ specification:
         default: ""
         validations: []
       - name: snapshot.enabled
-        description: |-
-          Prevents the connector from doing table snapshots and makes it
-          start directly in cdc mode.
+        description: Controls whether the snapshot is done.
         type: bool
-        default: ""
+        default: "true"
         validations: []
       - name: snapshot.fetchSize
         description: Limits how many rows should be retrieved on each database fetch on snapshot mode.

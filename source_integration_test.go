@@ -360,7 +360,7 @@ func TestSource_CompositeKey(t *testing.T) {
 	}
 }
 
-func TestNoSnapshot(t *testing.T) {
+func TestSnapshotEnabled(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 
@@ -373,7 +373,7 @@ func TestNoSnapshot(t *testing.T) {
 
 	source, teardown := testSource(ctx, is, map[string]string{
 		"tables":           "users",
-		"snapshot.enabled": "true",
+		"snapshot.enabled": "false",
 	})
 	defer teardown()
 

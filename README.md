@@ -174,11 +174,10 @@ pipelines:
           # Type: bool
           # Required: no
           cdc.disableLogs: "false"
-          # Prevents the connector from doing table snapshots and makes it start
-          # directly in cdc mode.
+          # Controls whether the snapshot is done.
           # Type: bool
           # Required: no
-          snapshot.enabled: "false"
+          snapshot.enabled: "true"
           # Limits how many rows should be retrieved on each database fetch on
           # snapshot mode.
           # Type: int

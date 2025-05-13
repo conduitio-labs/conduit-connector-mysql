@@ -99,26 +99,26 @@ const (
 
 type Source struct {
 	sdk.UnimplementedSource
-	sdk.SourceWithBatch
 
-	config SourceConfig
-
-	db *sqlx.DB
-
+	config   SourceConfig
+	db       *sqlx.DB
 	iterator common.Iterator
 }
 
 var (
-	defaultBatchDelay = time.Second * 5
-	defaultBatchSize  = 100000
+	defaultBatchDelay = time.Second
+	defaultBatchSize  = 10000
 )
 
 func NewSource() sdk.Source {
-	// Create Source and wrap it in the default middleware.
 	return sdk.SourceWithMiddleware(&Source{
-		SourceWithBatch: sdk.SourceWithBatch{
-			BatchSize:  &defaultBatchSize,
-			BatchDelay: &defaultBatchDelay,
+		config: SourceConfig{
+			DefaultSourceMiddleware: sdk.DefaultSourceMiddleware{
+				SourceWithBatch: sdk.SourceWithBatch{
+					BatchSize:  &defaultBatchSize,
+					BatchDelay: &defaultBatchDelay,
+				},
+			},
 		},
 	})
 }

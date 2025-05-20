@@ -32,9 +32,8 @@ func testCombinedIterator(ctx context.Context, t *testing.T, is *is.I) (common.I
 
 	iterator, err := newCombinedIterator(ctx, combinedIteratorConfig{
 		db:                  db,
-		primaryKeys:         testutils.TablePrimaryKeys,
+		tableKeys:           testutils.TablePrimaryKeys,
 		database:            "meroxadb",
-		tables:              []string{"users"},
 		serverID:            testutils.ServerID,
 		mysqlConfig:         config,
 		disableCanalLogging: true,

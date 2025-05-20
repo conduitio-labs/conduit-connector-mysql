@@ -126,16 +126,27 @@ func GetServerID(ctx context.Context, db *sqlx.DB) (string, error) {
 // order is important, so that we can properly build ORDER BY clauses.
 type PrimaryKeys []string
 
+// TableKeys maps table names to their primary keys.
+type TableKeys map[string]PrimaryKeys
+
+func (t TableKeys) GetTables() []string {
+	names := make([]string, 0, len(t))
+	for name := range t {
+		names = append(names, name)
+	}
+	return names
+}
+
 // TableKeyFetcher fetches primary keys from the database and caches them.
 type TableKeyFetcher struct {
 	database string
-	cache    map[string]PrimaryKeys
+	cache    TableKeys
 }
 
 func NewTableKeyFetcher(database string) *TableKeyFetcher {
 	return &TableKeyFetcher{
 		database: database,
-		cache:    make(map[string]PrimaryKeys),
+		cache:    make(TableKeys),
 	}
 }
 

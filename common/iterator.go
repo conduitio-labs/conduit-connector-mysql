@@ -23,7 +23,7 @@ import (
 
 // Iterator implements a subset of the sdk.Source interface.
 type Iterator interface {
-	Read(context.Context) (opencdc.Record, error)
+	ReadN(context.Context, int) ([]opencdc.Record, error)
 	Ack(context.Context, opencdc.Position) error
 	Teardown(context.Context) error
 }

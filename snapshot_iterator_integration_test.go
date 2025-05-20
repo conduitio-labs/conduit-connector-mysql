@@ -99,7 +99,7 @@ func TestSnapshotIterator_EmptyTable(t *testing.T) {
 	it, cleanup := testSnapshotIterator(ctx, t, is)
 	defer cleanup()
 
-	_, err := it.Read(ctx)
+	_, err := it.ReadN(ctx, 2)
 	if !errors.Is(err, ErrSnapshotIteratorDone) {
 		is.NoErr(err)
 	}
@@ -128,7 +128,7 @@ func TestSnapshotIterator_WithData(t *testing.T) {
 		testutils.ReadAndAssertSnapshot(ctx, is, iterator, users[i-1])
 	}
 
-	_, err := iterator.Read(ctx)
+	_, err := iterator.ReadN(ctx, 2)
 	is.True(errors.Is(err, ErrSnapshotIteratorDone))
 }
 
@@ -152,20 +152,23 @@ func TestSnapshotIterator_RestartOnPosition(t *testing.T) {
 	{
 		it, cleanup := testSnapshotIterator(ctx, t, is)
 
-		for i := 1; i <= 10; i++ {
-			rec, err := it.Read(ctx)
+		for len(recs) < 10 {
+			batch, err := it.ReadN(ctx, 5)
+			fmt.Println(len(batch))
 			if errors.Is(err, ErrSnapshotIteratorDone) {
-				err = it.Ack(ctx, rec.Position)
-				is.NoErr(err)
+				for _, rec := range batch {
+					is.NoErr(it.Ack(ctx, rec.Position))
+					recs = append(recs, rec)
+				}
 				break
 			}
 			is.NoErr(err)
 
-			recs = append(recs, rec)
-
-			err = it.Ack(ctx, rec.Position)
-			is.NoErr(err)
-			breakPosition = rec.Position
+			for _, rec := range batch {
+				recs = append(recs, rec)
+				is.NoErr(it.Ack(ctx, rec.Position))
+			}
+			breakPosition = batch[len(batch)-1].Position
 		}
 
 		// not deferring the call so that logs are easier to understand
@@ -178,16 +181,17 @@ func TestSnapshotIterator_RestartOnPosition(t *testing.T) {
 	defer cleanup()
 
 	for {
-		rec, err := it.Read(ctx)
+		batch, err := it.ReadN(ctx, 10)
+		fmt.Println(len(batch))
 		if errors.Is(err, ErrSnapshotIteratorDone) {
 			break
 		}
 		is.NoErr(err)
 
-		recs = append(recs, rec)
-
-		err = it.Ack(ctx, rec.Position)
-		is.NoErr(err)
+		for _, rec := range batch {
+			recs = append(recs, rec)
+			is.NoErr(it.Ack(ctx, rec.Position))
+		}
 	}
 
 	is.Equal(len(recs), 100)
@@ -286,16 +290,16 @@ func TestSnapshotIterator_CustomTableKeys(t *testing.T) {
 
 			var recs []opencdc.Record
 			for {
-				rec, err := iterator.Read(ctx)
+				rec, err := iterator.ReadN(ctx, 1)
 				if errors.Is(err, ErrSnapshotIteratorDone) {
 					break
 				}
 				is.NoErr(err)
 
-				err = iterator.Ack(ctx, rec.Position)
+				err = iterator.Ack(ctx, rec[0].Position)
 				is.NoErr(err)
 
-				recs = append(recs, rec)
+				recs = append(recs, rec[0])
 			}
 
 			is.Equal(len(recs), len(testCase.expectedData))
@@ -355,14 +359,14 @@ func TestSnapshotIterator_DeleteEndWhileSnapshotting(t *testing.T) {
 	}()
 
 	for _, user := range users {
-		rec, err := iterator.Read(ctx)
+		rec, err := iterator.ReadN(ctx, 1)
 		is.NoErr(err)
-		is.NoErr(iterator.Ack(ctx, rec.Position))
+		is.NoErr(iterator.Ack(ctx, rec[0].Position))
 
-		testutils.AssertUserSnapshot(ctx, is, user, rec)
+		testutils.AssertUserSnapshot(ctx, is, user, rec[0])
 	}
 
-	_, err = iterator.Read(ctx)
+	_, err = iterator.ReadN(ctx, 1)
 	is.True(errors.Is(err, ErrSnapshotIteratorDone))
 }
 
@@ -422,16 +426,16 @@ func TestSnapshotIterator_StringSorting(t *testing.T) {
 
 	var recs []opencdc.Record
 	for {
-		rec, err := iterator.Read(ctx)
+		rec, err := iterator.ReadN(ctx, 1)
 		if errors.Is(err, ErrSnapshotIteratorDone) {
 			break
 		}
 		is.NoErr(err)
 
-		err = iterator.Ack(ctx, rec.Position)
+		err = iterator.Ack(ctx, rec[0].Position)
 		is.NoErr(err)
 
-		recs = append(recs, rec)
+		recs = append(recs, rec[0])
 	}
 
 	is.Equal(len(recs), len(sorted))
@@ -483,7 +487,7 @@ func TestSnapshotIterator_FetchByLimit(t *testing.T) {
 		database:         "meroxadb",
 		tables:           []string{table1name, table2name},
 		serverID:         serverID,
-		fetchSize:        5, // small fetch size to test pagination
+		fetchSize:        10, // small fetch size to test pagination
 	})
 	is.NoErr(err)
 
@@ -492,16 +496,16 @@ func TestSnapshotIterator_FetchByLimit(t *testing.T) {
 
 	var recs []opencdc.Record
 	for {
-		rec, err := iterator.Read(ctx)
+		batch, err := iterator.ReadN(ctx, 10)
 		if errors.Is(err, ErrSnapshotIteratorDone) {
 			break
 		}
 		is.NoErr(err)
 
-		err = iterator.Ack(ctx, rec.Position)
-		is.NoErr(err)
-
-		recs = append(recs, rec)
+		for _, rec := range batch {
+			is.NoErr(iterator.Ack(ctx, rec.Position))
+			recs = append(recs, rec)
+		}
 	}
 
 	is.Equal(len(recs), len(table1Data)+len(table2Data))

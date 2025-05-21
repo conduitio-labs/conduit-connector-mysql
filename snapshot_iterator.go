@@ -56,11 +56,10 @@ type (
 	}
 	snapshotIteratorConfig struct {
 		db               *sqlx.DB
-		tablePrimaryKeys map[string]common.PrimaryKeys
+		tablePrimaryKeys common.TableKeys
 		fetchSize        uint64
 		startPosition    *common.SnapshotPosition
 		database         string
-		tables           []string
 		serverID         string
 	}
 )
@@ -79,8 +78,8 @@ func (config *snapshotIteratorConfig) validate() error {
 	if config.database == "" {
 		return fmt.Errorf("database is required")
 	}
-	if len(config.tables) == 0 {
-		return fmt.Errorf("tables is required")
+	if len(config.tablePrimaryKeys) == 0 {
+		return fmt.Errorf("tablePrimaryKeys is required")
 	}
 
 	return nil

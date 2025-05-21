@@ -167,11 +167,10 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 
 	s.iterator, err = newCombinedIterator(ctx, combinedIteratorConfig{
 		db:                    s.db,
-		primaryKeys:           tableKeys,
+		tableKeys:             tableKeys,
 		startSnapshotPosition: pos.SnapshotPosition,
 		startCdcPosition:      pos.CdcPosition,
 		database:              s.config.MysqlCfg().DBName,
-		tables:                s.config.Tables,
 		canalRegexes:          canalRegexes,
 		serverID:              serverID,
 		mysqlConfig:           s.config.MysqlCfg(),
@@ -328,8 +327,8 @@ func ParseRule(rule string) (Action, string, error) {
 	return action, rule, nil // Return action and regex (without the action prefix)
 }
 
-func (s *Source) getTableKeys(ctx context.Context, dbName string) (map[string]common.PrimaryKeys, error) {
-	tableKeys := make(map[string]common.PrimaryKeys)
+func (s *Source) getTableKeys(ctx context.Context, dbName string) (common.TableKeys, error) {
+	tableKeys := make(common.TableKeys)
 
 	for _, table := range s.config.Tables {
 		preconfiguredTableKey, ok := s.config.TableConfig[table]

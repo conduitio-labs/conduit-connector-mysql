@@ -45,7 +45,7 @@ type cdcIteratorConfig struct {
 	db                  *sqlx.DB
 	tables              []string
 	mysqlConfig         *mysqldriver.Config
-	primaryKeys         map[string]common.PrimaryKeys
+	tableKeys           common.TableKeys
 	disableCanalLogging bool
 	startPosition       *common.CdcPosition
 }
@@ -97,7 +97,7 @@ func (c *cdcIterator) start(ctx context.Context) error {
 		c.canal,
 		c.canalDoneC,
 		c.parsedRecordsC,
-		c.config.primaryKeys,
+		c.config.tableKeys,
 		startPosition,
 	)
 
@@ -214,7 +214,7 @@ type cdcEventHandler struct {
 	canalDoneC     chan struct{}
 	parsedRecordsC chan opencdc.Record
 
-	tablePrimaryKeys map[string]common.PrimaryKeys
+	tablePrimaryKeys common.TableKeys
 
 	onRowsChange onRowChangeFn
 }
@@ -224,7 +224,7 @@ func newCdcEventHandler(
 	canal *canal.Canal,
 	canalDoneC chan struct{},
 	parsedRecordsC chan opencdc.Record,
-	tablesPrimaryKeys map[string]common.PrimaryKeys,
+	tablesPrimaryKeys common.TableKeys,
 	startPosition common.CdcPosition,
 ) *cdcEventHandler {
 	h := &cdcEventHandler{

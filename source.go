@@ -50,6 +50,14 @@ type SourceConfig struct {
 	//  - e.g. "-.*meta$, wp_postmeta" will exclude all tables ending with "meta" but include the table "wp_postmeta".
 	Tables []string `json:"tables" validate:"required"`
 
+	// Same as Tables, but it applies to the snapshot process.
+	// When defined, it overrides the Tables parameter for snapshotting.
+	SnapshotTables []string `json:"snapshot.tables" validate:"required"`
+
+	// Same as Tables, but it applies to the Change Data Capture (CDC) process.
+	// When defined, it overrides the Tables parameter for CDC.
+	CDCTables []string `json:"cdc.tables" validate:"required"`
+
 	// Disables verbose cdc driver logs.
 	DisableLogs bool `json:"cdc.disableLogs"`
 
@@ -327,10 +335,41 @@ func ParseRule(rule string) (Action, string, error) {
 	return action, rule, nil // Return action and regex (without the action prefix)
 }
 
-func (s *Source) getTableKeys(ctx context.Context, dbName string) (common.TableKeys, error) {
+type connectorTableKeys struct {
+	snapshot, cdc common.TableKeys
+}
+
+func (s *Source) getTableKeys(ctx context.Context, dbName string) (connectorTableKeys, error) {
+	var connectorTableKeys connectorTableKeys
+	var err error
+
+	var snapshotTables, cdcTables = s.config.Tables, s.config.Tables
+	if len(s.config.SnapshotTables) != 0 {
+		snapshotTables = s.config.SnapshotTables
+	}
+	if len(s.config.CDCTables) != 0 {
+		cdcTables = s.config.CDCTables
+	}
+
+	connectorTableKeys.snapshot, err = s.getTableKeysFromTables(ctx, dbName, snapshotTables)
+	if err != nil {
+		return connectorTableKeys, fmt.Errorf("failed to get snapshot table keys: %w", err)
+	}
+	connectorTableKeys.cdc, err = s.getTableKeysFromTables(ctx, dbName, cdcTables)
+	if err != nil {
+		return connectorTableKeys, fmt.Errorf("failed to get cdc table keys: %w", err)
+	}
+
+	return connectorTableKeys, nil
+}
+
+func (s *Source) getTableKeysFromTables(
+	ctx context.Context,
+	dbName string, tables []string,
+) (common.TableKeys, error) {
 	tableKeys := make(common.TableKeys)
 
-	for _, table := range s.config.Tables {
+	for _, table := range tables {
 		preconfiguredTableKey, ok := s.config.TableConfig[table]
 		if ok {
 			tableKeys[table] = common.PrimaryKeys{preconfiguredTableKey.SortingColumn}
@@ -351,7 +390,7 @@ func (s *Source) getTableKeys(ctx context.Context, dbName string) (common.TableK
 				continue
 			}
 
-			return nil, fmt.Errorf(
+			return tableKeys, fmt.Errorf(
 				"failed to get primary key for table %s. You might want to add a `tableConfig.<table name>.sortingColumn entry, or enable `unsafeSnapshot` mode: %w",
 				table, err)
 		}

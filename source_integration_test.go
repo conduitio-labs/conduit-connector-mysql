@@ -18,7 +18,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -394,6 +393,5 @@ func TestSnapshotEnabled(t *testing.T) {
 	defer cancel()
 
 	_, err := source.ReadN(ctx, 1)
-	fmt.Println(err)
 	is.True(errors.Is(err, context.DeadlineExceeded))
 }

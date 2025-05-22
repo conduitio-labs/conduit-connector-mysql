@@ -55,12 +55,12 @@ type (
 		config       snapshotIteratorConfig
 	}
 	snapshotIteratorConfig struct {
-		db               *sqlx.DB
-		tablePrimaryKeys common.TableKeys
-		fetchSize        uint64
-		startPosition    *common.SnapshotPosition
-		database         string
-		serverID         string
+		db            *sqlx.DB
+		tableKeys     common.TableKeys
+		fetchSize     uint64
+		startPosition *common.SnapshotPosition
+		database      string
+		serverID      string
 	}
 )
 
@@ -78,7 +78,7 @@ func (config *snapshotIteratorConfig) validate() error {
 	if config.database == "" {
 		return fmt.Errorf("database is required")
 	}
-	if len(config.tablePrimaryKeys) == 0 {
+	if len(config.tableKeys) == 0 {
 		return fmt.Errorf("tablePrimaryKeys is required")
 	}
 
@@ -109,7 +109,7 @@ func newSnapshotIterator(config snapshotIteratorConfig) (*snapshotIterator, erro
 // from the start method so that we can lock and unlock the given tables without
 // starting up the workers.
 func (s *snapshotIterator) setupWorkers(ctx context.Context) error {
-	for table, primaryKeys := range s.config.tablePrimaryKeys {
+	for table, primaryKeys := range s.config.tableKeys {
 		worker := newFetchWorker(ctx, fetchWorkerConfig{
 			// the snapshot worker will update the last position, so we need to
 			// clone it to avoid dataraces

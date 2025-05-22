@@ -43,9 +43,8 @@ type cdcIterator struct {
 
 type cdcIteratorConfig struct {
 	db                  *sqlx.DB
-	tables              []string
 	mysqlConfig         *mysqldriver.Config
-	tableKeys           common.TableKeys
+	tableKeys           CdcTableKeys
 	disableCanalLogging bool
 	startPosition       *common.CdcPosition
 }
@@ -53,7 +52,7 @@ type cdcIteratorConfig struct {
 func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (*cdcIterator, error) {
 	canal, err := common.NewCanal(ctx, common.CanalConfig{
 		Config:         config.mysqlConfig,
-		Tables:         config.tables,
+		TableRegexes:   config.tableKeys.TableRegexes,
 		DisableLogging: config.disableCanalLogging,
 	})
 	if err != nil {
@@ -97,7 +96,7 @@ func (c *cdcIterator) start(ctx context.Context) error {
 		c.canal,
 		c.canalDoneC,
 		c.parsedRecordsC,
-		c.config.tableKeys,
+		c.config.tableKeys.TableKeys,
 		startPosition,
 	)
 

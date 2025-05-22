@@ -140,19 +140,6 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 		return fmt.Errorf("failed to connect to mysql: %w", err)
 	}
 
-	sdk.Logger(ctx).Info().Msg("Parsing table regexes...")
-	s.config.Tables, err = s.getAndFilterTables(ctx, s.db, s.config.MysqlCfg().DBName)
-	if err != nil {
-		return err
-	}
-
-	canalRegexes := createCanalRegexes(s.config.MysqlCfg().DBName, s.config.Tables)
-
-	sdk.Logger(ctx).Info().
-		Strs("tables", s.config.Tables).
-		Int("count", len(s.config.Tables)).
-		Msgf("Successfully detected tables")
-
 	tableKeys, err := s.getTableKeys(ctx, s.config.MysqlCfg().DBName)
 	if err != nil {
 		return fmt.Errorf("failed to get table keys: %w", err)
@@ -179,7 +166,6 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 		startSnapshotPosition: pos.SnapshotPosition,
 		startCdcPosition:      pos.CdcPosition,
 		database:              s.config.MysqlCfg().DBName,
-		canalRegexes:          canalRegexes,
 		serverID:              serverID,
 		mysqlConfig:           s.config.MysqlCfg(),
 		disableCanalLogging:   s.config.DisableLogs,
@@ -221,7 +207,7 @@ func (s *Source) Teardown(ctx context.Context) error {
 	return nil
 }
 
-func (s *Source) getAndFilterTables(ctx context.Context, db *sqlx.DB, database string) ([]string, error) {
+func (s *Source) getAndFilterTables(ctx context.Context, db *sqlx.DB, database string, rules []string) ([]string, error) {
 	query := "SELECT table_name FROM information_schema.tables WHERE table_schema = ?"
 
 	rows, err := db.Queryx(query, database)
@@ -231,13 +217,13 @@ func (s *Source) getAndFilterTables(ctx context.Context, db *sqlx.DB, database s
 	}
 	defer rows.Close()
 
-	var tables []string
+	var tableNames []string
 	for rows.Next() {
 		var tableName string
 		if err := rows.Scan(&tableName); err != nil {
 			return nil, fmt.Errorf("failed to scan table name: %w", err)
 		}
-		tables = append(tables, tableName)
+		tableNames = append(tableNames, tableName)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("rows error: %w", err)
@@ -246,8 +232,8 @@ func (s *Source) getAndFilterTables(ctx context.Context, db *sqlx.DB, database s
 	includedTables := make(map[string]bool)
 
 	// Process each rule
-	for _, rule := range s.config.Tables {
-		if err := s.processTableRule(rule, tables, includedTables); err != nil {
+	for _, rule := range rules {
+		if err := s.processTableRule(rule, tableNames, includedTables); err != nil {
 			return nil, err
 		}
 	}
@@ -336,31 +322,49 @@ func ParseRule(rule string) (Action, string, error) {
 }
 
 type connectorTableKeys struct {
-	snapshot, cdc common.TableKeys
+	Snapshot common.TableKeys
+	Cdc      CdcTableKeys
 }
 
-func (s *Source) getTableKeys(ctx context.Context, dbName string) (connectorTableKeys, error) {
-	var connectorTableKeys connectorTableKeys
-	var err error
+type CdcTableKeys struct {
+	TableRegexes []string
+	TableKeys    common.TableKeys
+}
 
-	var snapshotTables, cdcTables = s.config.Tables, s.config.Tables
+func (s *Source) getTableKeys(
+	ctx context.Context,
+	dbName string,
+) (allKeys connectorTableKeys, err error) {
+	tables, err := s.getAndFilterTables(ctx, s.db, dbName, s.config.Tables)
+	if err != nil {
+		return allKeys, err
+	}
+
+	snapshotTables, cdcTables := tables, tables
 	if len(s.config.SnapshotTables) != 0 {
-		snapshotTables = s.config.SnapshotTables
+		snapshotTables, err = s.getAndFilterTables(ctx, s.db, dbName, s.config.SnapshotTables)
+		if err != nil {
+			return allKeys, err
+		}
 	}
 	if len(s.config.CDCTables) != 0 {
-		cdcTables = s.config.CDCTables
+		cdcTables, err = s.getAndFilterTables(ctx, s.db, dbName, s.config.CDCTables)
+		if err != nil {
+			return allKeys, err
+		}
 	}
 
-	connectorTableKeys.snapshot, err = s.getTableKeysFromTables(ctx, dbName, snapshotTables)
+	allKeys.Snapshot, err = s.getTableKeysFromTables(ctx, dbName, snapshotTables)
 	if err != nil {
-		return connectorTableKeys, fmt.Errorf("failed to get snapshot table keys: %w", err)
+		return allKeys, fmt.Errorf("failed to get snapshot table keys: %w", err)
 	}
-	connectorTableKeys.cdc, err = s.getTableKeysFromTables(ctx, dbName, cdcTables)
+	allKeys.Cdc.TableKeys, err = s.getTableKeysFromTables(ctx, dbName, cdcTables)
 	if err != nil {
-		return connectorTableKeys, fmt.Errorf("failed to get cdc table keys: %w", err)
+		return allKeys, fmt.Errorf("failed to get cdc table keys: %w", err)
 	}
+	allKeys.Cdc.TableRegexes = createCanalRegexes(dbName, cdcTables)
 
-	return connectorTableKeys, nil
+	return allKeys, nil
 }
 
 func (s *Source) getTableKeysFromTables(

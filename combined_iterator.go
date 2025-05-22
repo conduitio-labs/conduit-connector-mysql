@@ -41,7 +41,6 @@ type combinedIteratorConfig struct {
 	startSnapshotPosition *common.SnapshotPosition
 	startCdcPosition      *common.CdcPosition
 	database              string
-	canalRegexes          []string
 	serverID              string
 	mysqlConfig           *mysqldriver.Config
 	disableCanalLogging   bool
@@ -53,9 +52,8 @@ func newCombinedIterator(
 	config combinedIteratorConfig,
 ) (common.Iterator, error) {
 	cdcIterator, err := newCdcIterator(ctx, cdcIteratorConfig{
-		tables:              config.canalRegexes,
 		mysqlConfig:         config.mysqlConfig,
-		tableKeys:           config.tableKeys.cdc,
+		tableKeys:           config.tableKeys.Cdc,
 		disableCanalLogging: config.disableCanalLogging,
 		db:                  config.db,
 		startPosition:       config.startCdcPosition,
@@ -81,7 +79,7 @@ func newCombinedIterator(
 
 	snapshotIterator, err := newSnapshotIterator(snapshotIteratorConfig{
 		db:            config.db,
-		tableKeys:     config.tableKeys.snapshot,
+		tableKeys:     config.tableKeys.Snapshot,
 		fetchSize:     config.fetchSize,
 		startPosition: config.startSnapshotPosition,
 		database:      config.database,
@@ -93,7 +91,7 @@ func newCombinedIterator(
 
 	sdk.Logger(ctx).Info().Msg("locking tables to setup fetch workers and obtain cdc start position")
 
-	unlockTables, err := lockTables(ctx, config.db, config.tableKeys.snapshot.GetTables())
+	unlockTables, err := lockTables(ctx, config.db, config.tableKeys.Snapshot.GetTables())
 	if err != nil {
 		return nil, err
 	}

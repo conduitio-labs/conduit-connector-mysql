@@ -364,7 +364,7 @@ func newCanal(ctx context.Context, is *is.I, tablename string) *canal.Canal {
 
 	canal, err := common.NewCanal(ctx, common.CanalConfig{
 		Config:         config,
-		Tables:         []string{tablename},
+		TableRegexes:   []string{tablename},
 		DisableLogging: true,
 	})
 	is.NoErr(err)

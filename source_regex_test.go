@@ -15,9 +15,6 @@
 package mysql
 
 import (
-	"context"
-	"fmt"
-	"regexp"
 	"sort"
 	"testing"
 
@@ -25,20 +22,22 @@ import (
 	"github.com/matryer/is"
 )
 
-func TestSource_TableFilterRegex(t *testing.T) {
+func TestSource_getTableKeys(t *testing.T) {
 	is := is.New(t)
 	db := testutils.NewDB(t)
-	ctx := context.Background()
+	ctx := testutils.TestContext(t)
 
 	// Define test tables
 	type Table1 struct {
 		ID   int    `gorm:"primaryKey"`
 		Data string `gorm:"size:100"`
 	}
+
 	type Table2 struct {
 		ID   int    `gorm:"primaryKey"`
 		Data string `gorm:"size:100"`
 	}
+
 	type MetaStart struct {
 		ID   int    `gorm:"primaryKey"`
 		Data string `gorm:"size:100"`
@@ -52,17 +51,6 @@ func TestSource_TableFilterRegex(t *testing.T) {
 		Data string `gorm:"size:100"`
 	}
 
-	// Drop all existing tables first
-	tables, err := db.Migrator().GetTables()
-	is.NoErr(err)
-
-	for _, tableName := range tables {
-		is.NoErr(db.Migrator().DropTable(tableName))
-	}
-
-	// Now create the tables needed for this test
-	is.NoErr(db.AutoMigrate(&Table1{}, &Table2{}, &MetaStart{}, &TestMetaMid{}, &EndMeta{}))
-
 	// Get table names as they appear in MySQL
 	table1Name := testutils.TableName(is, db, &Table1{})
 	table2Name := testutils.TableName(is, db, &Table2{})
@@ -70,11 +58,16 @@ func TestSource_TableFilterRegex(t *testing.T) {
 	midMetaName := testutils.TableName(is, db, &TestMetaMid{})
 	endMetaName := testutils.TableName(is, db, &EndMeta{})
 
-	testCases := []struct {
-		name           string
-		tablePatterns  []string
-		expectedTables []string
-	}{
+	testutils.CreateTables(is, db, &Table1{}, &Table2{}, &MetaStart{}, &TestMetaMid{}, &EndMeta{})
+
+	type TestCase struct {
+		name                 string
+		tablePatterns        []string
+		expectedTables       []string
+		expectedTableRegexes []string
+	}
+
+	testCases := []*TestCase{
 		{
 			name:           "include all tables with wildcard",
 			tablePatterns:  []string{"*"},
@@ -108,43 +101,69 @@ func TestSource_TableFilterRegex(t *testing.T) {
 		{
 			name:           "No Match",
 			tablePatterns:  []string{"doesnt_exist"},
-			expectedTables: nil,
+			expectedTables: []string{},
 		},
 	}
 
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			is := is.New(t)
-			source := &Source{
-				config: SourceConfig{
-					Tables: tc.tablePatterns,
-				},
-				db: db.SqlxDB,
-			}
+	for _, testCase := range testCases {
+		sort.Strings(testCase.expectedTables)
+		testCase.expectedTableRegexes = createCanalRegexes("meroxadb", testCase.expectedTables)
+	}
 
-			tables, err := source.getAndFilterTables(ctx, db.SqlxDB, "meroxadb")
+	createSource := func(tables, snapshotTables, cdcTables []string) *Source {
+		source := &Source{
+			config: SourceConfig{
+				TableConfig:    map[string]TableConfig{},
+				Tables:         tables,
+				SnapshotTables: snapshotTables,
+				CDCTables:      cdcTables,
+			},
+			db: db.SqlxDB,
+		}
+		return source
+	}
+
+	assertKeys := func(keys connectorTableKeys, testCase *TestCase) {
+		snapshotTables := keys.Snapshot.GetTables()
+		sort.Strings(snapshotTables)
+
+		cdcTables := keys.Cdc.TableKeys.GetTables()
+		sort.Strings(cdcTables)
+
+		sort.Strings(keys.Cdc.TableRegexes)
+
+		is.Equal(snapshotTables, testCase.expectedTables)
+		is.Equal(cdcTables, testCase.expectedTables)
+		is.Equal(keys.Cdc.TableRegexes, testCase.expectedTableRegexes)
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			is := is.New(t)
+
+			source := createSource(testCase.tablePatterns, nil, nil)
+			keys, err := source.getTableKeys(ctx, "meroxadb")
 			is.NoErr(err)
 
-			// Sort both slices to ensure consistent comparison
-			sort.Strings(tables)
-			sort.Strings(tc.expectedTables)
+			assertKeys(keys, testCase)
+		})
+		t.Run(testCase.name+"_snapshot", func(t *testing.T) {
+			is := is.New(t)
+			source := createSource(testCase.tablePatterns, testCase.tablePatterns, nil)
 
-			is.Equal(tables, tc.expectedTables)
+			keys, err := source.getTableKeys(ctx, "meroxadb")
+			is.NoErr(err)
 
-			// Test the createCanalRegexes function separately
-			regexes := createCanalRegexes("meroxadb", tables)
-			var expectedRegexes []string
-			for _, expectedTable := range tc.expectedTables {
-				expectedRegexes = append(expectedRegexes, fmt.Sprintf("^%s.%s$", "meroxadb", regexp.QuoteMeta(expectedTable)))
-			}
-			sort.Strings(regexes)
-			sort.Strings(expectedRegexes)
-			if len(expectedRegexes) == 0 && len(regexes) == 0 {
-				// Both are empty, considered equal regardless of nil vs empty slice
-				is.True(true) // Always passes
-			} else {
-				is.Equal(regexes, expectedRegexes)
-			}
+			assertKeys(keys, testCase)
+		})
+		t.Run(testCase.name+"_cdc", func(t *testing.T) {
+			is := is.New(t)
+			source := createSource(testCase.tablePatterns, nil, testCase.tablePatterns)
+
+			keys, err := source.getTableKeys(ctx, "meroxadb")
+			is.NoErr(err)
+
+			assertKeys(keys, testCase)
 		})
 	}
 }

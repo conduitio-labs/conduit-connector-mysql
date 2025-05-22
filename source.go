@@ -16,6 +16,8 @@ package mysql
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -140,9 +142,15 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 		return fmt.Errorf("failed to connect to mysql: %w", err)
 	}
 
-	tableKeys, err := s.getTableKeys(ctx, s.config.MysqlCfg().DBName)
+	dbName := s.config.MysqlCfg().DBName
+
+	tableKeys, err := s.getTableKeysFromTables(ctx, dbName)
 	if err != nil {
 		return fmt.Errorf("failed to get table keys: %w", err)
+	}
+	filtered, err := s.filterTables(ctx, dbName, tableKeys)
+	if err != nil {
+		return fmt.Errorf("failed to filter table keys: %w", err)
 	}
 
 	serverID, err := common.GetServerID(ctx, s.db)
@@ -162,10 +170,10 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 
 	s.iterator, err = newCombinedIterator(ctx, combinedIteratorConfig{
 		db:                    s.db,
-		tableKeys:             tableKeys,
+		tableKeys:             filtered,
 		startSnapshotPosition: pos.SnapshotPosition,
 		startCdcPosition:      pos.CdcPosition,
-		database:              s.config.MysqlCfg().DBName,
+		database:              dbName,
 		serverID:              serverID,
 		mysqlConfig:           s.config.MysqlCfg(),
 		disableCanalLogging:   s.config.DisableLogs,
@@ -207,46 +215,54 @@ func (s *Source) Teardown(ctx context.Context) error {
 	return nil
 }
 
-func (s *Source) getAndFilterTables(ctx context.Context, db *sqlx.DB, database string, rules []string) ([]string, error) {
-	query := "SELECT table_name FROM information_schema.tables WHERE table_schema = ?"
+func (s *Source) getTableKeysFromTables(
+	ctx context.Context,
+	dbName string,
+) (common.TableKeys, error) {
+	keys := make(common.TableKeys)
 
-	rows, err := db.Queryx(query, database)
+	var tables []string
+	err := s.db.SelectContext(ctx,
+		&tables,
+		"SELECT table_name FROM information_schema.tables WHERE table_schema = ?",
+		dbName,
+	)
 	if err != nil {
-		sdk.Logger(ctx).Error().Err(err).Msg("failed to query tables")
-		return nil, fmt.Errorf("failed to query tables: %w", err)
+		return keys, fmt.Errorf("failed to fetch table names from database")
 	}
-	defer rows.Close()
 
-	var tableNames []string
-	for rows.Next() {
-		var tableName string
-		if err := rows.Scan(&tableName); err != nil {
-			return nil, fmt.Errorf("failed to scan table name: %w", err)
+	tableKeys := make(common.TableKeys)
+
+	for _, table := range tables {
+		preconfiguredTableKey, ok := s.config.TableConfig[table]
+		if ok {
+			tableKeys[table] = common.PrimaryKeys{preconfiguredTableKey.SortingColumn}
+			continue
 		}
-		tableNames = append(tableNames, tableName)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("rows error: %w", err)
-	}
 
-	includedTables := make(map[string]bool)
+		primaryKeys, err := common.GetPrimaryKeys(s.db, dbName, table)
+		if err != nil {
+			if s.config.UnsafeSnapshot && errors.Is(err, sql.ErrNoRows) {
+				sdk.Logger(ctx).Warn().Msgf(
+					"table %s has no primary key, doing an unsafe snapshot ", table)
 
-	// Process each rule
-	for _, rule := range rules {
-		if err := s.processTableRule(rule, tableNames, includedTables); err != nil {
-			return nil, err
+				// The snapshot iterator should be able to interpret a zero
+				// value table key as a table where we cannot do a sorted
+				// snapshot.
+
+				tableKeys[table] = common.PrimaryKeys{}
+				continue
+			}
+
+			return tableKeys, fmt.Errorf(
+				"failed to get primary key for table %s. You might want to add a `tableConfig.<table name>.sortingColumn entry, or enable `unsafeSnapshot` mode: %w",
+				table, err)
 		}
+
+		tableKeys[table] = primaryKeys
 	}
 
-	var finalTables []string
-	// Collect all the tables that were included (true in map)
-	for table, included := range includedTables {
-		if included {
-			finalTables = append(finalTables, table)
-		}
-	}
-
-	return finalTables, nil
+	return tableKeys, nil
 }
 
 // createCanalRegexes creates regex patterns for Canal from the filtered table names.
@@ -321,7 +337,7 @@ func ParseRule(rule string) (Action, string, error) {
 	return action, rule, nil // Return action and regex (without the action prefix)
 }
 
-type connectorTableKeys struct {
+type filteredTableKeys struct {
 	Snapshot common.TableKeys
 	Cdc      CdcTableKeys
 }
@@ -331,76 +347,116 @@ type CdcTableKeys struct {
 	TableKeys    common.TableKeys
 }
 
-func (s *Source) getTableKeys(
+func (s *Source) filterTables(
 	ctx context.Context,
 	dbName string,
-) (allKeys connectorTableKeys, err error) {
-	tables, err := s.getAndFilterTables(ctx, s.db, dbName, s.config.Tables)
-	if err != nil {
-		return allKeys, err
+	tableKeys common.TableKeys,
+) (filteredTableKeys, error) {
+	filtered := filteredTableKeys{
+		Snapshot: common.TableKeys{},
+		Cdc: CdcTableKeys{
+			TableKeys:    common.TableKeys{},
+			TableRegexes: []string{},
+		},
 	}
 
-	snapshotTables, cdcTables := tables, tables
 	if len(s.config.SnapshotTables) != 0 {
-		snapshotTables, err = s.getAndFilterTables(ctx, s.db, dbName, s.config.SnapshotTables)
-		if err != nil {
-			return allKeys, err
-		}
-	}
-	if len(s.config.CDCTables) != 0 {
-		cdcTables, err = s.getAndFilterTables(ctx, s.db, dbName, s.config.CDCTables)
-		if err != nil {
-			return allKeys, err
-		}
-	}
-
-	allKeys.Snapshot, err = s.getTableKeysFromTables(ctx, dbName, snapshotTables)
-	if err != nil {
-		return allKeys, fmt.Errorf("failed to get snapshot table keys: %w", err)
-	}
-	allKeys.Cdc.TableKeys, err = s.getTableKeysFromTables(ctx, dbName, cdcTables)
-	if err != nil {
-		return allKeys, fmt.Errorf("failed to get cdc table keys: %w", err)
-	}
-	allKeys.Cdc.TableRegexes = createCanalRegexes(dbName, cdcTables)
-
-	return allKeys, nil
-}
-
-func (s *Source) getTableKeysFromTables(
-	ctx context.Context,
-	dbName string, tables []string,
-) (common.TableKeys, error) {
-	tableKeys := make(common.TableKeys)
-
-	for _, table := range tables {
-		preconfiguredTableKey, ok := s.config.TableConfig[table]
-		if ok {
-			tableKeys[table] = common.PrimaryKeys{preconfiguredTableKey.SortingColumn}
-			continue
-		}
-
-		primaryKeys, err := common.GetPrimaryKeys(s.db, dbName, table)
-		if err != nil {
-			if s.config.UnsafeSnapshot {
-				sdk.Logger(ctx).Warn().Msgf(
-					"table %s has no primary key, doing an unsafe snapshot ", table)
-
-				// The snapshot iterator should be able to interpret a zero
-				// value table key as a table where we cannot do a sorted
-				// snapshot.
-
-				tableKeys[table] = common.PrimaryKeys{}
-				continue
+		for _, rule := range s.config.SnapshotTables {
+			action, regexPattern, err := ParseRule(rule)
+			if err != nil {
+				return filtered, err
 			}
 
-			return tableKeys, fmt.Errorf(
-				"failed to get primary key for table %s. You might want to add a `tableConfig.<table name>.sortingColumn entry, or enable `unsafeSnapshot` mode: %w",
-				table, err)
-		}
+			re, err := regexp.Compile(regexPattern)
+			if err != nil {
+				return filtered, fmt.Errorf("invalid regex pattern: %w", err)
+			}
 
-		tableKeys[table] = primaryKeys
+			for table, keys := range tableKeys {
+				if rule == AllTablesWildcard {
+					filtered.Snapshot[table] = keys
+					continue
+				}
+
+				if re.MatchString(table) && action == Include {
+					filtered.Snapshot[table] = keys
+				}
+			}
+		}
+	} else {
+		for _, rule := range s.config.Tables {
+			action, regexPattern, err := ParseRule(rule)
+			if err != nil {
+				return filtered, err
+			}
+
+			re, err := regexp.Compile(regexPattern)
+			if err != nil {
+				return filtered, fmt.Errorf("invalid regex pattern: %w", err)
+			}
+
+			for table, keys := range tableKeys {
+				if rule == AllTablesWildcard {
+					filtered.Snapshot[table] = keys
+					continue
+				}
+
+				if re.MatchString(table) && action == Include {
+					filtered.Snapshot[table] = keys
+				}
+			}
+		}
 	}
 
-	return tableKeys, nil
+	if len(s.config.CDCTables) != 0 {
+		for _, rule := range s.config.CDCTables {
+			action, regexPattern, err := ParseRule(rule)
+			if err != nil {
+				return filtered, err
+			}
+
+			re, err := regexp.Compile(regexPattern)
+			if err != nil {
+				return filtered, fmt.Errorf("invalid regex pattern: %w", err)
+			}
+
+			for table, keys := range tableKeys {
+				if rule == AllTablesWildcard {
+					filtered.Cdc.TableKeys[table] = keys
+					continue
+				}
+
+				if re.MatchString(table) && action == Include {
+					filtered.Cdc.TableKeys[table] = keys
+				}
+			}
+		}
+	} else {
+		for _, rule := range s.config.Tables {
+			action, regexPattern, err := ParseRule(rule)
+			if err != nil {
+				return filtered, err
+			}
+
+			re, err := regexp.Compile(regexPattern)
+			if err != nil {
+				return filtered, fmt.Errorf("invalid regex pattern: %w", err)
+			}
+
+			for table, keys := range tableKeys {
+				if rule == AllTablesWildcard {
+					filtered.Cdc.TableKeys[table] = keys
+					continue
+				}
+
+				if re.MatchString(table) && action == Include {
+					filtered.Cdc.TableKeys[table] = keys
+				}
+			}
+		}
+	}
+
+	filtered.Cdc.TableRegexes = createCanalRegexes(dbName, filtered.Cdc.TableKeys.GetTables())
+
+	return filtered, nil
 }

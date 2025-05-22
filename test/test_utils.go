@@ -172,6 +172,16 @@ func CreateUserTable(is *is.I, db DB) {
 	CreateTables(is, db, &User{})
 }
 
+func DropAllTables(is *is.I, db DB) {
+	m := db.Migrator()
+	tables, err := m.GetTables()
+	is.NoErr(err)
+
+	for _, table := range tables {
+		is.NoErr(m.DropTable(table))
+	}
+}
+
 func CreateUser(userID int) *User {
 	username := fmt.Sprint("user-", userID)
 	email := fmt.Sprint(username, "@example.com")

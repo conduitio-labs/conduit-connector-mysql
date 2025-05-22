@@ -32,7 +32,7 @@ func testCombinedIterator(ctx context.Context, t *testing.T, is *is.I) (common.I
 
 	iterator, err := newCombinedIterator(ctx, combinedIteratorConfig{
 		db: db,
-		tableKeys: connectorTableKeys{
+		tableKeys: filteredTableKeys{
 			Snapshot: testutils.TablePrimaryKeys,
 			Cdc: CdcTableKeys{
 				TableRegexes: []string{"users"},

@@ -145,26 +145,8 @@ specification:
   author: Meroxa, Inc.
   source:
     parameters:
-      - name: cdc.tables
-        description: |-
-          Same as Tables, but it applies to the Change Data Capture (CDC) process.
-          When defined, it overrides the Tables parameter for CDC.
-        type: string
-        default: ""
-        validations:
-          - type: required
-            value: ""
       - name: dsn
         description: The connection string for the MySQL database.
-        type: string
-        default: ""
-        validations:
-          - type: required
-            value: ""
-      - name: snapshot.tables
-        description: |-
-          Same as Tables, but it applies to the snapshot process.
-          When defined, it overrides the Tables parameter for snapshotting.
         type: string
         default: ""
         validations:
@@ -189,6 +171,13 @@ specification:
         type: bool
         default: ""
         validations: []
+      - name: cdc.tables
+        description: |-
+          Same as Tables, but it applies to the Change Data Capture (CDC) process.
+          When defined, it overrides the Tables parameter for CDC.
+        type: string
+        default: ""
+        validations: []
       - name: snapshot.enabled
         description: Controls whether the snapshot is done.
         type: bool
@@ -198,6 +187,13 @@ specification:
         description: Limits how many rows should be retrieved on each database fetch on snapshot mode.
         type: int
         default: "10000"
+        validations: []
+      - name: snapshot.tables
+        description: |-
+          Same as Tables, but it applies to the snapshot process.
+          When defined, it overrides the Tables parameter for snapshotting.
+        type: string
+        default: ""
         validations: []
       - name: snapshot.unsafe
         description: |-

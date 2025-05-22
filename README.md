@@ -153,20 +153,10 @@ pipelines:
       - id: example
         plugin: "mysql"
         settings:
-          # Same as Tables, but it applies to the Change Data Capture (CDC)
-          # process. When defined, it overrides the Tables parameter for CDC.
-          # Type: string
-          # Required: yes
-          cdc.tables: ""
           # The connection string for the MySQL database.
           # Type: string
           # Required: yes
           dsn: ""
-          # Same as Tables, but it applies to the snapshot process. When
-          # defined, it overrides the Tables parameter for snapshotting.
-          # Type: string
-          # Required: yes
-          snapshot.tables: ""
           # Represents the tables to read from. - By default, no tables are
           # included, but can be modified by adding a comma-separated string of
           # regex patterns. - They are applied in the order that they are
@@ -184,6 +174,11 @@ pipelines:
           # Type: bool
           # Required: no
           cdc.disableLogs: "false"
+          # Same as Tables, but it applies to the Change Data Capture (CDC)
+          # process. When defined, it overrides the Tables parameter for CDC.
+          # Type: string
+          # Required: no
+          cdc.tables: ""
           # Controls whether the snapshot is done.
           # Type: bool
           # Required: no
@@ -193,6 +188,11 @@ pipelines:
           # Type: int
           # Required: no
           snapshot.fetchSize: "10000"
+          # Same as Tables, but it applies to the snapshot process. When
+          # defined, it overrides the Tables parameter for snapshotting.
+          # Type: string
+          # Required: no
+          snapshot.tables: ""
           # Allows a snapshot of a table with neither a primary key nor a
           # defined sorting column. The opencdc.Position won't record the last
           # record read from a table.

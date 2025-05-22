@@ -52,11 +52,11 @@ type SourceConfig struct {
 
 	// Same as Tables, but it applies to the snapshot process.
 	// When defined, it overrides the Tables parameter for snapshotting.
-	SnapshotTables []string `json:"snapshot.tables" validate:"required"`
+	SnapshotTables []string `json:"snapshot.tables"`
 
 	// Same as Tables, but it applies to the Change Data Capture (CDC) process.
 	// When defined, it overrides the Tables parameter for CDC.
-	CDCTables []string `json:"cdc.tables" validate:"required"`
+	CDCTables []string `json:"cdc.tables"`
 
 	// Disables verbose cdc driver logs.
 	DisableLogs bool `json:"cdc.disableLogs"`

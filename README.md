@@ -153,10 +153,20 @@ pipelines:
       - id: example
         plugin: "mysql"
         settings:
+          # Same as Tables, but it applies to the Change Data Capture (CDC)
+          # process. When defined, it overrides the Tables parameter for CDC.
+          # Type: string
+          # Required: yes
+          cdc.tables: ""
           # The connection string for the MySQL database.
           # Type: string
           # Required: yes
           dsn: ""
+          # Same as Tables, but it applies to the snapshot process. When
+          # defined, it overrides the Tables parameter for snapshotting.
+          # Type: string
+          # Required: yes
+          snapshot.tables: ""
           # Represents the tables to read from. - By default, no tables are
           # included, but can be modified by adding a comma-separated string of
           # regex patterns. - They are applied in the order that they are

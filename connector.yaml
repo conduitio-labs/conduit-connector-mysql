@@ -145,8 +145,26 @@ specification:
   author: Meroxa, Inc.
   source:
     parameters:
+      - name: cdc.tables
+        description: |-
+          Same as Tables, but it applies to the Change Data Capture (CDC) process.
+          When defined, it overrides the Tables parameter for CDC.
+        type: string
+        default: ""
+        validations:
+          - type: required
+            value: ""
       - name: dsn
         description: The connection string for the MySQL database.
+        type: string
+        default: ""
+        validations:
+          - type: required
+            value: ""
+      - name: snapshot.tables
+        description: |-
+          Same as Tables, but it applies to the snapshot process.
+          When defined, it overrides the Tables parameter for snapshotting.
         type: string
         default: ""
         validations:

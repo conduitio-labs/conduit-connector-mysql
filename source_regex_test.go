@@ -27,6 +27,14 @@ func TestSource_getTableKeys(t *testing.T) {
 	db := testutils.NewDB(t)
 	ctx := testutils.TestContext(t)
 
+	tables, err := db.Migrator().GetTables()
+	is.NoErr(err)
+
+	for _, table := range tables {
+		err = db.Migrator().DropTable(table)
+		is.NoErr(err)
+	}
+
 	// Define test tables
 	type Table1 struct {
 		ID   int    `gorm:"primaryKey"`
@@ -51,14 +59,14 @@ func TestSource_getTableKeys(t *testing.T) {
 		Data string `gorm:"size:100"`
 	}
 
+	is.NoErr(db.AutoMigrate(&Table1{}, &Table2{}, &MetaStart{}, &TestMetaMid{}, &EndMeta{}))
+
 	// Get table names as they appear in MySQL
 	table1Name := testutils.TableName(is, db, &Table1{})
 	table2Name := testutils.TableName(is, db, &Table2{})
 	startMetaName := testutils.TableName(is, db, &MetaStart{})
 	midMetaName := testutils.TableName(is, db, &TestMetaMid{})
 	endMetaName := testutils.TableName(is, db, &EndMeta{})
-
-	testutils.CreateTables(is, db, &Table1{}, &Table2{}, &MetaStart{}, &TestMetaMid{}, &EndMeta{})
 
 	type TestCase struct {
 		name                 string
@@ -107,7 +115,7 @@ func TestSource_getTableKeys(t *testing.T) {
 
 	for _, testCase := range testCases {
 		sort.Strings(testCase.expectedTables)
-		testCase.expectedTableRegexes = createCanalRegexes("meroxadb", testCase.expectedTables)
+		testCase.expectedTableRegexes = createCanalRegexes(testutils.Database, testCase.expectedTables)
 	}
 
 	createSource := func(tables, snapshotTables, cdcTables []string) *Source {
@@ -123,7 +131,7 @@ func TestSource_getTableKeys(t *testing.T) {
 		return source
 	}
 
-	assertKeys := func(keys connectorTableKeys, testCase *TestCase) {
+	assertKeys := func(keys connectorTableKeys, expectedSnapshotTables, expectedCDCTables, expectedTableRegexes []string) {
 		snapshotTables := keys.Snapshot.GetTables()
 		sort.Strings(snapshotTables)
 
@@ -132,38 +140,38 @@ func TestSource_getTableKeys(t *testing.T) {
 
 		sort.Strings(keys.Cdc.TableRegexes)
 
-		is.Equal(snapshotTables, testCase.expectedTables)
-		is.Equal(cdcTables, testCase.expectedTables)
-		is.Equal(keys.Cdc.TableRegexes, testCase.expectedTableRegexes)
+		is.Equal(snapshotTables, expectedSnapshotTables)
+		is.Equal(cdcTables, expectedCDCTables)
+		is.Equal(keys.Cdc.TableRegexes, expectedTableRegexes)
 	}
 
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			is := is.New(t)
 
-			source := createSource(testCase.tablePatterns, nil, nil)
-			keys, err := source.getTableKeys(ctx, "meroxadb")
+			source := createSource(testCase.tablePatterns, []string{}, []string{})
+			keys, err := source.getTableKeys(ctx, testutils.Database)
 			is.NoErr(err)
 
-			assertKeys(keys, testCase)
+			assertKeys(keys, testCase.expectedTables, testCase.expectedTables, testCase.expectedTableRegexes)
 		})
 		t.Run(testCase.name+"_snapshot", func(t *testing.T) {
 			is := is.New(t)
-			source := createSource(testCase.tablePatterns, testCase.tablePatterns, nil)
+			source := createSource([]string{"random_table_name"}, testCase.tablePatterns, []string{})
 
-			keys, err := source.getTableKeys(ctx, "meroxadb")
+			keys, err := source.getTableKeys(ctx, testutils.Database)
 			is.NoErr(err)
 
-			assertKeys(keys, testCase)
+			assertKeys(keys, testCase.expectedTables, []string{}, []string{})
 		})
 		t.Run(testCase.name+"_cdc", func(t *testing.T) {
 			is := is.New(t)
-			source := createSource(testCase.tablePatterns, nil, testCase.tablePatterns)
+			source := createSource([]string{"random_table_name"}, []string{}, testCase.tablePatterns)
 
-			keys, err := source.getTableKeys(ctx, "meroxadb")
+			keys, err := source.getTableKeys(ctx, testutils.Database)
 			is.NoErr(err)
 
-			assertKeys(keys, testCase)
+			assertKeys(keys, []string{}, testCase.expectedTables, testCase.expectedTableRegexes)
 		})
 	}
 }

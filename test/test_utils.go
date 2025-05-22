@@ -38,9 +38,11 @@ import (
 	gormschema "gorm.io/gorm/schema"
 )
 
-const DSN = "root:meroxaadmin@tcp(127.0.0.1:3306)/meroxadb"
-
-var ServerID = "1"
+const (
+	DSN      = "root:meroxaadmin@tcp(127.0.0.1:3306)/meroxadb"
+	ServerID = "1"
+	Database = "meroxadb"
+)
 
 // DB is a gorm wrapper that also holds a sqlx DB. Iterators
 // don't manage sql connections, so we need to store them somehow.

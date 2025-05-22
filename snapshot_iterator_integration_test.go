@@ -39,7 +39,7 @@ func testSnapshotIterator(ctx context.Context, t *testing.T, is *is.I) (common.I
 	iterator, err := newSnapshotIterator(snapshotIteratorConfig{
 		tableKeys: testutils.TablePrimaryKeys,
 		db:        db,
-		database:  "meroxadb",
+		database:  testutils.Database,
 		serverID:  serverID,
 	})
 	is.NoErr(err)
@@ -71,7 +71,7 @@ func testSnapshotIteratorAtPosition(
 		tableKeys:     testutils.TablePrimaryKeys,
 		db:            db.SqlxDB,
 		startPosition: pos.SnapshotPosition,
-		database:      "meroxadb",
+		database:      testutils.Database,
 		serverID:      serverID,
 	})
 	is.NoErr(err)
@@ -275,7 +275,7 @@ func TestSnapshotIterator_CustomTableKeys(t *testing.T) {
 			iterator, err := newSnapshotIterator(snapshotIteratorConfig{
 				tableKeys: primaryKeys,
 				db:        db,
-				database:  "meroxadb",
+				database:  testutils.Database,
 				serverID:  serverID,
 			})
 			is.NoErr(err)
@@ -335,7 +335,7 @@ func TestSnapshotIterator_DeleteEndWhileSnapshotting(t *testing.T) {
 	iterator, err := newSnapshotIterator(snapshotIteratorConfig{
 		tableKeys: testutils.TablePrimaryKeys,
 		db:        conn,
-		database:  "meroxadb",
+		database:  testutils.Database,
 		serverID:  serverID,
 	})
 	is.NoErr(err)
@@ -409,7 +409,7 @@ func TestSnapshotIterator_StringSorting(t *testing.T) {
 	iterator, err := newSnapshotIterator(snapshotIteratorConfig{
 		tableKeys: common.TableKeys{tablename: {"str"}},
 		db:        db.SqlxDB,
-		database:  "meroxadb",
+		database:  testutils.Database,
 		serverID:  serverID,
 	})
 	is.NoErr(err)
@@ -477,7 +477,7 @@ func TestSnapshotIterator_FetchByLimit(t *testing.T) {
 	iterator, err := newSnapshotIterator(snapshotIteratorConfig{
 		tableKeys: common.TableKeys{table1name: {}, table2name: {}},
 		db:        db.SqlxDB,
-		database:  "meroxadb",
+		database:  testutils.Database,
 		serverID:  serverID,
 		fetchSize: 10, // small fetch size to test pagination
 	})

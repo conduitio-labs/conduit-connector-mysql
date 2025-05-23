@@ -16,6 +16,7 @@ package mysql
 
 import (
 	"context"
+	"sort"
 	"testing"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
@@ -33,12 +34,13 @@ func TestSource_Teardown(t *testing.T) {
 func areSlicesEq(is *is.I, s1, s2 []string) {
 	is.Helper()
 
-	m1, m2 := map[string]int{}, map[string]int{}
-	for _, s := range s1 {
-		m1[s] = 0
+	sort.Strings(s1)
+	sort.Strings(s2)
+	if s1 == nil {
+		s1 = []string{}
 	}
-	for _, s := range s2 {
-		m2[s] = 0
+	if s2 == nil {
+		s2 = []string{}
 	}
 
 	is.Equal(s1, s2)
@@ -243,6 +245,101 @@ func TestSource_FilterTables(t *testing.T) {
 			areSlicesEq(is, filtered.Snapshot.GetTables(), testCase.filtered.Snapshot.GetTables())
 			areSlicesEq(is, filtered.Cdc.TableKeys.GetTables(), testCase.filtered.Cdc.TableKeys.GetTables())
 			areSlicesEq(is, filtered.Cdc.TableRegexes, testCase.filtered.Cdc.TableRegexes)
+		})
+	}
+}
+
+func TestFilterTables(t *testing.T) {
+	is := is.New(t)
+
+	tableNames := []string{"table", "Atable", "tableA", "distinct"}
+
+	testCases := []struct {
+		name           string
+		rules          []string
+		tableNames     []string
+		expected       []string
+		expectErr      bool
+		expectedErrMsg string
+	}{
+		{
+			name:       "include all tables with wildcard",
+			rules:      []string{"*"},
+			tableNames: tableNames,
+			expected:   []string{"Atable", "table", "tableA", "distinct"},
+		},
+		{
+			name:       "include specific table",
+			rules:      []string{"Atable"},
+			tableNames: tableNames,
+			expected:   []string{"Atable"},
+		},
+		{
+			name:       "exclude tables ending with A",
+			rules:      []string{"*", "-.*A$"},
+			tableNames: tableNames,
+			expected:   []string{"Atable", "table", "distinct"},
+		},
+		{
+			name:       "exclude all tables but include specific one",
+			rules:      []string{"*", "-.*", "+tableA"},
+			tableNames: tableNames,
+			expected:   []string{"tableA"},
+		},
+		{
+			name:       "include table and Atable",
+			rules:      []string{"^table$", "Atable"},
+			tableNames: tableNames,
+			expected:   []string{"table", "Atable"},
+		},
+		{
+			name:       "include all tables then exclude specific one",
+			rules:      []string{"*", "-distinct"},
+			tableNames: tableNames,
+			expected:   []string{"Atable", "table", "tableA"},
+		},
+		{
+			name:       "No Match",
+			rules:      []string{"doesnt_exist"},
+			tableNames: tableNames,
+			expected:   []string{},
+		},
+		{
+			name:       "empty rules",
+			rules:      []string{},
+			tableNames: tableNames,
+			expected:   []string{},
+		},
+		{
+			name:           "invalid regex pattern",
+			rules:          []string{"[invalid"},
+			tableNames:     tableNames,
+			expectErr:      true,
+			expectedErrMsg: "invalid regex pattern: error parsing regexp: missing closing ]: `[invalid`",
+		},
+		{
+			name:           "invalid rule format",
+			rules:          []string{"-"}, // rule too short
+			tableNames:     tableNames,
+			expectErr:      true,
+			expectedErrMsg: "invalid rule format: -",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			is := is.New(t)
+			actual, err := filterTables(tc.rules, tc.tableNames)
+
+			if tc.expectErr {
+				is.True(err != nil) // expected an error
+				if tc.expectedErrMsg != "" {
+					is.Equal(tc.expectedErrMsg, err.Error()) // expected specific error message
+				}
+			} else {
+				is.NoErr(err) // expected no error
+				areSlicesEq(is, actual, tc.expected)
+			}
 		})
 	}
 }

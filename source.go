@@ -359,104 +359,85 @@ func (s *Source) filterTables(
 			TableRegexes: []string{},
 		},
 	}
-
-	if len(s.config.SnapshotTables) != 0 {
-		for _, rule := range s.config.SnapshotTables {
-			action, regexPattern, err := ParseRule(rule)
-			if err != nil {
-				return filtered, err
-			}
-
-			re, err := regexp.Compile(regexPattern)
-			if err != nil {
-				return filtered, fmt.Errorf("invalid regex pattern: %w", err)
-			}
-
-			for table, keys := range tableKeys {
-				if rule == AllTablesWildcard {
-					filtered.Snapshot[table] = keys
-					continue
-				}
-
-				if re.MatchString(table) && action == Include {
-					filtered.Snapshot[table] = keys
-				}
-			}
+	{
+		rules := s.config.Tables
+		if len(s.config.SnapshotTables) != 0 {
+			rules = s.config.SnapshotTables
 		}
-	} else {
-		for _, rule := range s.config.Tables {
-			action, regexPattern, err := ParseRule(rule)
-			if err != nil {
-				return filtered, err
-			}
 
-			re, err := regexp.Compile(regexPattern)
-			if err != nil {
-				return filtered, fmt.Errorf("invalid regex pattern: %w", err)
-			}
+		tableNames, err := filterTables(rules, tableKeys.GetTables())
+		if err != nil {
+			return filtered, err
+		}
 
-			for table, keys := range tableKeys {
-				if rule == AllTablesWildcard {
-					filtered.Snapshot[table] = keys
-					continue
-				}
-
-				if re.MatchString(table) && action == Include {
-					filtered.Snapshot[table] = keys
-				}
-			}
+		for _, tableName := range tableNames {
+			filtered.Snapshot[tableName] = tableKeys[tableName]
 		}
 	}
 
-	if len(s.config.CDCTables) != 0 {
-		for _, rule := range s.config.CDCTables {
-			action, regexPattern, err := ParseRule(rule)
-			if err != nil {
-				return filtered, err
-			}
-
-			re, err := regexp.Compile(regexPattern)
-			if err != nil {
-				return filtered, fmt.Errorf("invalid regex pattern: %w", err)
-			}
-
-			for table, keys := range tableKeys {
-				if rule == AllTablesWildcard {
-					filtered.Cdc.TableKeys[table] = keys
-					continue
-				}
-
-				if re.MatchString(table) && action == Include {
-					filtered.Cdc.TableKeys[table] = keys
-				}
-			}
+	{
+		rules := s.config.Tables
+		if len(s.config.CDCTables) != 0 {
+			rules = s.config.CDCTables
 		}
-	} else {
-		for _, rule := range s.config.Tables {
-			action, regexPattern, err := ParseRule(rule)
-			if err != nil {
-				return filtered, err
-			}
 
-			re, err := regexp.Compile(regexPattern)
-			if err != nil {
-				return filtered, fmt.Errorf("invalid regex pattern: %w", err)
-			}
+		tableNames, err := filterTables(rules, tableKeys.GetTables())
+		if err != nil {
+			return filtered, err
+		}
 
-			for table, keys := range tableKeys {
-				if rule == AllTablesWildcard {
-					filtered.Cdc.TableKeys[table] = keys
-					continue
-				}
-
-				if re.MatchString(table) && action == Include {
-					filtered.Cdc.TableKeys[table] = keys
-				}
-			}
+		for _, tableName := range tableNames {
+			filtered.Cdc.TableKeys[tableName] = tableKeys[tableName]
 		}
 	}
 
 	filtered.Cdc.TableRegexes = createCanalRegexes(dbName, filtered.Cdc.TableKeys.GetTables())
 
 	return filtered, nil
+}
+
+func filterTables(rules, tableNames []string) ([]string, error) {
+	filtered := map[string]bool{}
+
+	for _, rule := range rules {
+		if rule == AllTablesWildcard {
+			for _, tableName := range tableNames {
+				filtered[tableName] = true
+			}
+			continue
+		}
+
+		action, regex, err := ParseRule(rule)
+		if err != nil {
+			return nil, err
+		}
+
+		re, err := regexp.Compile(regex)
+		if err != nil {
+			return nil, fmt.Errorf("invalid regex pattern: %w", err)
+		}
+
+		if action == Include {
+			for _, tableName := range tableNames {
+				if re.MatchString(tableName) {
+					filtered[tableName] = true
+				}
+			}
+		} else {
+			for _, tableName := range tableNames {
+				if re.MatchString(tableName) {
+					filtered[tableName] = false
+				}
+			}
+		}
+	}
+
+	var filteredNames []string
+	for tableName, shouldInclude := range filtered {
+		if shouldInclude {
+			filteredNames = append(filteredNames, tableName)
+		}
+	}
+
+	return filteredNames, nil
 }

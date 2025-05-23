@@ -147,7 +147,7 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 	if err != nil {
 		return fmt.Errorf("failed to get table keys: %w", err)
 	}
-	filtered, err := s.filterTables(ctx, dbName, tableKeys)
+	filtered, err := s.filterTables(tableKeys)
 	if err != nil {
 		return fmt.Errorf("failed to filter table keys: %w", err)
 	}
@@ -298,19 +298,15 @@ type filteredTableKeys struct {
 	Cdc      common.TableKeys
 }
 
-func (s *Source) filterTables(
-	ctx context.Context,
-	dbName string,
-	tableKeys common.TableKeys,
-) (filteredTableKeys, error) {
+func (s *Source) filterTables(tableKeys common.TableKeys) (filteredTableKeys, error) {
 	filtered := filteredTableKeys{
 		Snapshot: common.TableKeys{},
 		Cdc:      common.TableKeys{},
 	}
 
-	add := func(tableKeys common.TableKeys, tableNames []string) {
+	add := func(target common.TableKeys, tableNames []string) {
 		for _, tableName := range tableNames {
-			tableKeys[tableName] = tableKeys[tableName]
+			target[tableName] = tableKeys[tableName]
 		}
 	}
 

@@ -20,7 +20,7 @@ import (
 	"testing"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
-	testutils "github.com/conduitio-labs/conduit-connector-mysql/test"
+	"github.com/google/go-cmp/cmp"
 	"github.com/matryer/is"
 )
 
@@ -31,27 +31,10 @@ func TestSource_Teardown(t *testing.T) {
 	is.NoErr(err)
 }
 
-func areSlicesEq(is *is.I, s1, s2 []string) {
-	is.Helper()
-
-	sort.Strings(s1)
-	sort.Strings(s2)
-	if s1 == nil {
-		s1 = []string{}
-	}
-	if s2 == nil {
-		s2 = []string{}
-	}
-
-	is.Equal(s1, s2)
-}
-
 func TestSource_FilterTables(t *testing.T) {
 	is := is.New(t)
-	ctx := testutils.TestContext(t)
 
 	primaryKeys := common.PrimaryKeys{"id"}
-
 	tableKeys := common.TableKeys{
 		"table":    primaryKeys,
 		"Atable":   primaryKeys,
@@ -60,134 +43,40 @@ func TestSource_FilterTables(t *testing.T) {
 	}
 
 	testCases := []struct {
-		name      string
-		cfg       SourceConfig
-		tableKeys common.TableKeys
-		filtered  filteredTableKeys
+		name     string
+		cfg      SourceConfig
+		filtered filteredTableKeys
 	}{
 		{
-			name: "include all tables with wildcard",
+			name: "snapshot patterns do override",
 			cfg: SourceConfig{
-				Tables: []string{"*"},
+				Tables:         []string{"*", "-table"},
+				SnapshotTables: []string{"tableA", "Atable"},
 			},
-			tableKeys: tableKeys,
 			filtered: filteredTableKeys{
 				Snapshot: common.TableKeys{
-					"table":    primaryKeys,
-					"Atable":   primaryKeys,
-					"tableA":   primaryKeys,
-					"distinct": primaryKeys,
-				},
-				Cdc: common.TableKeys{
-					"table":    primaryKeys,
-					"Atable":   primaryKeys,
-					"tableA":   primaryKeys,
-					"distinct": primaryKeys,
-				},
-			},
-		},
-		{
-			name: "include specific table",
-			cfg: SourceConfig{
-				Tables: []string{"Atable"},
-			},
-			tableKeys: tableKeys,
-			filtered: filteredTableKeys{
-				Snapshot: common.TableKeys{
+					"tableA": primaryKeys,
 					"Atable": primaryKeys,
 				},
 				Cdc: common.TableKeys{
+					"distinct": primaryKeys,
+				},
+			},
+		},
+		{
+			name: "cdc patterns do override",
+			cfg: SourceConfig{
+				Tables:    []string{"*", "-table"},
+				CDCTables: []string{"tableA", "Atable"},
+			},
+			filtered: filteredTableKeys{
+				Snapshot: common.TableKeys{
+					"distinct": primaryKeys,
+				},
+				Cdc: common.TableKeys{
+					"tableA": primaryKeys,
 					"Atable": primaryKeys,
 				},
-			},
-		},
-		{
-			name: "snapshot overrides tables pattern",
-			cfg: SourceConfig{
-				Tables:         []string{"*"},
-				SnapshotTables: []string{"table", "Atable"},
-			},
-			tableKeys: tableKeys,
-			filtered: filteredTableKeys{
-				Snapshot: common.TableKeys{
-					"table":  primaryKeys,
-					"Atable": primaryKeys,
-				},
-				Cdc: common.TableKeys{
-					"table":    primaryKeys,
-					"Atable":   primaryKeys,
-					"tableA":   primaryKeys,
-					"distinct": primaryKeys,
-				},
-			},
-		},
-		{
-			name: "cdc overrides tables pattern",
-			cfg: SourceConfig{
-				Tables:    []string{"*"},
-				CDCTables: []string{"distinct"},
-			},
-			tableKeys: tableKeys,
-			filtered: filteredTableKeys{
-				Snapshot: common.TableKeys{
-					"table":    primaryKeys,
-					"Atable":   primaryKeys,
-					"tableA":   primaryKeys,
-					"distinct": primaryKeys,
-				},
-				Cdc: common.TableKeys{
-					"distinct": primaryKeys,
-				},
-			},
-		},
-		{
-			name: "both snapshot and cdc override tables pattern",
-			cfg: SourceConfig{
-				Tables:         []string{"*"},
-				SnapshotTables: []string{"table"},
-				CDCTables:      []string{"Atable", "distinct"},
-			},
-			tableKeys: tableKeys,
-			filtered: filteredTableKeys{
-				Snapshot: common.TableKeys{
-					"table": primaryKeys,
-				},
-				Cdc: common.TableKeys{
-					"Atable":   primaryKeys,
-					"distinct": primaryKeys,
-				},
-			},
-		},
-		{
-			name: "exclude tables ending with A using snapshot override",
-			cfg: SourceConfig{
-				Tables:         []string{"*"},
-				SnapshotTables: []string{"*", "-.*A$"},
-			},
-			tableKeys: tableKeys,
-			filtered: filteredTableKeys{
-				Snapshot: common.TableKeys{
-					"Atable":   primaryKeys,
-					"table":    primaryKeys,
-					"distinct": primaryKeys,
-				},
-				Cdc: common.TableKeys{
-					"table":    primaryKeys,
-					"Atable":   primaryKeys,
-					"tableA":   primaryKeys,
-					"distinct": primaryKeys,
-				},
-			},
-		},
-		{
-			name: "empty tables config",
-			cfg: SourceConfig{
-				Tables: []string{},
-			},
-			tableKeys: tableKeys,
-			filtered: filteredTableKeys{
-				Snapshot: common.TableKeys{},
-				Cdc:      common.TableKeys{},
 			},
 		},
 	}
@@ -197,11 +86,11 @@ func TestSource_FilterTables(t *testing.T) {
 			is := is.New(t)
 			source := &Source{config: testCase.cfg}
 
-			filtered, err := source.filterTables(ctx, testutils.Database, testCase.tableKeys)
+			filtered, err := source.filterTables(tableKeys)
 			is.NoErr(err)
 
-			areSlicesEq(is, filtered.Snapshot.GetTables(), testCase.filtered.Snapshot.GetTables())
-			areSlicesEq(is, filtered.Cdc.GetTables(), testCase.filtered.Cdc.GetTables())
+			is.Equal("", cmp.Diff(filtered.Snapshot, testCase.filtered.Snapshot))
+			is.Equal("", cmp.Diff(filtered.Cdc, testCase.filtered.Cdc))
 		})
 	}
 }
@@ -289,14 +178,29 @@ func TestFilterTables(t *testing.T) {
 			actual, err := filterTables(tc.rules, tc.tableNames)
 
 			if tc.expectErr {
-				is.True(err != nil) // expected an error
+				is.True(err != nil)
 				if tc.expectedErrMsg != "" {
 					is.Equal(tc.expectedErrMsg, err.Error()) // expected specific error message
 				}
 			} else {
-				is.NoErr(err) // expected no error
+				is.NoErr(err)
 				areSlicesEq(is, actual, tc.expected)
 			}
 		})
 	}
+}
+
+func areSlicesEq(is *is.I, s1, s2 []string) {
+	is.Helper()
+
+	sort.Strings(s1)
+	sort.Strings(s2)
+	if s1 == nil {
+		s1 = []string{}
+	}
+	if s2 == nil {
+		s2 = []string{}
+	}
+
+	is.Equal(s1, s2)
 }

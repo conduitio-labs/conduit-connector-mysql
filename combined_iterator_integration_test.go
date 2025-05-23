@@ -34,10 +34,7 @@ func testCombinedIterator(ctx context.Context, t *testing.T, is *is.I) (common.I
 		db: db,
 		tableKeys: filteredTableKeys{
 			Snapshot: testutils.TablePrimaryKeys,
-			Cdc: CdcTableKeys{
-				TableRegexes: []string{"users"},
-				TableKeys:    testutils.TablePrimaryKeys,
-			},
+			Cdc:      testutils.TablePrimaryKeys,
 		},
 		database:            testutils.Database,
 		serverID:            testutils.ServerID,

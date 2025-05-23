@@ -20,7 +20,6 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
-	"strings"
 	"time"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
@@ -265,49 +264,6 @@ func (s *Source) getTableKeysFromTables(
 	return tableKeys, nil
 }
 
-// createCanalRegexes creates regex patterns for Canal from the filtered table names.
-func createCanalRegexes(database string, tables []string) []string {
-	canalRegexes := make([]string, 0, len(tables))
-	for _, table := range tables {
-		// prefix with db name because Canal does the same for the key, so we can't prefix with ^ to prevent undesired matches.
-		// Append $ to prevent undesired matches.
-		canalRegexes = append(canalRegexes, fmt.Sprintf("^%s.%s$", database, regexp.QuoteMeta(table)))
-	}
-	return canalRegexes
-}
-
-func (s *Source) processTableRule(rule string, tables []string, includedTables map[string]bool) error {
-	// trim leading and trailing spaces from rule
-	rule = strings.TrimSpace(rule)
-
-	if rule == AllTablesWildcard {
-		for _, table := range tables {
-			includedTables[table] = true
-		}
-		return nil
-	}
-
-	action, regexPattern, err := ParseRule(rule)
-	if err != nil {
-		return err
-	}
-
-	// Compile the regex
-	re, err := regexp.Compile(regexPattern)
-	if err != nil {
-		return fmt.Errorf("invalid regex pattern: %w", err)
-	}
-
-	// Apply the rule to all tables
-	for _, table := range tables {
-		if re.MatchString(table) {
-			includedTables[table] = (action == Include)
-		}
-	}
-
-	return nil
-}
-
 type Action int
 
 const (
@@ -339,12 +295,7 @@ func ParseRule(rule string) (Action, string, error) {
 
 type filteredTableKeys struct {
 	Snapshot common.TableKeys
-	Cdc      CdcTableKeys
-}
-
-type CdcTableKeys struct {
-	TableRegexes []string
-	TableKeys    common.TableKeys
+	Cdc      common.TableKeys
 }
 
 func (s *Source) filterTables(
@@ -354,10 +305,7 @@ func (s *Source) filterTables(
 ) (filteredTableKeys, error) {
 	filtered := filteredTableKeys{
 		Snapshot: common.TableKeys{},
-		Cdc: CdcTableKeys{
-			TableKeys:    common.TableKeys{},
-			TableRegexes: []string{},
-		},
+		Cdc:      common.TableKeys{},
 	}
 	{
 		rules := s.config.Tables
@@ -387,11 +335,9 @@ func (s *Source) filterTables(
 		}
 
 		for _, tableName := range tableNames {
-			filtered.Cdc.TableKeys[tableName] = tableKeys[tableName]
+			filtered.Cdc[tableName] = tableKeys[tableName]
 		}
 	}
-
-	filtered.Cdc.TableRegexes = createCanalRegexes(dbName, filtered.Cdc.TableKeys.GetTables())
 
 	return filtered, nil
 }

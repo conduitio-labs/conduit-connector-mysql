@@ -46,6 +46,9 @@ type SourceConfig struct {
 	//  - By default, no tables are included, but can be modified by adding a comma-separated string of regex patterns.
 	//  - They are applied in the order that they are provided, so the final regex supersedes all previous ones.
 	//  - To include all tables, use "*". You can then filter that list by adding a comma-separated string of regex patterns.
+	//  - To include a single table, use "^tablename$", otherwise you might include unexpected tables.
+	//    For example: "users" would match "users", "users_backup", "old_users", etc.
+	//    But "^users$" would only match exactly "users".
 	//  - To set an "include" regex, add "+" or nothing in front of the regex.
 	//  - To set an "exclude" regex, add "-" in front of the regex.
 	//  - e.g. "-.*meta$, wp_postmeta" will exclude all tables ending with "meta" but include the table "wp_postmeta".

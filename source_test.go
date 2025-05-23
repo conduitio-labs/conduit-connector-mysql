@@ -53,10 +53,10 @@ func TestSource_FilterTables(t *testing.T) {
 	primaryKeys := common.PrimaryKeys{"id"}
 
 	tableKeys := common.TableKeys{
-		"table":       primaryKeys,
-		"Atable":      primaryKeys,
-		"tableA":      primaryKeys,
-		"unmatchable": primaryKeys,
+		"table":    primaryKeys,
+		"Atable":   primaryKeys,
+		"tableA":   primaryKeys,
+		"distinct": primaryKeys,
 	}
 
 	testCases := []struct {
@@ -68,168 +68,126 @@ func TestSource_FilterTables(t *testing.T) {
 		{
 			name: "include all tables with wildcard",
 			cfg: SourceConfig{
-				Tables:         []string{"*"},
-				SnapshotTables: []string{},
-				CDCTables:      []string{},
+				Tables: []string{"*"},
 			},
 			tableKeys: tableKeys,
 			filtered: filteredTableKeys{
 				Snapshot: common.TableKeys{
-					"Atable":      primaryKeys,
-					"table":       primaryKeys,
-					"tableA":      primaryKeys,
-					"unmatchable": primaryKeys,
+					"table":    primaryKeys,
+					"Atable":   primaryKeys,
+					"tableA":   primaryKeys,
+					"distinct": primaryKeys,
 				},
-				Cdc: CdcTableKeys{
-					TableKeys: common.TableKeys{
-						"Atable":      primaryKeys,
-						"table":       primaryKeys,
-						"tableA":      primaryKeys,
-						"unmatchable": primaryKeys,
-					},
-					TableRegexes: createCanalRegexes(testutils.Database, []string{"Atable", "table", "tableA", "unmatchable"}),
+				Cdc: common.TableKeys{
+					"table":    primaryKeys,
+					"Atable":   primaryKeys,
+					"tableA":   primaryKeys,
+					"distinct": primaryKeys,
 				},
 			},
 		},
 		{
 			name: "include specific table",
 			cfg: SourceConfig{
-				Tables:         []string{"table"},
-				SnapshotTables: []string{},
-				CDCTables:      []string{},
+				Tables: []string{"Atable"},
 			},
 			tableKeys: tableKeys,
 			filtered: filteredTableKeys{
-				Snapshot: common.TableKeys{"table": primaryKeys},
-				Cdc: CdcTableKeys{
-					TableKeys:    common.TableKeys{"table": primaryKeys},
-					TableRegexes: createCanalRegexes(testutils.Database, []string{"table"}),
+				Snapshot: common.TableKeys{
+					"Atable": primaryKeys,
+				},
+				Cdc: common.TableKeys{
+					"Atable": primaryKeys,
 				},
 			},
 		},
 		{
-			name: "exclude tables ending with A",
+			name: "snapshot overrides tables pattern",
 			cfg: SourceConfig{
-				Tables:         []string{"*", "-.*A$"},
-				SnapshotTables: []string{},
-				CDCTables:      []string{},
+				Tables:         []string{"*"},
+				SnapshotTables: []string{"table", "Atable"},
 			},
 			tableKeys: tableKeys,
 			filtered: filteredTableKeys{
-				Snapshot: common.TableKeys{"Atable": primaryKeys, "table": primaryKeys, "unmatchable": primaryKeys},
-				Cdc: CdcTableKeys{
-					TableKeys:    common.TableKeys{"Atable": primaryKeys, "table": primaryKeys, "unmatchable": primaryKeys},
-					TableRegexes: createCanalRegexes(testutils.Database, []string{"Atable", "table", "unmatchable"}),
+				Snapshot: common.TableKeys{
+					"table":  primaryKeys,
+					"Atable": primaryKeys,
+				},
+				Cdc: common.TableKeys{
+					"table":    primaryKeys,
+					"Atable":   primaryKeys,
+					"tableA":   primaryKeys,
+					"distinct": primaryKeys,
 				},
 			},
 		},
 		{
-			name: "exclude all tables but include specific one",
+			name: "cdc overrides tables pattern",
 			cfg: SourceConfig{
-				Tables:         []string{"*", "-.*", "+tableA"},
-				SnapshotTables: []string{},
-				CDCTables:      []string{},
+				Tables:    []string{"*"},
+				CDCTables: []string{"distinct"},
 			},
 			tableKeys: tableKeys,
 			filtered: filteredTableKeys{
-				Snapshot: common.TableKeys{"tableA": primaryKeys},
-				Cdc: CdcTableKeys{
-					TableKeys:    common.TableKeys{"tableA": primaryKeys},
-					TableRegexes: createCanalRegexes(testutils.Database, []string{"tableA"}),
+				Snapshot: common.TableKeys{
+					"table":    primaryKeys,
+					"Atable":   primaryKeys,
+					"tableA":   primaryKeys,
+					"distinct": primaryKeys,
+				},
+				Cdc: common.TableKeys{
+					"distinct": primaryKeys,
 				},
 			},
 		},
 		{
-			name: "include table and Atable",
+			name: "both snapshot and cdc override tables pattern",
 			cfg: SourceConfig{
-				Tables:         []string{"table", "Atable"},
-				SnapshotTables: []string{},
-				CDCTables:      []string{},
+				Tables:         []string{"*"},
+				SnapshotTables: []string{"table"},
+				CDCTables:      []string{"Atable", "distinct"},
 			},
 			tableKeys: tableKeys,
 			filtered: filteredTableKeys{
-				Snapshot: common.TableKeys{"table": primaryKeys, "Atable": primaryKeys},
-				Cdc: CdcTableKeys{
-					TableKeys:    common.TableKeys{"table": primaryKeys, "Atable": primaryKeys},
-					TableRegexes: createCanalRegexes(testutils.Database, []string{"table", "Atable"}),
+				Snapshot: common.TableKeys{
+					"table": primaryKeys,
+				},
+				Cdc: common.TableKeys{
+					"Atable":   primaryKeys,
+					"distinct": primaryKeys,
 				},
 			},
 		},
 		{
-			name: "include all tables then exclude specific one",
+			name: "exclude tables ending with A using snapshot override",
 			cfg: SourceConfig{
-				Tables:         []string{"*", "-table"},
-				SnapshotTables: []string{},
-				CDCTables:      []string{},
+				Tables:         []string{"*"},
+				SnapshotTables: []string{"*", "-.*A$"},
 			},
 			tableKeys: tableKeys,
 			filtered: filteredTableKeys{
-				Snapshot: common.TableKeys{"Atable": primaryKeys, "tableA": primaryKeys, "unmatchable": primaryKeys},
-				Cdc: CdcTableKeys{
-					TableKeys:    common.TableKeys{"Atable": primaryKeys, "tableA": primaryKeys, "unmatchable": primaryKeys},
-					TableRegexes: createCanalRegexes(testutils.Database, []string{"Atable", "tableA", "unmatchable"}),
+				Snapshot: common.TableKeys{
+					"Atable":   primaryKeys,
+					"table":    primaryKeys,
+					"distinct": primaryKeys,
+				},
+				Cdc: common.TableKeys{
+					"table":    primaryKeys,
+					"Atable":   primaryKeys,
+					"tableA":   primaryKeys,
+					"distinct": primaryKeys,
 				},
 			},
 		},
 		{
-			name: "No Match",
+			name: "empty tables config",
 			cfg: SourceConfig{
-				Tables:         []string{"doesnt_exist"},
-				SnapshotTables: []string{},
-				CDCTables:      []string{},
+				Tables: []string{},
 			},
 			tableKeys: tableKeys,
 			filtered: filteredTableKeys{
 				Snapshot: common.TableKeys{},
-				Cdc:      CdcTableKeys{TableKeys: common.TableKeys{}, TableRegexes: []string{}},
-			},
-		},
-		{
-			name: "snapshot tables override with regex",
-			cfg: SourceConfig{
-				Tables:         []string{"*"},       // Should be ignored for snapshot
-				SnapshotTables: []string{"table.*"}, // Regex to include tables starting with "table"
-				CDCTables:      []string{},
-			},
-			tableKeys: tableKeys,
-			filtered: filteredTableKeys{
-				Snapshot: common.TableKeys{"table": primaryKeys, "tableA": primaryKeys},
-				Cdc: CdcTableKeys{
-					TableKeys:    common.TableKeys{"Atable": primaryKeys, "table": primaryKeys, "tableA": primaryKeys, "unmatchable": primaryKeys}, // Falls back to Tables
-					TableRegexes: createCanalRegexes(testutils.Database, []string{"Atable", "table", "tableA", "unmatchable"}),
-				},
-			},
-		},
-		{
-			name: "cdc tables override with regex",
-			cfg: SourceConfig{
-				Tables:         []string{"*", "-unmatchable"}, // Should be ignored for cdc
-				SnapshotTables: []string{},
-				CDCTables:      []string{".*table$"}, // Regex to include tables ending with "table"
-			},
-			tableKeys: tableKeys,
-			filtered: filteredTableKeys{
-				Snapshot: common.TableKeys{"Atable": primaryKeys, "table": primaryKeys, "tableA": primaryKeys, "unmatchable": primaryKeys}, // Falls back to Tables
-				Cdc: CdcTableKeys{
-					TableKeys:    common.TableKeys{"Atable": primaryKeys, "table": primaryKeys},
-					TableRegexes: createCanalRegexes(testutils.Database, []string{"Atable", "table"}),
-				},
-			},
-		},
-		{
-			name: "snapshot and cdc tables override with different regexes",
-			cfg: SourceConfig{
-				Tables:         []string{"*"},           // Should be ignored for both
-				SnapshotTables: []string{".*A$"},        // Regex to include tables ending with "A"
-				CDCTables:      []string{"unmatchable"}, // Specific table for cdc
-			},
-			tableKeys: tableKeys,
-			filtered: filteredTableKeys{
-				Snapshot: common.TableKeys{"tableA": primaryKeys, "Atable": primaryKeys},
-				Cdc: CdcTableKeys{
-					TableKeys:    common.TableKeys{"unmatchable": primaryKeys},
-					TableRegexes: createCanalRegexes(testutils.Database, []string{"unmatchable"}),
-				},
+				Cdc:      common.TableKeys{},
 			},
 		},
 	}
@@ -243,8 +201,7 @@ func TestSource_FilterTables(t *testing.T) {
 			is.NoErr(err)
 
 			areSlicesEq(is, filtered.Snapshot.GetTables(), testCase.filtered.Snapshot.GetTables())
-			areSlicesEq(is, filtered.Cdc.TableKeys.GetTables(), testCase.filtered.Cdc.TableKeys.GetTables())
-			areSlicesEq(is, filtered.Cdc.TableRegexes, testCase.filtered.Cdc.TableRegexes)
+			areSlicesEq(is, filtered.Cdc.GetTables(), testCase.filtered.Cdc.GetTables())
 		})
 	}
 }

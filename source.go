@@ -307,36 +307,41 @@ func (s *Source) filterTables(
 		Snapshot: common.TableKeys{},
 		Cdc:      common.TableKeys{},
 	}
-	{
+
+	add := func(tableKeys common.TableKeys, tableNames []string) {
+		for _, tableName := range tableNames {
+			tableKeys[tableName] = tableKeys[tableName]
+		}
+	}
+
+	tableNames := tableKeys.GetTables()
+
+	{ // Snapshot patterns
 		rules := s.config.Tables
 		if len(s.config.SnapshotTables) != 0 {
 			rules = s.config.SnapshotTables
 		}
 
-		tableNames, err := filterTables(rules, tableKeys.GetTables())
+		filteredNames, err := filterTables(rules, tableNames)
 		if err != nil {
 			return filtered, err
 		}
 
-		for _, tableName := range tableNames {
-			filtered.Snapshot[tableName] = tableKeys[tableName]
-		}
+		add(filtered.Snapshot, filteredNames)
 	}
 
-	{
+	{ // CDC patterns
 		rules := s.config.Tables
 		if len(s.config.CDCTables) != 0 {
 			rules = s.config.CDCTables
 		}
 
-		tableNames, err := filterTables(rules, tableKeys.GetTables())
+		filteredNames, err := filterTables(rules, tableNames)
 		if err != nil {
 			return filtered, err
 		}
 
-		for _, tableName := range tableNames {
-			filtered.Cdc[tableName] = tableKeys[tableName]
-		}
+		add(filtered.Cdc, filteredNames)
 	}
 
 	return filtered, nil

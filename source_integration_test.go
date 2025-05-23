@@ -18,7 +18,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -394,6 +393,33 @@ func TestSnapshotEnabled(t *testing.T) {
 	defer cancel()
 
 	_, err := source.ReadN(ctx, 1)
-	fmt.Println(err)
 	is.True(errors.Is(err, context.DeadlineExceeded))
+}
+
+func TestGetTablePrimaryKeys(t *testing.T) {
+	is := is.New(t)
+	db := testutils.NewDB(t)
+	ctx := testutils.TestContext(t)
+
+	testutils.DropAllTables(is, db)
+
+	// Define test tables
+	type Table1 struct {
+		ID   int    `gorm:"primaryKey"`
+		Data string `gorm:"size:100"`
+	}
+
+	type Table2 struct {
+		ID   int    `gorm:"primaryKey"`
+		Data string `gorm:"size:100"`
+	}
+
+	is.NoErr(db.AutoMigrate(&Table1{}, &Table2{}))
+
+	source := &Source{db: db.SqlxDB}
+
+	keys, err := source.getTableKeysFromTables(ctx, testutils.Database)
+	is.NoErr(err)
+
+	_ = keys
 }

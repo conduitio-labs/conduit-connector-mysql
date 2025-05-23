@@ -158,6 +158,9 @@ specification:
            - By default, no tables are included, but can be modified by adding a comma-separated string of regex patterns.
            - They are applied in the order that they are provided, so the final regex supersedes all previous ones.
            - To include all tables, use "*". You can then filter that list by adding a comma-separated string of regex patterns.
+           - To include a single table, use "^tablename$", otherwise you might include unexpected tables.
+             For example: "users" would match "users", "users_backup", "old_users", etc.
+             But "^users$" would only match exactly "users".
            - To set an "include" regex, add "+" or nothing in front of the regex.
            - To set an "exclude" regex, add "-" in front of the regex.
            - e.g. "-.*meta$, wp_postmeta" will exclude all tables ending with "meta" but include the table "wp_postmeta".
@@ -171,6 +174,13 @@ specification:
         type: bool
         default: ""
         validations: []
+      - name: cdc.tables
+        description: |-
+          Same as Tables, but it applies to the Change Data Capture (CDC) process.
+          When defined, it overrides the Tables parameter for CDC.
+        type: string
+        default: ""
+        validations: []
       - name: snapshot.enabled
         description: Controls whether the snapshot is done.
         type: bool
@@ -180,6 +190,13 @@ specification:
         description: Limits how many rows should be retrieved on each database fetch on snapshot mode.
         type: int
         default: "10000"
+        validations: []
+      - name: snapshot.tables
+        description: |-
+          Same as Tables, but it applies to the snapshot process.
+          When defined, it overrides the Tables parameter for snapshotting.
+        type: string
+        default: ""
         validations: []
       - name: snapshot.unsafe
         description: |-

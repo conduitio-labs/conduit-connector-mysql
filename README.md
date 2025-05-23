@@ -162,11 +162,14 @@ pipelines:
           # regex patterns. - They are applied in the order that they are
           # provided, so the final regex supersedes all previous ones. - To
           # include all tables, use "*". You can then filter that list by adding
-          # a comma-separated string of regex patterns. - To set an "include"
-          # regex, add "+" or nothing in front of the regex. - To set an
-          # "exclude" regex, add "-" in front of the regex. - e.g. "-.*meta$,
-          # wp_postmeta" will exclude all tables ending with "meta" but include
-          # the table "wp_postmeta".
+          # a comma-separated string of regex patterns. - To include a single
+          # table, use "^tablename$", otherwise you might include unexpected
+          # tables. For example: "users" would match "users", "users_backup",
+          # "old_users", etc. But "^users$" would only match exactly "users". -
+          # To set an "include" regex, add "+" or nothing in front of the regex.
+          # - To set an "exclude" regex, add "-" in front of the regex. - e.g.
+          # "-.*meta$, wp_postmeta" will exclude all tables ending with "meta"
+          # but include the table "wp_postmeta".
           # Type: string
           # Required: yes
           tables: ""
@@ -174,6 +177,11 @@ pipelines:
           # Type: bool
           # Required: no
           cdc.disableLogs: "false"
+          # Same as Tables, but it applies to the Change Data Capture (CDC)
+          # process. When defined, it overrides the Tables parameter for CDC.
+          # Type: string
+          # Required: no
+          cdc.tables: ""
           # Controls whether the snapshot is done.
           # Type: bool
           # Required: no
@@ -183,6 +191,11 @@ pipelines:
           # Type: int
           # Required: no
           snapshot.fetchSize: "10000"
+          # Same as Tables, but it applies to the snapshot process. When
+          # defined, it overrides the Tables parameter for snapshotting.
+          # Type: string
+          # Required: no
+          snapshot.tables: ""
           # Allows a snapshot of a table with neither a primary key nor a
           # defined sorting column. The opencdc.Position won't record the last
           # record read from a table.

@@ -16,9 +16,10 @@ package mysql
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"regexp"
-	"strings"
 	"time"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
@@ -45,10 +46,21 @@ type SourceConfig struct {
 	//  - By default, no tables are included, but can be modified by adding a comma-separated string of regex patterns.
 	//  - They are applied in the order that they are provided, so the final regex supersedes all previous ones.
 	//  - To include all tables, use "*". You can then filter that list by adding a comma-separated string of regex patterns.
+	//  - To include a single table, use "^tablename$", otherwise you might include unexpected tables.
+	//    For example: "users" would match "users", "users_backup", "old_users", etc.
+	//    But "^users$" would only match exactly "users".
 	//  - To set an "include" regex, add "+" or nothing in front of the regex.
 	//  - To set an "exclude" regex, add "-" in front of the regex.
 	//  - e.g. "-.*meta$, wp_postmeta" will exclude all tables ending with "meta" but include the table "wp_postmeta".
 	Tables []string `json:"tables" validate:"required"`
+
+	// Same as Tables, but it applies to the snapshot process.
+	// When defined, it overrides the Tables parameter for snapshotting.
+	SnapshotTables []string `json:"snapshot.tables"`
+
+	// Same as Tables, but it applies to the Change Data Capture (CDC) process.
+	// When defined, it overrides the Tables parameter for CDC.
+	CDCTables []string `json:"cdc.tables"`
 
 	// Disables verbose cdc driver logs.
 	DisableLogs bool `json:"cdc.disableLogs"`
@@ -132,22 +144,15 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 		return fmt.Errorf("failed to connect to mysql: %w", err)
 	}
 
-	sdk.Logger(ctx).Info().Msg("Parsing table regexes...")
-	s.config.Tables, err = s.getAndFilterTables(ctx, s.db, s.config.MysqlCfg().DBName)
-	if err != nil {
-		return err
-	}
+	dbName := s.config.MysqlCfg().DBName
 
-	canalRegexes := createCanalRegexes(s.config.MysqlCfg().DBName, s.config.Tables)
-
-	sdk.Logger(ctx).Info().
-		Strs("tables", s.config.Tables).
-		Int("count", len(s.config.Tables)).
-		Msgf("Successfully detected tables")
-
-	tableKeys, err := s.getTableKeys(ctx, s.config.MysqlCfg().DBName)
+	tableKeys, err := s.getTableKeysFromTables(ctx, dbName)
 	if err != nil {
 		return fmt.Errorf("failed to get table keys: %w", err)
+	}
+	filtered, err := s.filterTables(tableKeys)
+	if err != nil {
+		return fmt.Errorf("failed to filter table keys: %w", err)
 	}
 
 	serverID, err := common.GetServerID(ctx, s.db)
@@ -167,11 +172,10 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 
 	s.iterator, err = newCombinedIterator(ctx, combinedIteratorConfig{
 		db:                    s.db,
-		tableKeys:             tableKeys,
+		tableKeys:             filtered,
 		startSnapshotPosition: pos.SnapshotPosition,
 		startCdcPosition:      pos.CdcPosition,
-		database:              s.config.MysqlCfg().DBName,
-		canalRegexes:          canalRegexes,
+		database:              dbName,
 		serverID:              serverID,
 		mysqlConfig:           s.config.MysqlCfg(),
 		disableCanalLogging:   s.config.DisableLogs,
@@ -213,89 +217,54 @@ func (s *Source) Teardown(ctx context.Context) error {
 	return nil
 }
 
-func (s *Source) getAndFilterTables(ctx context.Context, db *sqlx.DB, database string) ([]string, error) {
-	query := "SELECT table_name FROM information_schema.tables WHERE table_schema = ?"
-
-	rows, err := db.Queryx(query, database)
-	if err != nil {
-		sdk.Logger(ctx).Error().Err(err).Msg("failed to query tables")
-		return nil, fmt.Errorf("failed to query tables: %w", err)
-	}
-	defer rows.Close()
+func (s *Source) getTableKeysFromTables(
+	ctx context.Context,
+	dbName string,
+) (common.TableKeys, error) {
+	keys := make(common.TableKeys)
 
 	var tables []string
-	for rows.Next() {
-		var tableName string
-		if err := rows.Scan(&tableName); err != nil {
-			return nil, fmt.Errorf("failed to scan table name: %w", err)
-		}
-		tables = append(tables, tableName)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("rows error: %w", err)
-	}
-
-	includedTables := make(map[string]bool)
-
-	// Process each rule
-	for _, rule := range s.config.Tables {
-		if err := s.processTableRule(rule, tables, includedTables); err != nil {
-			return nil, err
-		}
-	}
-
-	var finalTables []string
-	// Collect all the tables that were included (true in map)
-	for table, included := range includedTables {
-		if included {
-			finalTables = append(finalTables, table)
-		}
-	}
-
-	return finalTables, nil
-}
-
-// createCanalRegexes creates regex patterns for Canal from the filtered table names.
-func createCanalRegexes(database string, tables []string) []string {
-	canalRegexes := make([]string, 0, len(tables))
-	for _, table := range tables {
-		// prefix with db name because Canal does the same for the key, so we can't prefix with ^ to prevent undesired matches.
-		// Append $ to prevent undesired matches.
-		canalRegexes = append(canalRegexes, fmt.Sprintf("^%s.%s$", database, regexp.QuoteMeta(table)))
-	}
-	return canalRegexes
-}
-
-func (s *Source) processTableRule(rule string, tables []string, includedTables map[string]bool) error {
-	// trim leading and trailing spaces from rule
-	rule = strings.TrimSpace(rule)
-
-	if rule == AllTablesWildcard {
-		for _, table := range tables {
-			includedTables[table] = true
-		}
-		return nil
-	}
-
-	action, regexPattern, err := ParseRule(rule)
+	err := s.db.SelectContext(ctx,
+		&tables,
+		"SELECT table_name FROM information_schema.tables WHERE table_schema = ?",
+		dbName,
+	)
 	if err != nil {
-		return err
+		return keys, fmt.Errorf("failed to fetch table names from database")
 	}
 
-	// Compile the regex
-	re, err := regexp.Compile(regexPattern)
-	if err != nil {
-		return fmt.Errorf("invalid regex pattern: %w", err)
-	}
+	tableKeys := make(common.TableKeys)
 
-	// Apply the rule to all tables
 	for _, table := range tables {
-		if re.MatchString(table) {
-			includedTables[table] = (action == Include)
+		preconfiguredTableKey, ok := s.config.TableConfig[table]
+		if ok {
+			tableKeys[table] = common.PrimaryKeys{preconfiguredTableKey.SortingColumn}
+			continue
 		}
+
+		primaryKeys, err := common.GetPrimaryKeys(s.db, dbName, table)
+		if err != nil {
+			if s.config.UnsafeSnapshot && errors.Is(err, sql.ErrNoRows) {
+				sdk.Logger(ctx).Warn().Msgf(
+					"table %s has no primary key, doing an unsafe snapshot ", table)
+
+				// The snapshot iterator should be able to interpret a zero
+				// value table key as a table where we cannot do a sorted
+				// snapshot.
+
+				tableKeys[table] = common.PrimaryKeys{}
+				continue
+			}
+
+			return tableKeys, fmt.Errorf(
+				"failed to get primary key for table %s. You might want to add a `tableConfig.<table name>.sortingColumn entry, or enable `unsafeSnapshot` mode: %w",
+				table, err)
+		}
+
+		tableKeys[table] = primaryKeys
 	}
 
-	return nil
+	return tableKeys, nil
 }
 
 type Action int
@@ -327,37 +296,98 @@ func ParseRule(rule string) (Action, string, error) {
 	return action, rule, nil // Return action and regex (without the action prefix)
 }
 
-func (s *Source) getTableKeys(ctx context.Context, dbName string) (common.TableKeys, error) {
-	tableKeys := make(common.TableKeys)
+type filteredTableKeys struct {
+	Snapshot common.TableKeys
+	Cdc      common.TableKeys
+}
 
-	for _, table := range s.config.Tables {
-		preconfiguredTableKey, ok := s.config.TableConfig[table]
-		if ok {
-			tableKeys[table] = common.PrimaryKeys{preconfiguredTableKey.SortingColumn}
+func (s *Source) filterTables(tableKeys common.TableKeys) (filteredTableKeys, error) {
+	filtered := filteredTableKeys{
+		Snapshot: common.TableKeys{},
+		Cdc:      common.TableKeys{},
+	}
+
+	add := func(target common.TableKeys, tableNames []string) {
+		for _, tableName := range tableNames {
+			target[tableName] = tableKeys[tableName]
+		}
+	}
+
+	tableNames := tableKeys.GetTables()
+
+	{ // Snapshot patterns
+		rules := s.config.Tables
+		if len(s.config.SnapshotTables) != 0 {
+			rules = s.config.SnapshotTables
+		}
+
+		filteredNames, err := filterTables(rules, tableNames)
+		if err != nil {
+			return filtered, err
+		}
+
+		add(filtered.Snapshot, filteredNames)
+	}
+
+	{ // CDC patterns
+		rules := s.config.Tables
+		if len(s.config.CDCTables) != 0 {
+			rules = s.config.CDCTables
+		}
+
+		filteredNames, err := filterTables(rules, tableNames)
+		if err != nil {
+			return filtered, err
+		}
+
+		add(filtered.Cdc, filteredNames)
+	}
+
+	return filtered, nil
+}
+
+func filterTables(rules, tableNames []string) ([]string, error) {
+	filtered := map[string]bool{}
+
+	for _, rule := range rules {
+		if rule == AllTablesWildcard {
+			for _, tableName := range tableNames {
+				filtered[tableName] = true
+			}
 			continue
 		}
 
-		primaryKeys, err := common.GetPrimaryKeys(s.db, dbName, table)
+		action, regex, err := ParseRule(rule)
 		if err != nil {
-			if s.config.UnsafeSnapshot {
-				sdk.Logger(ctx).Warn().Msgf(
-					"table %s has no primary key, doing an unsafe snapshot ", table)
-
-				// The snapshot iterator should be able to interpret a zero
-				// value table key as a table where we cannot do a sorted
-				// snapshot.
-
-				tableKeys[table] = common.PrimaryKeys{}
-				continue
-			}
-
-			return nil, fmt.Errorf(
-				"failed to get primary key for table %s. You might want to add a `tableConfig.<table name>.sortingColumn entry, or enable `unsafeSnapshot` mode: %w",
-				table, err)
+			return nil, err
 		}
 
-		tableKeys[table] = primaryKeys
+		re, err := regexp.Compile(regex)
+		if err != nil {
+			return nil, fmt.Errorf("invalid regex pattern: %w", err)
+		}
+
+		if action == Include {
+			for _, tableName := range tableNames {
+				if re.MatchString(tableName) {
+					filtered[tableName] = true
+				}
+			}
+		} else {
+			for _, tableName := range tableNames {
+				if re.MatchString(tableName) {
+					filtered[tableName] = false
+				}
+			}
+		}
 	}
 
-	return tableKeys, nil
+	var filteredNames []string
+	for tableName, shouldInclude := range filtered {
+		if shouldInclude {
+			filteredNames = append(filteredNames, tableName)
+		}
+	}
+
+	return filteredNames, nil
 }

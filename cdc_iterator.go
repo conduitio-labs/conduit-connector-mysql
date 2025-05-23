@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strconv"
 	"time"
 
@@ -43,7 +44,6 @@ type cdcIterator struct {
 
 type cdcIteratorConfig struct {
 	db                  *sqlx.DB
-	tables              []string
 	mysqlConfig         *mysqldriver.Config
 	tableKeys           common.TableKeys
 	disableCanalLogging bool
@@ -51,9 +51,12 @@ type cdcIteratorConfig struct {
 }
 
 func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (*cdcIterator, error) {
+	dbName := config.mysqlConfig.DBName
+	tableRegexes := createCanalRegexes(dbName, config.tableKeys.GetTables())
+
 	canal, err := common.NewCanal(ctx, common.CanalConfig{
 		Config:         config.mysqlConfig,
-		Tables:         config.tables,
+		TableRegexes:   tableRegexes,
 		DisableLogging: config.disableCanalLogging,
 	})
 	if err != nil {
@@ -193,6 +196,17 @@ func (c *cdcIterator) Teardown(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// createCanalRegexes creates regex patterns for Canal from the filtered table names.
+func createCanalRegexes(database string, tables []string) []string {
+	canalRegexes := make([]string, 0, len(tables))
+	for _, table := range tables {
+		// prefix with db name because Canal does the same for the key, so we can't prefix with ^ to prevent undesired matches.
+		// Append $ to prevent undesired matches.
+		canalRegexes = append(canalRegexes, fmt.Sprintf("^%s.%s$", database, regexp.QuoteMeta(table)))
+	}
+	return canalRegexes
 }
 
 type replicationEventRow struct {

@@ -30,7 +30,7 @@ import (
 
 type CanalConfig struct {
 	*mysql.Config
-	Tables         []string
+	TableRegexes   []string
 	DisableLogging bool
 }
 
@@ -40,7 +40,7 @@ func NewCanal(ctx context.Context, config CanalConfig) (*canal.Canal, error) {
 	cfg.User = config.User
 	cfg.Password = config.Passwd
 
-	cfg.IncludeTableRegex = config.Tables
+	cfg.IncludeTableRegex = config.TableRegexes
 	if config.DisableLogging {
 		cfg.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	} else {

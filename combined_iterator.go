@@ -36,12 +36,11 @@ type combinedIterator struct {
 
 type combinedIteratorConfig struct {
 	db                    *sqlx.DB
-	tableKeys             common.TableKeys
+	tableKeys             filteredTableKeys
 	fetchSize             uint64
 	startSnapshotPosition *common.SnapshotPosition
 	startCdcPosition      *common.CdcPosition
 	database              string
-	canalRegexes          []string
 	serverID              string
 	mysqlConfig           *mysqldriver.Config
 	disableCanalLogging   bool
@@ -53,9 +52,8 @@ func newCombinedIterator(
 	config combinedIteratorConfig,
 ) (common.Iterator, error) {
 	cdcIterator, err := newCdcIterator(ctx, cdcIteratorConfig{
-		tables:              config.canalRegexes,
 		mysqlConfig:         config.mysqlConfig,
-		tableKeys:           config.tableKeys,
+		tableKeys:           config.tableKeys.Cdc,
 		disableCanalLogging: config.disableCanalLogging,
 		db:                  config.db,
 		startPosition:       config.startCdcPosition,
@@ -80,12 +78,12 @@ func newCombinedIterator(
 	}
 
 	snapshotIterator, err := newSnapshotIterator(snapshotIteratorConfig{
-		db:               config.db,
-		tablePrimaryKeys: config.tableKeys,
-		fetchSize:        config.fetchSize,
-		startPosition:    config.startSnapshotPosition,
-		database:         config.database,
-		serverID:         config.serverID,
+		db:            config.db,
+		tableKeys:     config.tableKeys.Snapshot,
+		fetchSize:     config.fetchSize,
+		startPosition: config.startSnapshotPosition,
+		database:      config.database,
+		serverID:      config.serverID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create snapshot iterator: %w", err)
@@ -93,7 +91,7 @@ func newCombinedIterator(
 
 	sdk.Logger(ctx).Info().Msg("locking tables to setup fetch workers and obtain cdc start position")
 
-	unlockTables, err := lockTables(ctx, config.db, config.tableKeys.GetTables())
+	unlockTables, err := lockTables(ctx, config.db, config.tableKeys.Snapshot.GetTables())
 	if err != nil {
 		return nil, err
 	}

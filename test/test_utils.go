@@ -38,9 +38,11 @@ import (
 	gormschema "gorm.io/gorm/schema"
 )
 
-const DSN = "root:meroxaadmin@tcp(127.0.0.1:3306)/meroxadb"
-
-var ServerID = "1"
+const (
+	DSN      = "root:meroxaadmin@tcp(127.0.0.1:3306)/meroxadb"
+	ServerID = "1"
+	Database = "meroxadb"
+)
 
 // DB is a gorm wrapper that also holds a sqlx DB. Iterators
 // don't manage sql connections, so we need to store them somehow.
@@ -168,6 +170,16 @@ func CreateTables(is *is.I, db DB, tables ...any) {
 
 func CreateUserTable(is *is.I, db DB) {
 	CreateTables(is, db, &User{})
+}
+
+func DropAllTables(is *is.I, db DB) {
+	m := db.Migrator()
+	tables, err := m.GetTables()
+	is.NoErr(err)
+
+	for _, table := range tables {
+		is.NoErr(m.DropTable(table))
+	}
 }
 
 func CreateUser(userID int) *User {
@@ -364,7 +376,7 @@ func newCanal(ctx context.Context, is *is.I, tablename string) *canal.Canal {
 
 	canal, err := common.NewCanal(ctx, common.CanalConfig{
 		Config:         config,
-		Tables:         []string{tablename},
+		TableRegexes:   []string{tablename},
 		DisableLogging: true,
 	})
 	is.NoErr(err)

@@ -36,12 +36,11 @@ type combinedIterator struct {
 
 type combinedIteratorConfig struct {
 	db                    *sqlx.DB
-	primaryKeys           map[string]common.PrimaryKeys
+	tableKeys             common.TableKeys
 	fetchSize             uint64
 	startSnapshotPosition *common.SnapshotPosition
 	startCdcPosition      *common.CdcPosition
 	database              string
-	tables                []string
 	canalRegexes          []string
 	serverID              string
 	mysqlConfig           *mysqldriver.Config
@@ -56,7 +55,7 @@ func newCombinedIterator(
 	cdcIterator, err := newCdcIterator(ctx, cdcIteratorConfig{
 		tables:              config.canalRegexes,
 		mysqlConfig:         config.mysqlConfig,
-		primaryKeys:         config.primaryKeys,
+		tableKeys:           config.tableKeys,
 		disableCanalLogging: config.disableCanalLogging,
 		db:                  config.db,
 		startPosition:       config.startCdcPosition,
@@ -82,11 +81,10 @@ func newCombinedIterator(
 
 	snapshotIterator, err := newSnapshotIterator(snapshotIteratorConfig{
 		db:               config.db,
-		tablePrimaryKeys: config.primaryKeys,
+		tablePrimaryKeys: config.tableKeys,
 		fetchSize:        config.fetchSize,
 		startPosition:    config.startSnapshotPosition,
 		database:         config.database,
-		tables:           config.tables,
 		serverID:         config.serverID,
 	})
 	if err != nil {
@@ -95,7 +93,7 @@ func newCombinedIterator(
 
 	sdk.Logger(ctx).Info().Msg("locking tables to setup fetch workers and obtain cdc start position")
 
-	unlockTables, err := lockTables(ctx, config.db, config.tables)
+	unlockTables, err := lockTables(ctx, config.db, config.tableKeys.GetTables())
 	if err != nil {
 		return nil, err
 	}
@@ -146,17 +144,17 @@ func (c *combinedIterator) Ack(ctx context.Context, pos opencdc.Position) error 
 	return c.currentIterator.Ack(ctx, pos)
 }
 
-func (c *combinedIterator) Read(ctx context.Context) (opencdc.Record, error) {
-	rec, err := c.currentIterator.Read(ctx)
+func (c *combinedIterator) ReadN(ctx context.Context, n int) ([]opencdc.Record, error) {
+	recs, err := c.currentIterator.ReadN(ctx, n)
 	if errors.Is(err, ErrSnapshotIteratorDone) {
 		c.currentIterator = c.cdcIterator
 		//nolint:wrapcheck // error already wrapped in iterator
-		return c.currentIterator.Read(ctx)
+		return c.currentIterator.ReadN(ctx, n)
 	} else if err != nil {
-		return opencdc.Record{}, fmt.Errorf("failed to get next record: %w", err)
+		return nil, fmt.Errorf("failed to get next record: %w", err)
 	}
 
-	return rec, nil
+	return recs, nil
 }
 
 func (c *combinedIterator) Teardown(ctx context.Context) error {

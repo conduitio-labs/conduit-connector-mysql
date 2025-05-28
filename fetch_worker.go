@@ -142,12 +142,12 @@ func (w *fetchWorkerSingleKey) fetchStartEnd(ctx context.Context) (isTableEmpty 
 }
 
 func (w *fetchWorkerSingleKey) run(ctx context.Context) (err error) {
-	sdk.Logger(ctx).Info().Msgf("started fetch worker by key for table %q", w.config.table)
-	defer sdk.Logger(ctx).Info().Msgf("finished fetch worker by key for table %q", w.config.table)
+	sdk.Logger(ctx).Debug().Msgf("started fetch worker by key for table %q", w.config.table)
+	defer sdk.Logger(ctx).Debug().Msgf("finished fetch worker by key for table %q", w.config.table)
 
 	logger := sdk.Logger(ctx).With().Str("table", w.config.table).Logger()
 
-	logger.Info().
+	logger.Debug().
 		Any("start", w.start).
 		Any("end", w.end).
 		Uint64("fetchSize", w.config.fetchSize).
@@ -159,7 +159,7 @@ func (w *fetchWorkerSingleKey) run(ctx context.Context) (err error) {
 	discardFirst := w.lastPosition.LastRead != nil
 	chunkStart := w.start
 	for {
-		logger.Info().
+		logger.Trace().
 			Any("chunk start", chunkStart).
 			Any("end", w.end).Msg("fetching chunk")
 
@@ -381,8 +381,8 @@ func (w *fetchWorkerMultipleKey) fetchStartEnd(ctx context.Context) (tableEmpty 
 }
 
 func (w *fetchWorkerMultipleKey) run(ctx context.Context) error {
-	sdk.Logger(ctx).Info().Msgf("started fetch worker by keys for table %q", w.config.table)
-	defer sdk.Logger(ctx).Info().Msgf("finished fetch worker by keys for table %q", w.config.table)
+	sdk.Logger(ctx).Debug().Msgf("started fetch worker by keys for table %q", w.config.table)
+	defer sdk.Logger(ctx).Debug().Msgf("finished fetch worker by keys for table %q", w.config.table)
 
 	tx, err := w.config.db.BeginTxx(ctx, &sql.TxOptions{
 		Isolation: sql.LevelRepeatableRead,
@@ -639,8 +639,8 @@ func (w *fetchWorkerByLimit) fetchStartEnd(ctx context.Context) (isTableEmpty bo
 func (w *fetchWorkerByLimit) run(ctx context.Context) (err error) {
 	logger := sdk.Logger(ctx).With().Str("table", w.config.table).Logger()
 
-	logger.Info().Msgf("started fetch worker by limit")
-	defer logger.Info().Msgf("finished fetch worker by limit")
+	logger.Debug().Msgf("started fetch worker by limit")
+	defer logger.Debug().Msgf("finished fetch worker by limit")
 
 	for offset := uint64(0); offset < w.end; offset += w.config.fetchSize {
 		query, args, err := squirrel.

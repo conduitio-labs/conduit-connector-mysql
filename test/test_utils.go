@@ -103,7 +103,7 @@ func TestContext(t *testing.T) context.Context {
 	return logger.WithContext(context.Background())
 }
 
-var TablePrimaryKeys = map[string]common.PrimaryKeys{
+var TablePrimaryKeys = common.TableKeys{
 	"users": {"id"},
 }
 
@@ -225,8 +225,10 @@ func ReadAndAssertCreate(
 	iterator common.Iterator, user User,
 ) opencdc.Record {
 	is.Helper()
-	rec, err := iterator.Read(ctx)
+	recs, err := iterator.ReadN(ctx, 1)
 	is.NoErr(err)
+	is.True(len(recs) == 1)
+	rec := recs[0]
 	is.NoErr(iterator.Ack(ctx, rec.Position))
 
 	is.Equal(rec.Operation, opencdc.OperationCreate)
@@ -244,8 +246,10 @@ func ReadAndAssertUpdate(
 	iterator common.Iterator, prev, next User,
 ) opencdc.Record {
 	is.Helper()
-	rec, err := iterator.Read(ctx)
+	recs, err := iterator.ReadN(ctx, 1)
 	is.NoErr(err)
+	is.True(len(recs) == 1)
+	rec := recs[0]
 	is.NoErr(iterator.Ack(ctx, rec.Position))
 
 	is.Equal(rec.Operation, opencdc.OperationUpdate)
@@ -267,8 +271,10 @@ func ReadAndAssertDelete(
 ) opencdc.Record {
 	is.Helper()
 
-	rec, err := iterator.Read(ctx)
+	recs, err := iterator.ReadN(ctx, 1)
 	is.NoErr(err)
+	is.True(len(recs) == 1)
+	rec := recs[0]
 	is.NoErr(iterator.Ack(ctx, rec.Position))
 
 	is.Equal(rec.Operation, opencdc.OperationDelete)
@@ -289,12 +295,13 @@ func ReadAndAssertSnapshot(
 	iterator common.Iterator, user User,
 ) opencdc.Record {
 	is.Helper()
-	rec, err := iterator.Read(ctx)
+	recs, err := iterator.ReadN(ctx, 1)
 	is.NoErr(err)
-	is.NoErr(iterator.Ack(ctx, rec.Position))
+	is.True(len(recs) == 1)
+	is.NoErr(iterator.Ack(ctx, recs[0].Position))
 
-	AssertUserSnapshot(ctx, is, user, rec)
-	return rec
+	AssertUserSnapshot(ctx, is, user, recs[0])
+	return recs[0]
 }
 
 func AssertUserSnapshot(ctx context.Context, is *is.I, user User, rec opencdc.Record) {

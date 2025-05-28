@@ -197,11 +197,11 @@ pipelines:
           # Maximum delay before an incomplete batch is read from the source.
           # Type: duration
           # Required: no
-          sdk.batch.delay: "0"
+          sdk.batch.delay: "1s"
           # Maximum size of batch before it gets read from the source.
           # Type: int
           # Required: no
-          sdk.batch.size: "0"
+          sdk.batch.size: "10000"
           # Specifies whether to use a schema context name. If set to false, no
           # schema context name will be used, and schemas will be saved with the
           # subject name specified in the connector (not safe because of name

@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	"github.com/conduitio/conduit-commons/opencdc"
@@ -98,16 +99,27 @@ const (
 type Source struct {
 	sdk.UnimplementedSource
 
-	config SourceConfig
-
-	db *sqlx.DB
-
+	config   SourceConfig
+	db       *sqlx.DB
 	iterator common.Iterator
 }
 
+var (
+	defaultBatchDelay = time.Second
+	defaultBatchSize  = 10000
+)
+
 func NewSource() sdk.Source {
-	// Create Source and wrap it in the default middleware.
-	return sdk.SourceWithMiddleware(&Source{})
+	return sdk.SourceWithMiddleware(&Source{
+		config: SourceConfig{
+			DefaultSourceMiddleware: sdk.DefaultSourceMiddleware{
+				SourceWithBatch: sdk.SourceWithBatch{
+					BatchSize:  &defaultBatchSize,
+					BatchDelay: &defaultBatchDelay,
+				},
+			},
+		},
+	})
 }
 
 func (s *Source) Config() sdk.SourceConfig {
@@ -155,11 +167,10 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 
 	s.iterator, err = newCombinedIterator(ctx, combinedIteratorConfig{
 		db:                    s.db,
-		primaryKeys:           tableKeys,
+		tableKeys:             tableKeys,
 		startSnapshotPosition: pos.SnapshotPosition,
 		startCdcPosition:      pos.CdcPosition,
 		database:              s.config.MysqlCfg().DBName,
-		tables:                s.config.Tables,
 		canalRegexes:          canalRegexes,
 		serverID:              serverID,
 		mysqlConfig:           s.config.MysqlCfg(),
@@ -175,9 +186,9 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 	return nil
 }
 
-func (s *Source) Read(ctx context.Context) (opencdc.Record, error) {
+func (s *Source) ReadN(ctx context.Context, n int) ([]opencdc.Record, error) {
 	//nolint:wrapcheck // error already wrapped in iterator
-	return s.iterator.Read(ctx)
+	return s.iterator.ReadN(ctx, n)
 }
 
 func (s *Source) Ack(ctx context.Context, _ opencdc.Position) error {
@@ -316,8 +327,8 @@ func ParseRule(rule string) (Action, string, error) {
 	return action, rule, nil // Return action and regex (without the action prefix)
 }
 
-func (s *Source) getTableKeys(ctx context.Context, dbName string) (map[string]common.PrimaryKeys, error) {
-	tableKeys := make(map[string]common.PrimaryKeys)
+func (s *Source) getTableKeys(ctx context.Context, dbName string) (common.TableKeys, error) {
+	tableKeys := make(common.TableKeys)
 
 	for _, table := range s.config.Tables {
 		preconfiguredTableKey, ok := s.config.TableConfig[table]

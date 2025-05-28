@@ -56,11 +56,10 @@ type (
 	}
 	snapshotIteratorConfig struct {
 		db               *sqlx.DB
-		tablePrimaryKeys map[string]common.PrimaryKeys
+		tablePrimaryKeys common.TableKeys
 		fetchSize        uint64
 		startPosition    *common.SnapshotPosition
 		database         string
-		tables           []string
 		serverID         string
 	}
 )
@@ -79,8 +78,8 @@ func (config *snapshotIteratorConfig) validate() error {
 	if config.database == "" {
 		return fmt.Errorf("database is required")
 	}
-	if len(config.tables) == 0 {
-		return fmt.Errorf("tables is required")
+	if len(config.tablePrimaryKeys) == 0 {
+		return fmt.Errorf("tablePrimaryKeys is required")
 	}
 
 	return nil
@@ -147,29 +146,48 @@ func (s *snapshotIterator) start(ctx context.Context) {
 	}
 }
 
-func (s *snapshotIterator) Read(ctx context.Context) (rec opencdc.Record, err error) {
+func (s *snapshotIterator) ReadN(ctx context.Context, n int) ([]opencdc.Record, error) {
 	if len(s.workers) == 0 {
-		return rec, ErrSnapshotIteratorDone
+		return nil, ErrSnapshotIteratorDone
 	}
 
+	var recs []opencdc.Record
+
+	// block until we get at least one record or context is done
 	select {
 	case <-ctx.Done():
 		//nolint:wrapcheck // no need to wrap canceled error
-		return rec, ctx.Err()
+		return nil, ctx.Err()
 	case <-s.t.Dead():
 		if err := s.t.Err(); err != nil && !errors.Is(err, ErrSnapshotIteratorDone) {
-			return rec, fmt.Errorf(
+			return nil, fmt.Errorf(
 				"cannot stop snapshot mode, fetchers exited unexpectedly: %w", err)
 		}
 		if err := s.acks.Wait(ctx); err != nil {
-			return rec, fmt.Errorf("failed to wait for acks on snapshot iterator done: %w", err)
+			return nil, fmt.Errorf("failed to wait for acks on snapshot iterator done: %w", err)
 		}
-
-		return rec, ErrSnapshotIteratorDone
+		return nil, ErrSnapshotIteratorDone
 	case data := <-s.data:
 		s.acks.Add(1)
-		return s.buildRecord(data), nil
+		recs = append(recs, s.buildRecord(data))
 	}
+
+	// get the remaining n-1 records is available
+	for len(recs) < n {
+		select {
+		case data := <-s.data:
+			s.acks.Add(1)
+			recs = append(recs, s.buildRecord(data))
+		case <-ctx.Done():
+			//nolint:wrapcheck // no need to wrap canceled error
+			return nil, ctx.Err()
+		default:
+			// no more data available now
+			return recs, nil
+		}
+	}
+
+	return recs, nil
 }
 
 func (s *snapshotIterator) Ack(context.Context, opencdc.Position) error {

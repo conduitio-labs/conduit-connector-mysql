@@ -356,7 +356,7 @@ func assertSchema(ctx context.Context, is *is.I, metadata opencdc.Metadata) {
 	}
 }
 
-func newCanal(ctx context.Context, is *is.I, tablename string) *canal.Canal {
+func newCanal(ctx context.Context, is *is.I, tablename string) *common.Canal {
 	is.Helper()
 
 	config, err := mysql.ParseDSN(DSN)

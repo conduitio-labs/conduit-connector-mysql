@@ -6,7 +6,7 @@ require (
 	github.com/Masterminds/squirrel v1.5.4
 	github.com/conduitio/conduit-commons v0.6.0
 	github.com/conduitio/conduit-connector-sdk v0.14.1
-	github.com/go-mysql-org/go-mysql v1.12.0
+	github.com/go-mysql-org/go-mysql v1.13.0
 	github.com/go-sql-driver/mysql v1.9.3
 	github.com/google/go-cmp v0.7.0
 	github.com/hamba/avro/v2 v2.29.0
@@ -21,7 +21,6 @@ require (
 
 require (
 	dario.cat/mergo v1.0.1 // indirect
-	github.com/Masterminds/semver v1.5.0 // indirect
 	github.com/alingse/nilnesserr v0.1.2 // indirect
 	github.com/conduitio/evolviconf v0.1.0 // indirect
 	github.com/conduitio/evolviconf/evolviyaml v0.1.0 // indirect
@@ -41,10 +40,10 @@ require (
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
-	github.com/pingcap/errors v0.11.5-0.20240311024730-e056997136bb // indirect
+	github.com/pingcap/errors v0.11.5-0.20250318082626-8f80e5cb09ec // indirect
 	github.com/pingcap/failpoint v0.0.0-20240528011301-b51a646c7c86 // indirect
-	github.com/pingcap/log v1.1.1-0.20230317032135-a0d097d16e22 // indirect
-	github.com/pingcap/tidb/pkg/parser v0.0.0-20241118164214-4f047be191be // indirect
+	github.com/pingcap/log v1.1.1-0.20241212030209-7e3ff8601a2a // indirect
+	github.com/pingcap/tidb/pkg/parser v0.0.0-20250421232622-526b2c79173d // indirect
 	github.com/raeperd/recvcheck v0.2.0 // indirect
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
 	github.com/samber/lo v1.47.0 // indirect

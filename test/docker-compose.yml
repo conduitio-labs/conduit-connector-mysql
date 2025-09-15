@@ -3,7 +3,7 @@ networks:
     driver: bridge
 
 services:
-  db:
+  mysql:
     container_name: mysql_db
     image: mysql:8.0.39
     environment:
@@ -21,14 +21,24 @@ services:
       timeout: 20s
       retries: 30
 
-  # Adminer is a web-based SQL management tool. Useful on development
-  adminer:
-    container_name: adminer_ui
-    image: adminer
-    restart: always
-    ports:
-      - 8888:8080
+  mariadb:
+    container_name: mariadb_db
+    image: mariadb:11.4
     environment:
-      ADMINER_DEFAULT_SERVER: mysql_db
+      MARIADB_DATABASE: meroxadb
+      MARIADB_USER: meroxauser
+      MARIADB_PASSWORD: meroxapass
+      MARIADB_ROOT_PASSWORD: meroxaadmin
+    ports:
+      - '3306:3306'
     networks:
       - main
+    command: >-
+      --binlog-format=ROW
+      --log-bin=mysql-bin
+      --server-id=1
+    healthcheck:
+      test: ['CMD', 'mariadb-admin', 'ping', '-h', 'localhost']
+      interval: 1s
+      timeout: 20s
+      retries: 30

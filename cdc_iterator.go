@@ -33,7 +33,7 @@ import (
 
 type cdcIterator struct {
 	config   cdcIteratorConfig
-	canal    *canal.Canal
+	canal    *common.Canal
 	position *common.CdcPosition
 
 	canalDoneC     chan struct{}
@@ -51,10 +51,17 @@ type cdcIteratorConfig struct {
 }
 
 func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (*cdcIterator, error) {
+	var version string
+	err := config.db.QueryRowContext(ctx, "SELECT VERSION()").Scan(&version)
+	if err != nil {
+		return nil, fmt.Errorf("failed to detect database version: %w", err)
+	}
+
 	canal, err := common.NewCanal(ctx, common.CanalConfig{
 		Config:         config.mysqlConfig,
 		Tables:         config.tables,
 		DisableLogging: config.disableCanalLogging,
+		Version:        version,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to start canal at combined iterator: %w", err)
@@ -70,7 +77,7 @@ func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (*cdcIterator
 	}, nil
 }
 
-func (c *cdcIterator) obtainStartPosition() error {
+func (c *cdcIterator) obtainStartPosition() (err error) {
 	masterPos, err := c.canal.GetMasterPos()
 	if err != nil {
 		return fmt.Errorf("failed to get mysql master position after acquiring locks: %w", err)
@@ -209,7 +216,7 @@ type onRowChangeFn func(rowEvent) ([]opencdc.Record, error)
 
 type cdcEventHandler struct {
 	canal.DummyEventHandler
-	canal *canal.Canal
+	canal *common.Canal
 
 	canalDoneC     chan struct{}
 	parsedRecordsC chan opencdc.Record
@@ -221,7 +228,7 @@ type cdcEventHandler struct {
 
 func newCdcEventHandler(
 	ctx context.Context,
-	canal *canal.Canal,
+	canal *common.Canal,
 	canalDoneC chan struct{},
 	parsedRecordsC chan opencdc.Record,
 	tablesPrimaryKeys common.TableKeys,

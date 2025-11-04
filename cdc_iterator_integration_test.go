@@ -230,7 +230,7 @@ func TestCDCIterator_MultiUpdateAction(t *testing.T) {
 		Error,
 	)
 
-	for i := 0; i < len(users); i++ {
+	for i := range users {
 		testutils.ReadAndAssertUpdate(ctx, is, iterator, *users[i], *modifiedUsers[i])
 	}
 }

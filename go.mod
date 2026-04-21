@@ -12,7 +12,7 @@ require (
 	github.com/hamba/avro/v2 v2.31.0
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/matryer/is v1.4.1
-	github.com/rs/zerolog v1.35.0
+	github.com/rs/zerolog v1.35.1
 	go.uber.org/goleak v1.3.0
 	gopkg.in/tomb.v2 v2.0.0-20161208151619-d5d1b5820637
 	gorm.io/driver/mysql v1.6.0

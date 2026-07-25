@@ -81,6 +81,92 @@ type cdcIterator struct {
 	// context is request-scoped and not appropriate for a background goroutine
 	// that outlives the Ack call).
 	coldStartCtx context.Context //nolint:containedctx // see comment above
+
+	// runGate coordinates the race between launching binlog replication and
+	// tearing the iterator down. See cdcRunGate's doc comment.
+	runGate cdcRunGate
+}
+
+// cdcRunGate makes two things true about launching binlog replication
+// (canal.SetEventHandler + canal.RunFrom) versus tearing the iterator down
+// (canal.Close):
+//
+//  1. canal.SetEventHandler must never run concurrently with canal.Close.
+//     Confirmed at the vendored library level (go-mysql-org/go-mysql@v1.14.0):
+//     SetEventHandler (handler.go:67, "c.eventHandler = h") is an
+//     unsynchronized field write, while Close (canal.go:258-273) reads that
+//     same field under its own internal lock
+//     ("c.eventHandler.OnPosSynced(...)"). Concurrent calls are a genuine data
+//     race.
+//  2. Teardown must never block waiting for a launch that will never happen.
+//     Pre-cold-start, start() always launched replication unconditionally at
+//     iterator construction, long before Teardown could possibly run, so
+//     waiting was always safe. Cold start broke that invariant: launching is
+//     deferred to Ack (once the checkpoint record is acked), which may never
+//     come - destination down, pipeline stopped early - and Ack can race a
+//     concurrent, graceful Teardown.
+//
+// Both are achieved with a single mutex: setup (SetEventHandler) and close
+// (Close) are only ever invoked from inside tryLaunch/launchUnconditionally
+// and teardown respectively, all while holding the same lock, so they can
+// never overlap in time regardless of call order. teardown() itself never
+// blocks - it only reports whether a launch was committed to, so the caller
+// (cdcIterator.Teardown) knows whether it's safe (and necessary) to wait for
+// replication to actually stop.
+//
+// It is deliberately canal-independent (setup/close are passed in as
+// closures) so this concurrency behavior can be unit-tested under -race
+// without a live MySQL connection, which constructing a real *canal.Canal
+// requires - see cdc_run_gate_test.go.
+type cdcRunGate struct {
+	mu       sync.Mutex
+	tornDown bool
+	launched bool
+}
+
+// tryLaunch attempts to commit to a launch. If teardown has already run (or is
+// running), it returns false and setup is never called - not launching is
+// always a safe, lossless choice for the cold-start caller (see Ack). Otherwise
+// it marks the gate launched and calls setup while still holding the lock, and
+// returns true.
+func (g *cdcRunGate) tryLaunch(setup func()) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if g.tornDown {
+		return false
+	}
+	g.launched = true
+	setup()
+	return true
+}
+
+// launchUnconditionally marks the gate launched and calls setup while holding
+// the lock, without checking tornDown. Use only when the caller is guaranteed
+// to run before teardown can possibly be invoked (iterator construction). It
+// always returns true; the return value exists so it can be used interchangeably
+// with tryLaunch (see runFrom's commit parameter).
+func (g *cdcRunGate) launchUnconditionally(setup func()) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	g.launched = true
+	setup()
+	return true
+}
+
+// teardown marks the gate torn down - so no future tryLaunch call can ever
+// launch anything - and calls closeFn while holding the same lock used by
+// tryLaunch/launchUnconditionally's setup, so the two can never run
+// concurrently. It returns whether a launch was committed to, so the caller
+// knows whether to wait for it to finish.
+func (g *cdcRunGate) teardown(closeFn func()) (launched bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	g.tornDown = true
+	closeFn()
+	return g.launched
 }
 
 type cdcIteratorConfig struct {
@@ -131,8 +217,13 @@ func (c *cdcIterator) obtainStartPosition() error {
 // start begins binlog replication immediately from the iterator's start position
 // (set by obtainStartPosition, or seeded from a persisted position). Use this for
 // every case except a true CDC cold start; see startColdStart for that case.
+//
+// start is only ever called synchronously during iterator construction, well
+// before Teardown can run, so it launches unconditionally (unlike the
+// cold-start Ack path, there is no race with Teardown to guard against here -
+// see runGate).
 func (c *cdcIterator) start(ctx context.Context) error {
-	return c.runFrom(ctx)
+	return c.runFrom(ctx, c.runGate.launchUnconditionally)
 }
 
 // startColdStart handles CDC starting with no persisted or snapshot-carried P0
@@ -179,10 +270,18 @@ func (c *cdcIterator) startColdStart(ctx context.Context) error {
 }
 
 // runFrom launches binlog replication in the background from the iterator's
-// current start position. It is the shared implementation behind start (called
-// immediately) and the cold-start Ack handler (called once the checkpoint record
-// is acked).
-func (c *cdcIterator) runFrom(ctx context.Context) error {
+// current start position. It is the shared implementation behind start
+// (commit = runGate.launchUnconditionally: always safe, called synchronously at
+// construction) and the cold-start Ack handler (commit = runGate.tryLaunch:
+// must check whether Teardown has already run - see Ack).
+//
+// SetEventHandler is called synchronously, from inside commit, before this
+// function spawns any goroutine - not deferred into the background goroutine.
+// That gives Teardown a clean happens-before boundary: by the time runFrom
+// returns, SetEventHandler has either already run (commit returned true) or
+// never will (commit returned false; see runGate). Only the actual blocking
+// replication call (canal.RunFrom) happens in the background.
+func (c *cdcIterator) runFrom(ctx context.Context, commit func(setup func()) bool) error {
 	startPosition, err := c.getStartPosition()
 	if err != nil {
 		return fmt.Errorf("failed to get start position: %w", err)
@@ -197,9 +296,16 @@ func (c *cdcIterator) runFrom(ctx context.Context) error {
 		startPosition,
 	)
 
-	go func() {
+	launched := commit(func() {
 		c.canal.SetEventHandler(eventHandler)
+	})
+	if !launched {
+		// Teardown has already run (or is running); see cdcRunGate. Nothing was
+		// read past P0, so this is a safe, lossless no-op - not an error.
+		return nil
+	}
 
+	go func() {
 		// We need to run canal from Previous position to be sure
 		// we didn't lose any record from multi-row mysql replication
 		// event.
@@ -245,7 +351,14 @@ func (c *cdcIterator) Ack(_ context.Context, _ opencdc.Position) error {
 	}
 
 	c.checkpointAckOnce.Do(func() {
-		c.checkpointAckErr = c.runFrom(c.coldStartCtx)
+		// runGate.tryLaunch checks whether Teardown has already run before
+		// committing to a launch - see cdcRunGate's doc comment. If it hasn't,
+		// runFrom returns (false, nil): nothing was read past P0 (replication
+		// never launched), which is a lossless outcome, not an error - a restart
+		// simply re-runs cold start and re-captures P0. A real failure (e.g.
+		// getStartPosition erroring) is reported via err regardless of launched,
+		// so it is never swallowed alongside the torn-down case.
+		c.checkpointAckErr = c.runFrom(c.coldStartCtx, c.runGate.tryLaunch)
 		close(c.checkpointAckedC)
 	})
 	if c.checkpointAckErr != nil {
@@ -316,10 +429,17 @@ func (c *cdcIterator) ReadN(ctx context.Context, n int) ([]opencdc.Record, error
 // no timeout: advancing without a durable P0 would reopen the exact data-loss
 // window this fix closes. See the Open questions / Decision log in
 // docs/design-documents/20260724-snapshot-cdc-position-handoff.md.
+//
+// It also unblocks on canalDoneC, which Teardown always closes as its first
+// action regardless of whether the checkpoint was ever acked: if the pipeline
+// stops gracefully while the checkpoint is still pending, this goroutine must
+// not leak waiting for an ack that will now never come.
 func (c *cdcIterator) waitForCheckpointAck(ctx context.Context) error {
 	select {
 	case <-c.checkpointAckedC:
 		return nil
+	case <-c.canalDoneC:
+		return fmt.Errorf("canal is closed")
 	default:
 	}
 
@@ -333,6 +453,8 @@ func (c *cdcIterator) waitForCheckpointAck(ctx context.Context) error {
 			return ctx.Err()
 		case <-c.checkpointAckedC:
 			return nil
+		case <-c.canalDoneC:
+			return fmt.Errorf("canal is closed")
 		case <-ticker.C:
 			sdk.Logger(ctx).Warn().
 				Str("binlog_file", c.position.Name).
@@ -374,10 +496,34 @@ func (c *cdcIterator) wrapCanalRunErr() error {
 		ErrCDCStartPositionUnavailable, name, pos, err)
 }
 
+// Teardown stops the iterator. On a cold start, runFrom may never have been
+// launched (the checkpoint record was never acked - e.g. the destination was
+// down, or the pipeline was stopped early). Two things must hold in that case:
+//
+//   - Teardown must not hang: it must not wait on canalRunDoneC, since nothing
+//     will ever close it if no goroutine was launched to do so.
+//   - canal.Close() must never run concurrently with the runFrom goroutine's
+//     SetEventHandler call (see the mu doc comment on cdcIterator) - so
+//     tornDown/runFromLaunched are read and written, and canal.Close() is
+//     called, all under the same mu that guards SetEventHandler.
 func (c *cdcIterator) Teardown(ctx context.Context) error {
+	// Unblocks any goroutine parked in ReadN/waitForCheckpointAck waiting on a
+	// checkpoint ack that will now never come, regardless of the launched/
+	// tornDown outcome below.
 	close(c.canalDoneC)
 
-	c.canal.Close()
+	// runGate.teardown never blocks; it reports whether a launch was (or, since
+	// tornDown is now set, ever will be) committed to - see cdcRunGate's doc
+	// comment.
+	launched := c.runGate.teardown(c.canal.Close)
+
+	if !launched {
+		// runFrom was never launched and never will be. There is nothing that
+		// will close canalRunDoneC, so don't wait on it - doing so would hang
+		// forever.
+		return nil
+	}
+
 	select {
 	case <-ctx.Done():
 		//nolint:wrapcheck // no need to wrap canceled error

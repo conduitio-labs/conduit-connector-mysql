@@ -30,6 +30,7 @@ package mysql
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -463,4 +464,66 @@ func TestCrash_SnapshotDisabled_ColdStart(t *testing.T) {
 		is.True(rec.Operation != opencdc.OperationSnapshot)
 	}
 	is.True(hasRecordFor(all, opencdc.OperationCreate, 2))
+}
+
+// teardownBoundedTimeout is how long TestCrash_ColdStart_GracefulTeardownWhileCheckpointUnacked
+// gives Source.Teardown to return before declaring a hang. It must comfortably
+// exceed any legitimate I/O Teardown does (closing a DB connection, a canal
+// connection) while still catching a real hang quickly.
+const teardownBoundedTimeout = 10 * time.Second
+
+// TestCrash_ColdStart_GracefulTeardownWhileCheckpointUnacked is the end-to-end
+// regression test for the Teardown/Ack race found in adversarial review of this
+// fix (issue #180): on a cold start, if the pipeline stops *gracefully* (calls
+// Teardown, not a hard kill) while the synthetic checkpoint record is still
+// unacked, runFrom was never launched. Pre-fix (before cdcRunGate),
+// cdcIterator.Teardown waited unconditionally on canalRunDoneC - which nothing
+// would ever close - and would hang forever. This test asserts Teardown returns
+// within a bounded timeout, and that a concurrent, racing Ack does not trip the
+// race detector (run this test with -race).
+func TestCrash_ColdStart_GracefulTeardownWhileCheckpointUnacked(t *testing.T) {
+	ctx := testutils.TestContext(t)
+	is := is.New(t)
+
+	db := testutils.NewDB(t)
+	testutils.CreateTables(is, db, &crashRow{})
+	tableName := testutils.TableName(is, db, &crashRow{})
+	// Empty table: snapshot enabled, zero rows -> cold start.
+
+	cfg := map[string]string{"tables": tableName}
+
+	source := testSourceOpen(ctx, is, cfg, nil)
+
+	// Read the checkpoint but deliberately do not ack it yet - simulating the
+	// destination being down, or the pipeline being stopped before the first
+	// ack round-trip completes.
+	recs, err := source.ReadN(ctx, 1)
+	is.NoErr(err)
+	is.True(len(recs) == 1)
+	checkpointPos := recs[0].Position
+
+	// Race a late Ack (as if the destination came back and acked right at
+	// shutdown) against Teardown. Whichever wins, Teardown must not hang and
+	// nothing must trip the race detector.
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_ = source.Ack(ctx, checkpointPos)
+	}()
+
+	teardownDone := make(chan error, 1)
+	go func() {
+		teardownDone <- source.Teardown(ctx)
+	}()
+
+	select {
+	case err := <-teardownDone:
+		is.NoErr(err)
+	case <-time.After(teardownBoundedTimeout):
+		t.Fatal("Source.Teardown hung while the cold-start checkpoint was unacked " +
+			"(or racing a late ack) - this is the bug found in review")
+	}
+
+	wg.Wait()
 }

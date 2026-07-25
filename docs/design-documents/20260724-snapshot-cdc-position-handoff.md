@@ -18,6 +18,15 @@ from the binlog. Replay produces duplicates for already-copied rows, which is ac
 at-least-once floor. The position change is additive and backward compatible for upgrade; a
 mid-snapshot **downgrade** reintroduces the pre-fix behavior and is called out as unsafe.
 
+Per DeVaris's 2026-07-24 sign-off, two amendments are folded in. First, the same durability gap on
+**CDC cold-start** (empty snapshot or `snapshot.enabled=false`) is closed by emitting one synthetic
+checkpoint record carrying `P0` at cold-start and not advancing the binlog read past `P0` until that
+record is acked — the SDK offers no position-only checkpoint, so a real record is the only durable
+channel; its downstream visibility is a flagged maintainer tradeoff. Second, a hard `Version` field
+is added to the `Position` envelope: a position whose version exceeds the connector's max-known
+version is refused with a stable error code, making a future downgrade detectable rather than
+silently lossy (forward-looking from this release onward).
+
 ## Context
 
 ### The non-transactional snapshot makes `P0` load-bearing
@@ -90,31 +99,39 @@ The bug is confined to the snapshot phase and the snapshot to CDC handoff.
 
 - Guarantee at-least-once delivery across a mid-snapshot restart (uphold Invariant 3).
 - Persist `P0` durably for the entire snapshot phase so restart resumes CDC from `P0`.
+- **Close the CDC cold-start durability gap too** (empty snapshot and `snapshot.enabled=false`): a
+  crash before the first CDC record is acked must not lose the `(P0, restart]` window.
 - Keep the position format readable by version N and N+1 (additive, backward compatible on upgrade).
+- **Add a `Position` envelope version field** so a future higher-versioned position is detected and
+  refused on downgrade rather than silently mis-read.
 - Preserve `P0` through position `Clone()` so the *resumed* snapshot keeps stamping it (no
   second-crash regression).
 - Convert the expired-binlog resume from a silent stall into a loud fail-stop with a stable error
   code, since persist-`P0` heightens expired-binlog exposure on resume.
-- Ship the SIGKILL-mid-snapshot regression test (and a double-crash variant) that would have caught
-  this.
+- Ship the regression tests that would have caught this: SIGKILL-mid-snapshot, double-crash, and
+  cold-start (kill before first CDC ack).
 
 **Non-goals**
 
 - Making the snapshot transactional / removing the reliance on CDC replay (see Alternative A).
 - Eliminating duplicate delivery on resume — duplicates are acceptable under at-least-once and are
   the safe trade against a gap.
-- Fixing the separate "CDC cold-start position durability" gap when the snapshot yields zero records
-  or is disabled (see Failure modes). That is a distinct ticket.
-- Any change to `conduit-connector-protocol` or the opencdc record shape.
+- Any change to `conduit-connector-protocol` or the opencdc record shape (the cold-start checkpoint
+  reuses an existing opencdc operation; see the Cold-start subsection).
 
 ## Constraints
 
 - MySQL `GetMasterPos()` returns a single server-wide binlog coordinate; there is no per-table
   binlog position. `P0` is global to the instance.
-- Conduit persists the position of **acked** records only. To persist `P0` throughout the snapshot,
-  every snapshot record must carry it (there is no side channel to persist a bare position).
-- The opencdc `Position` has no envelope version field today (`common/position.go:33-36`); evolution
-  is by additive, `omitempty` JSON fields. Adding a hard version field is a heavier, separate change.
+- MySQL binlog replication has **no server-side cursor/slot**. Unlike Postgres logical replication —
+  whose replication slot persists `confirmed_flush_lsn` server-side, so the server anchors the
+  resume position and there is no cold-start gap — the MySQL connector is *solely* responsible for
+  durably persisting its binlog position. This is the structural reason the cold-start gap exists
+  here and not in the Postgres connector.
+- Conduit persists the position of **acked** records only. The SDK `Source` interface is
+  `Open`/`ReadN`/`Ack`/`Teardown` (SDK v0.14.1 `source.go:45-100`) — there is **no** position-only
+  checkpoint, heartbeat, or side channel. To persist any position (including `P0`), a record
+  carrying it must be emitted and acked. This constrains the cold-start fix (see below).
 - Binlog retention is finite. Resuming from `P0` requires `P0`'s binlog file to still exist.
 - Changing serialized position format is Tier-1: it must round-trip across N/N+1 with an
   upgrade/downgrade test (CLAUDE.md data-integrity discipline).
@@ -165,9 +182,23 @@ subsystem. Rejected as speculative complexity (YAGNI) for no correctness gain ov
 Embed the captured CDC start position `P0` in every snapshot record's position, and seed the CDC
 iterator from it on restart.
 
-**Position type.** Add an optional field to `SnapshotPosition` (`common/position.go`):
+**Position type.** Add an envelope `Version` field to `Position` and an optional `CDCStart` field to
+`SnapshotPosition` (`common/position.go`):
 
 ```go
+// CurrentPositionVersion is the version stamped on every position this connector
+// writes. Bump it whenever a position-format change is not safely readable by the
+// previous reader. Absent/0 on read means a legacy pre-version position (treat as v1).
+const CurrentPositionVersion = 1
+
+type Position struct {
+    // Version is the position-envelope format version. 0/absent = legacy. A reader
+    // refuses any Version greater than CurrentPositionVersion (see restart seeding).
+    Version          int               `json:"version,omitempty"`
+    SnapshotPosition *SnapshotPosition `json:"snapshot_position,omitempty"`
+    CdcPosition      *CdcPosition      `json:"cdc_position,omitempty"`
+}
+
 type SnapshotPosition struct {
     Snapshots SnapshotPositions `json:"snapshots,omitempty"`
 
@@ -193,7 +224,30 @@ window in which `LastRead` is persisted without `cdc_start`. Because `P0` is cap
 (before workers start) and `buildRecord` runs only after `start`, this ordering holds by
 construction; it is asserted in code and covered by a test.
 
-**Restart seeding.** In `Source.Open` (`source.go:158-172`), after parsing the position:
+**Writers stamp the version.** Both `SnapshotPosition.ToSDKPosition` and `CdcPosition.ToSDKPosition`
+(`common/position.go:42-49`, `:112-119`) set `Version = CurrentPositionVersion` on the `Position`
+they marshal, so every position this connector writes is version-stamped. `cdc_start` stays
+`omitempty`, so the wire size for CDC positions is unchanged.
+
+**Version gate on read.** `ParseSDKPosition` (`common/position.go:58-64`) is the single parse
+chokepoint. After unmarshalling, it enforces the version:
+
+- `Version == 0` (absent) -> legacy pre-version position; proceed on the legacy path (a snapshot
+  position without `cdc_start` falls back to `obtainStartPosition`, as today).
+- `1 <= Version <= CurrentPositionVersion` -> parse normally.
+- `Version > CurrentPositionVersion` -> **refuse** with a stable error code
+  (`ErrPositionVersionUnsupported`), reporting the found and max-known versions and the fix (upgrade
+  the connector). Do not silently proceed. This is what makes a *future* downgrade detectable.
+
+Honest scope of the version field: it cannot catch the **current** N -> N+1 downgrade, because
+version-N connectors predate the field and simply ignore the unknown `version` key. Its value is
+forward-looking: from this version-aware release (call it N+1) onward, if a later release N+2 writes
+`Version = 2` and the pipeline is rolled back to N+1, N+1 refuses the N+2 position instead of
+mis-reading it. The benefit begins at N+1; it is not retroactive. Stated plainly so it is not
+overclaimed.
+
+**Restart seeding.** In `Source.Open` (`source.go:158-172`), after `ParseSDKPosition` (which has
+already applied the version gate above):
 
 - `pos.CdcPosition != nil` -> steady-state CDC; pass `startCdcPosition = pos.CdcPosition` (unchanged).
 - else if `pos.SnapshotPosition != nil && pos.SnapshotPosition.CDCStart != nil` -> mid-snapshot
@@ -244,18 +298,86 @@ persist-`P0` increases the odds of hitting a purged binlog on resume; that is mi
 clean fail-stop and (b) the observability signal below (resume-from-`P0` age vs. binlog retention),
 so operators can size retention against expected downtime.
 
+### CDC cold-start durability (empty snapshot / `snapshot.enabled=false`)
+
+**The gap.** When there is no snapshot phase to carry `P0` — every table empty, or
+`snapshot.enabled=false` — the connector captures `P0` (`getStartPosition` -> current master,
+`cdc_iterator.go:121-138`) but persists nothing until the first CDC record is acked. If events
+occur in `(P0, restart]` and the process crashes before that first ack, the persisted position is
+`nil`, restart takes a fresh master `P1 > P0`, and the intervening events are lost. (If the DB is
+idle so no events occur, there is nothing to lose — the gap only bites when events happened but
+were not acked.) This is the same corruption class as the primary bug, so per DeVaris's sign-off it
+is fixed here, not deferred.
+
+**Why the snapshot fix doesn't cover it.** The snapshot fix tolerates a crash before the first ack
+because a `nil` position triggers a *full re-snapshot* that re-anchors a fresh `P0'` and re-reads
+every row — nothing is lost. CDC has no "re-read from scratch": a fresh master **skips** history, it
+cannot recover it. So cold-start needs `P0` durable **before** the read advances past `P0`.
+
+**What the SDK supports.** Investigated SDK v0.14.1: the `Source` interface is
+`Open`/`ReadN`/`Ack`/`Teardown` (`source.go:45-100`); there is no position-only checkpoint,
+heartbeat, or open-with-position-write hook, and no such mechanism in the source middleware. The
+**only** way to persist a position is to emit a record and have it acked. (Contrast Postgres, whose
+server-side replication slot anchors the LSN and needs no such record — see Constraints.)
+
+**Mechanism (chosen): synthetic checkpoint record, gated on its own ack.** At CDC cold-start (only
+when starting from no CDC position), before calling `canal.RunFrom`:
+
+1. Capture `P0 = GetMasterPos()`.
+2. Emit exactly one **synthetic checkpoint record** whose `Position` is a `CdcPosition = P0`
+   (so a later restart sees `pos.CdcPosition != nil` and takes the ordinary steady-state
+   resume-from-`P0` path — no second synthetic record is emitted on resume).
+3. **Do not start `canal.RunFrom(P0)` until that record is acked.** Gating the binlog advance on the
+   ack is what closes the window: until `P0` is durable, the connector has not read past `P0`, so a
+   crash simply re-captures a fresh `P0'` on restart with nothing lost. Only after the ack does the
+   read advance, and by then `P0` is the durable floor.
+
+Invariant comment to add at the gate site:
+
+```go
+// Invariant 3: on CDC cold-start, persist P0 (via the checkpoint record's ack)
+// BEFORE advancing the binlog read past P0. A fresh master position cannot recover
+// binlog history it skips, so the read must not advance until P0 is durable.
+```
+
+Analysis of the lighter alternative (set the *first real* CDC record's position to resume-from-`P0`
+instead of a synthetic record): it leaves a **real** residual sub-window. Events can be read and
+emitted but not yet acked when the crash hits; with no acked record the position is `nil` and
+restart jumps to a fresh master, losing them. Because there is no re-read fallback, that residual is
+data loss, not duplicates — so this option is *not* correct, and is rejected. Only gating the read
+on a durable `P0` (the synthetic-record approach) is correct.
+
+**FLAGGED MAINTAINER DECISION — the synthetic record is downstream-visible.** The SDK has no
+position-only channel, so the checkpoint is a real record that flows to the destination. It reuses
+an existing opencdc operation (no protocol/record-shape change) and is marked with a distinguishing
+metadata key (e.g. `mysql.checkpoint=true`) with an empty/tombstone payload and a synthetic key.
+Consequences DeVaris must accept explicitly:
+
+- Destinations and processors must **tolerate** one such record per cold-start (empty payload,
+  synthetic key). Strict-schema destinations may reject it; a downstream filter on the metadata key
+  is the mitigation.
+- It appears once per cold-start (once per pipeline lifetime in the common case), not per record.
+- The gate adds one ack round-trip of latency at cold-start (only). If the destination never acks
+  (e.g. down), cold-start blocks — correct (no data at risk, no false progress) but must be logged
+  clearly. See Open questions.
+
+If DeVaris prefers zero stream pollution over closing this specific window, the fallback is to keep
+cold-start as a documented known-gap and pursue an SDK position-only-checkpoint feature separately;
+that is the alternative the flag exists to surface. Chosen default: close the gap now with the
+synthetic record.
+
 ## Position format change and migration
 
 This is a serialized-format change and is the Tier-1-critical part of this design.
 
-**Shape of the change.** Additive: one new optional field, `cdc_start`, on `SnapshotPosition`, marked
-`omitempty`. No existing field changes type, name, or meaning. No envelope version field is
-introduced (the `Position` struct has none today); evolution follows the connector's existing
-additive-JSON convention.
+**Shape of the change.** Two additive fields: an envelope `version` on `Position` and an optional
+`cdc_start` on `SnapshotPosition`, both `omitempty`. No existing field changes type, name, or
+meaning. The current writer stamps `version = CurrentPositionVersion` (= 1) on every position.
 
 **Forward compatibility (N reads N+1's position).** A version-N connector deserializes an N+1
-snapshot position with `encoding/json`; the unknown `cdc_start` key is ignored, and N behaves exactly
-as it does today. No parse error, no crash.
+position with `encoding/json`; the unknown `cdc_start` and `version` keys are ignored, and N behaves
+exactly as it does today. No parse error, no crash. (N has no version gate, so it cannot *refuse* —
+see the honest scope note in Decision.)
 
 **Backward compatibility (N+1 reads N's position).** An N-written snapshot position has no
 `cdc_start`; `pos.SnapshotPosition.CDCStart` unmarshals to `nil`. N+1 falls back to
@@ -279,11 +401,16 @@ snapshot complete and CDC begin first, or re-snapshot afterward.
 
 **Upgrade/downgrade test (release gate).** Add a serialization compat test:
 
-1. Marshal an N+1 snapshot position with `cdc_start` populated; unmarshal it with the N-shaped struct
-   (no `CDCStart` field) and assert no error and that the snapshot fields are intact.
-2. Marshal an N-shaped snapshot position (no `cdc_start`); unmarshal with N+1's struct and assert
-   `CDCStart == nil` and that N+1's restart path falls back to `obtainStartPosition`.
-3. Golden-file round-trip: a stored N position JSON and a stored N+1 position JSON both deserialize
+1. Marshal an N+1 snapshot position with `cdc_start` + `version` populated; unmarshal it with the
+   N-shaped struct (no `CDCStart`/`Version` fields) and assert no error and that the snapshot fields
+   are intact (proves N tolerates the additive fields).
+2. Marshal an N-shaped snapshot position (no `cdc_start`, no `version`); unmarshal with N+1's struct
+   and assert `Version == 0` (legacy), `CDCStart == nil`, and that N+1's restart path falls back to
+   `obtainStartPosition`.
+3. **Version-refusal path:** hand `ParseSDKPosition` a position with `version =
+   CurrentPositionVersion + 1` and assert it returns `ErrPositionVersionUnsupported` (not a silent
+   parse). This is the downgrade-detection guarantee.
+4. Golden-file round-trip: a stored N position JSON and a stored N+1 position JSON both deserialize
    under N+1 to the expected `Position`, guarding against accidental field renames.
 
 ## Failure modes
@@ -310,17 +437,15 @@ captures `P0` under the lock. Non-empty tables carry `cdc_start` on their record
 
 **All tables empty / snapshot yields zero records.** With every table empty, `len(workers) == 0` and
 `ReadN` returns `ErrSnapshotIteratorDone` immediately (`snapshot_iterator.go:149-152`) — no snapshot
-record is ever emitted, so `cdc_start` is never persisted. `P0` still lives in memory for the running
-process, so there is no loss unless the process is restarted after the empty-snapshot transition but
-before the first CDC record is acked. That residual window is identical to the snapshot-disabled case
-below and is the separate "CDC cold-start durability" concern — out of scope here, noted so it is not
-mistaken for this bug.
+record carries `cdc_start`. This is a **CDC cold-start**, now covered by the cold-start mechanism:
+the connector emits a synthetic checkpoint record carrying `P0` and gates `canal.RunFrom(P0)` on its
+ack, so a crash before the first CDC ack re-captures a fresh `P0'` with nothing lost, and once the
+checkpoint is acked `P0` is the durable floor. Fixed, not a caveat.
 
 **Snapshot disabled (`snapshot.enabled=false`).** No snapshot phase; the connector goes straight to
-CDC and `getStartPosition` takes the current master position (`cdc_iterator.go:121-138`). There is no
-snapshot gap because nothing was copied. There is still a pre-existing CDC-cold-start race (a crash
-before the first CDC ack recaptures a fresh master), which this design does not address and does not
-worsen.
+CDC (`getStartPosition` -> current master, `cdc_iterator.go:121-138`). Same CDC cold-start as above:
+the synthetic checkpoint carrying `P0`, gated on its ack, closes the `(P0, restart]` window that a
+crash-before-first-ack would otherwise lose. Fixed.
 
 **Multi-table.** `P0` is a single server-wide coordinate stored once at `SnapshotPosition.CDCStart`,
 not per table. Each table resumes from its own `LastRead`; one CDC stream seeds from the single `P0`.
@@ -401,9 +526,15 @@ kill that abandons in-memory state — between persisting snapshot progress and 
   later ones (guards the load-bearing "persist `P0` before `LastRead`" invariant).
 - Crash after snapshot completion, before first CDC ack: kill at the handoff, restart, assert
   `(P0, restart]` writes are delivered.
-- Serialization upgrade/downgrade tests from the migration section.
-- All-empty-tables and snapshot-disabled cases: assert no panic and documented behavior (no false
-  guarantee claimed).
+- **Cold-start test (kill before first CDC ack).** Run with an empty snapshot (or
+  `snapshot.enabled=false`); at cold-start, after `P0` is captured but with the synthetic checkpoint
+  **not yet acked**, issue an `UPDATE`/`DELETE`/`INSERT`, then SIGKILL before any ack; restart and
+  assert those writes are delivered (from `P0` replay), i.e. no loss. Add the variant where the
+  checkpoint **is** acked before the kill and assert the same. Pre-fix this loses the writes (fresh
+  master); post-fix it does not. Also assert the synthetic record carries the `mysql.checkpoint`
+  metadata key so downstream filters can identify it.
+- Serialization upgrade/downgrade tests from the migration section (including the version-refusal
+  path: `version = CurrentPositionVersion + 1` -> `ErrPositionVersionUnsupported`).
 
 **Harness note.** The suite needs a real process-kill helper (child-process runner or a
 teardown-skipping wrapper). This is the reusable piece the chaos requirement (CLAUDE.md `tests/chaos`)
@@ -413,12 +544,15 @@ will build on; it is introduced here scoped to this bug.
 
 - Land as a Tier-1 fix with the primary SIGKILL regression test verified to fail without the code
   change and pass with it.
-- Changelog and README: document the additive `cdc_start` position field, the upgrade caveat
-  (in-progress snapshots are not retroactively fixed), and the downgrade hazard (unsafe mid-snapshot).
-- Operations runbook entry: symptom (missing/stale/phantom rows after an initial-sync restart) ->
-  diagnosis (pre-fix version, or a downgrade/in-progress-upgrade) -> remediation (upgrade and
-  re-snapshot; ensure binlog retention exceeds expected downtime).
-- No `conduit-connector-protocol` change; no coordinated multi-repo release required.
+- Changelog and README: document the additive `version` + `cdc_start` position fields, the
+  downstream-visible cold-start checkpoint record (and the `mysql.checkpoint` metadata key to filter
+  it), the upgrade caveat (in-progress snapshots are not retroactively fixed), and the downgrade
+  hazard (unsafe mid-snapshot).
+- Operations runbook entry: symptom (missing/stale/phantom rows after an initial-sync or cold-start
+  restart) -> diagnosis (pre-fix version, or a downgrade/in-progress-upgrade) -> remediation (upgrade
+  and re-snapshot; ensure binlog retention exceeds expected downtime).
+- No `conduit-connector-protocol` change and no opencdc record-shape change; no coordinated
+  multi-repo release required.
 
 ## Related
 
@@ -429,3 +563,31 @@ will build on; it is introduced here scoped to this bug.
   MySQL source).
 - Data-integrity Invariant 3 (at-least-once, including restart, error, and shutdown paths),
   `ConduitIO/conduit` `CLAUDE.md`.
+
+## Open questions
+
+All resolved by DeVaris on 2026-07-24 (see Decision log):
+
+- **Cold-start block-if-destination-down — RESOLVED: indefinite block + loud log, no timeout.** If
+  the destination never acks the checkpoint (e.g. down at pipeline start), cold-start blocks until it
+  does. This is correct-by-design (until `P0` is durable the connector must not advance the binlog
+  read); a timeout that abandoned the gate would reopen the loss window. The connector emits a clear,
+  stable, periodic log line explaining why cold-start is waiting. No configurable timeout.
+- **Cold-start checkpoint opt-out — RESOLVED: no opt-out; on by default.** The synthetic checkpoint
+  is always emitted at cold-start (correctness first). Destinations that cannot tolerate it filter on
+  the `mysql.checkpoint=true` metadata key. No config flag to disable it.
+
+## Decision log
+
+- **2026-07-24 — DeVaris sign-off with two amendments.** (1) Fold the CDC cold-start durability gap
+  into this fix (no longer a separate ticket / non-goal): chosen mechanism is a synthetic checkpoint
+  record carrying `P0`, gated on its own ack, with the record's downstream visibility flagged as an
+  accepted tradeoff. (2) Add a hard `Position.Version` envelope field now, with a read-path refusal
+  of any version above the connector's max-known version (forward-looking downgrade detection).
+  Both are Tier-1 position-format surface and are reflected in the Decision, Migration, Failure
+  modes, and Regression tests sections above.
+- **2026-07-24 — cold-start tradeoff resolutions.** After seeing the concrete mechanism: (a) the
+  synthetic checkpoint record is accepted, on by default, with no opt-out config (destinations filter
+  on `mysql.checkpoint=true`); (b) on destination-down at cold-start the connector blocks
+  indefinitely with a loud periodic log, no configurable timeout (a timeout would reopen the loss
+  window). Design is fully signed off for implementation.

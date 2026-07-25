@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -474,12 +475,27 @@ func (c *cdcIterator) waitForCheckpointAck(ctx context.Context) error {
 // ReadN blocked forever and the error was only drained (and discarded into the
 // Teardown error, if any) once Teardown ran. See the Decision section of
 // docs/design-documents/20260724-snapshot-cdc-position-handoff.md.
+// isSyncClosed reports whether err is go-mysql's benign "Sync was closed"
+// signal — the expected result of canal.Close() interrupting RunFrom. errors.Is
+// alone is insufficient: when Close lands during the initial "start sync
+// replication" phase, go-mysql wraps ErrSyncClosed with errors.Errorf("... %v",
+// err) (canal/sync.go), which formats the cause with %v and breaks the Unwrap
+// chain, so only a string match catches it. The message is a stable sentinel in
+// the pinned go-mysql v1.14.0 (replication.ErrSyncClosed = "Sync was closed").
+func isSyncClosed(err error) bool {
+	if err == nil {
+		return false
+	}
+	return errors.Is(err, replication.ErrSyncClosed) ||
+		strings.Contains(err.Error(), replication.ErrSyncClosed.Error())
+}
+
 func (c *cdcIterator) wrapCanalRunErr() error {
 	err := c.canalRunErr
 	if err == nil {
 		return errors.New("canal is closed")
 	}
-	if errors.Is(err, replication.ErrSyncClosed) {
+	if isSyncClosed(err) {
 		return fmt.Errorf("canal is closed: %w", err)
 	}
 
@@ -530,8 +546,9 @@ func (c *cdcIterator) Teardown(ctx context.Context) error {
 		return ctx.Err()
 	case <-c.canalRunDoneC:
 		err := c.canalRunErr
-		if errors.Is(err, replication.ErrSyncClosed) {
-			// Using error level might be too much.
+		if isSyncClosed(err) {
+			// Benign: canal.Close() interrupted RunFrom. Using error level might
+			// be too much.
 			sdk.Logger(ctx).Warn().Err(err).Msg("error found when closing mysql canal")
 			return nil
 		} else if err != nil {

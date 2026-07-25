@@ -53,6 +53,29 @@ func testSourceFromUsers(ctx context.Context, is *is.I) (sdk.Source, func()) {
 	})
 }
 
+// testSourceOpen constructs and opens a Source directly (bypassing
+// sdk.SourceWithMiddleware, same as testSource) and returns the concrete type so
+// crash-simulation tests can reach unexported fields (db, iterator) - see
+// killSource in crash_integration_test.go. It intentionally does not return a
+// cleanup func: crash tests control the source's lifecycle explicitly, since the
+// whole point is to sometimes deliberately skip Teardown.
+func testSourceOpen(ctx context.Context, is *is.I, cfg map[string]string, pos opencdc.Position) *Source {
+	source := &Source{}
+
+	cfg["dsn"] = testutils.DSN
+	cfg["cdc.disableLogs"] = "true"
+
+	err := sdk.Util.ParseConfig(ctx,
+		cfg, source.Config(),
+		Connector.NewSpecification().SourceParams,
+	)
+	is.NoErr(err)
+
+	is.NoErr(source.Open(ctx, pos))
+
+	return source
+}
+
 func TestSource_ConsistentSnapshot(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
@@ -385,7 +408,14 @@ func TestSnapshotEnabled(t *testing.T) {
 
 	testutils.DeleteUser(is, db, user2)
 
-	// We should only get CDC events (no snapshot records)
+	// CDC cold start (Invariant 3): with snapshot.enabled=false there is no
+	// snapshot record to carry P0, so the very first record is a synthetic
+	// checkpoint that must be acked before binlog replication (and therefore any
+	// real CDC record) begins. See
+	// docs/design-documents/20260724-snapshot-cdc-position-handoff.md.
+	testutils.ReadAndAssertColdStartCheckpoint(ctx, is, source)
+
+	// We should only get CDC events after that (no snapshot records)
 	testutils.ReadAndAssertCreate(ctx, is, source, user3)
 	testutils.ReadAndAssertUpdate(ctx, is, source, user1Before, user1Updated)
 	testutils.ReadAndAssertDelete(ctx, is, source, user2)

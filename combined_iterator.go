@@ -65,18 +65,14 @@ func newCombinedIterator(
 	}
 
 	if !config.snapshotEnabled {
-		if err := cdcIterator.start(ctx); err != nil {
-			return nil, fmt.Errorf("failed to start cdc iterator: %w", err)
+		if err := startCdcNoSnapshot(ctx, cdcIterator, config.startCdcPosition); err != nil {
+			return nil, err
 		}
 
-		sdk.Logger(ctx).Info().Msg("skipped table snapshot and started cdc iterator")
-
-		iterator := &combinedIterator{
+		return &combinedIterator{
 			cdcIterator:     cdcIterator,
 			currentIterator: cdcIterator,
-		}
-
-		return iterator, nil
+		}, nil
 	}
 
 	snapshotIterator, err := newSnapshotIterator(snapshotIteratorConfig{
@@ -106,13 +102,62 @@ func newCombinedIterator(
 
 	sdk.Logger(ctx).Info().Msg("setup fetch workers")
 
-	if config.startCdcPosition == nil {
+	// Invariant 3: P0 (the cdc start position) must be captured or seeded here,
+	// under the table lock and before any fetch worker starts reading, and
+	// threaded into the snapshot iterator before it starts so that buildRecord
+	// stamps it on every emitted record - including the very first one. See
+	// docs/design-documents/20260724-snapshot-cdc-position-handoff.md.
+	var p0 *common.CdcPosition
+	switch {
+	case config.startCdcPosition != nil:
+		// Restart with an already-durable P0: either a mid-snapshot resume
+		// (persisted as SnapshotPosition.CDCStart) or a steady-state CDC restart
+		// (persisted as CdcPosition). Either way P0 is already known; no need to
+		// capture a new one.
+		p0 = config.startCdcPosition
+
+	case len(snapshotIterator.workers) > 0:
+		// Fresh snapshot phase with data to read: capture P0 now, still under the
+		// lock, before unlocking and starting any worker.
 		if err := cdcIterator.obtainStartPosition(); err != nil {
 			return nil, fmt.Errorf("failed to fetch start cdc position: %w", err)
 		}
+		p0 = cdcIterator.position
 
 		sdk.Logger(ctx).Info().Msg("fetched cdc start position")
+
+	default:
+		// All tables are empty: the snapshot phase will emit zero records, so
+		// there is no record to durably carry P0 on. This is a CDC cold start
+		// (see cdcIterator.startColdStart): unlock, then gate binlog replication
+		// on a synthetic checkpoint record's ack instead.
+		if err := unlockTables(); err != nil {
+			return nil, err
+		}
+		sdk.Logger(ctx).Info().Msg("unlocked tables")
+
+		if err := cdcIterator.startColdStart(ctx); err != nil {
+			return nil, fmt.Errorf("failed to start cdc cold start: %w", err)
+		}
+
+		snapshotIterator.start(ctx) // no-op: zero workers, kept for symmetry/logging
+
+		sdk.Logger(ctx).Info().Msg("started snapshot iterator (no tables to snapshot), cdc cold start pending checkpoint ack")
+
+		return &combinedIterator{
+			snapshotIterator: snapshotIterator,
+			cdcIterator:      cdcIterator,
+			currentIterator:  snapshotIterator,
+		}, nil
 	}
+
+	if p0 == nil {
+		// Unreachable: every branch above either assigns p0 or returns early.
+		// Guards against a future edit silently dropping the P0 handoff and
+		// emitting position-less snapshot records (Invariant 3).
+		return nil, fmt.Errorf("internal error: no cdc start position available before starting a non-empty snapshot")
+	}
+	snapshotIterator.setCDCStart(p0)
 
 	if err := unlockTables(); err != nil {
 		return nil, err
@@ -137,6 +182,27 @@ func newCombinedIterator(
 	}
 
 	return iterator, nil
+}
+
+// startCdcNoSnapshot starts CDC when the snapshot phase is skipped entirely
+// (snapshot.enabled=false). With no snapshot record to durably carry P0, a
+// fresh start (startCdcPosition == nil) is a CDC cold start (Invariant 3): see
+// cdcIterator.startColdStart. A restart with an already-durable startCdcPosition
+// just resumes normally.
+func startCdcNoSnapshot(ctx context.Context, cdcIterator *cdcIterator, startCdcPosition *common.CdcPosition) error {
+	if startCdcPosition == nil {
+		if err := cdcIterator.startColdStart(ctx); err != nil {
+			return fmt.Errorf("failed to start cdc cold start: %w", err)
+		}
+		sdk.Logger(ctx).Info().Msg("skipped table snapshot, cdc cold start pending checkpoint ack")
+		return nil
+	}
+
+	if err := cdcIterator.start(ctx); err != nil {
+		return fmt.Errorf("failed to start cdc iterator: %w", err)
+	}
+	sdk.Logger(ctx).Info().Msg("skipped table snapshot and started cdc iterator")
+	return nil
 }
 
 func (c *combinedIterator) Ack(ctx context.Context, pos opencdc.Position) error {

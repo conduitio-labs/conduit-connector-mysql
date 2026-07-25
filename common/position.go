@@ -16,6 +16,7 @@ package common
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 
@@ -30,17 +31,45 @@ const (
 	PositionTypeCDC      PositionType = "cdc"
 )
 
+// CurrentPositionVersion is the version stamped on every position this connector
+// writes. Bump it whenever a position-format change is not safely readable by the
+// previous reader. Absent/0 on read means a legacy pre-version position (treat as
+// readable, see ParseSDKPosition).
+const CurrentPositionVersion = 1
+
+// ErrPositionVersionUnsupported is returned by ParseSDKPosition when a persisted
+// position's envelope version is higher than the highest version this connector
+// build knows how to read. This makes a downgrade (running an older connector
+// build against a position written by a newer one) a loud, actionable failure
+// instead of a silent mis-read. See docs/design-documents/20260724-snapshot-cdc-position-handoff.md.
+var ErrPositionVersionUnsupported = errors.New("position version unsupported")
+
 type Position struct {
+	// Version is the position-envelope format version. 0/absent means a legacy
+	// position written before this field existed; it is treated as readable. A
+	// version greater than CurrentPositionVersion is refused by ParseSDKPosition
+	// (see ErrPositionVersionUnsupported) rather than silently parsed, so that a
+	// future downgrade is detectable.
+	Version          int               `json:"version,omitempty"`
 	SnapshotPosition *SnapshotPosition `json:"snapshot_position,omitempty"`
 	CdcPosition      *CdcPosition      `json:"cdc_position,omitempty"`
 }
 
 type SnapshotPosition struct {
 	Snapshots SnapshotPositions `json:"snapshots,omitempty"`
+
+	// CDCStart is the server-wide binlog position (P0) captured under the read
+	// lock at snapshot start. It is stamped on every snapshot record so that a
+	// mid-snapshot restart resumes CDC from P0 rather than a fresh master
+	// position, closing the (P0, P1] data-loss window described in
+	// docs/design-documents/20260724-snapshot-cdc-position-handoff.md. It is nil
+	// for positions written before this field existed and for steady-state CDC
+	// positions.
+	CDCStart *CdcPosition `json:"cdc_start,omitempty"`
 }
 
 func (p SnapshotPosition) ToSDKPosition() opencdc.Position {
-	v, err := json.Marshal(Position{SnapshotPosition: &p})
+	v, err := json.Marshal(Position{Version: CurrentPositionVersion, SnapshotPosition: &p})
 	if err != nil {
 		// This should never happen, all Position structs should be valid.
 		panic(err)
@@ -48,18 +77,46 @@ func (p SnapshotPosition) ToSDKPosition() opencdc.Position {
 	return v
 }
 
+// Clone deep-copies the position, including CDCStart. This is load-bearing: the
+// resumed snapshot's lastPosition is derived from Clone() (see
+// newSnapshotIterator, setupWorkers), and every record it emits carries
+// lastPosition's CDCStart. If Clone dropped CDCStart, records emitted during a
+// *resumed* snapshot would carry no cdc_start, and a second mid-snapshot crash
+// would reintroduce the original data-loss bug (Invariant 3).
 func (p SnapshotPosition) Clone() SnapshotPosition {
 	var newPosition SnapshotPosition
 	newPosition.Snapshots = make(SnapshotPositions)
 	maps.Copy(newPosition.Snapshots, p.Snapshots)
+
+	if p.CDCStart != nil {
+		cdcStart := *p.CDCStart
+		if p.CDCStart.PrevPosition != nil {
+			prev := *p.CDCStart.PrevPosition
+			cdcStart.PrevPosition = &prev
+		}
+		newPosition.CDCStart = &cdcStart
+	}
+
 	return newPosition
 }
 
+// ParseSDKPosition is the single parse chokepoint for positions read back from
+// Conduit. It enforces the Version envelope gate: a position written by a future,
+// higher-versioned connector build is refused rather than silently parsed, since
+// this build cannot know whether doing so is safe. See ErrPositionVersionUnsupported.
 func ParseSDKPosition(p opencdc.Position) (Position, error) {
 	var pos Position
 	if err := json.Unmarshal(p, &pos); err != nil {
 		return pos, fmt.Errorf("failed to parse position: %w", err)
 	}
+
+	if pos.Version > CurrentPositionVersion {
+		return pos, fmt.Errorf(
+			"%w: position was written with version %d, this connector build supports up to version %d; "+
+				"upgrade the connector to read this position, or clear the connector's position to start a fresh snapshot",
+			ErrPositionVersionUnsupported, pos.Version, CurrentPositionVersion)
+	}
+
 	return pos, nil
 }
 
@@ -110,7 +167,7 @@ func (p ReplicationEventPosition) ToMysqlPos() mysql.Position {
 }
 
 func (p CdcPosition) ToSDKPosition() opencdc.Position {
-	v, err := json.Marshal(Position{CdcPosition: &p})
+	v, err := json.Marshal(Position{Version: CurrentPositionVersion, CdcPosition: &p})
 	if err != nil {
 		// This should never happen, all Position structs should be valid.
 		panic(err)

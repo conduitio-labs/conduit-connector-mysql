@@ -290,6 +290,33 @@ func isDataEqual(is *is.I, actual, expected any) {
 	is.Equal("", cmp.Diff(actual, expected)) // actual (-) != expected (+)
 }
 
+// ReadAndAssertColdStartCheckpoint reads, asserts the shape of, and acks the
+// synthetic CDC cold-start checkpoint record (see cdcIterator.startColdStart in
+// the root package). It is emitted exactly once, as the very first record, when
+// CDC starts with no persisted or snapshot-carried P0 (an empty snapshot or
+// snapshot.enabled=false) - see
+// docs/design-documents/20260724-snapshot-cdc-position-handoff.md.
+func ReadAndAssertColdStartCheckpoint(
+	ctx context.Context, is *is.I,
+	iterator common.Iterator,
+) opencdc.Record {
+	is.Helper()
+
+	recs, err := iterator.ReadN(ctx, 1)
+	is.NoErr(err)
+	is.True(len(recs) == 1)
+	rec := recs[0]
+
+	is.Equal(rec.Metadata[common.CheckpointMetadataKey], "true")
+	is.Equal(rec.Operation, opencdc.OperationDelete)
+	is.True(rec.Payload.Before == nil)
+	is.True(rec.Payload.After == nil)
+
+	is.NoErr(iterator.Ack(ctx, rec.Position))
+
+	return rec
+}
+
 func ReadAndAssertSnapshot(
 	ctx context.Context, is *is.I,
 	iterator common.Iterator, user User,

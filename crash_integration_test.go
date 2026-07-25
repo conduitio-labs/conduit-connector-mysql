@@ -110,6 +110,53 @@ func drainRecords(ctx context.Context, is *is.I, source *Source) []opencdc.Recor
 	}
 }
 
+// drainUntilTimeout is the generous overall deadline drainRecordsUntil polls
+// against. It is intentionally much longer than drainRecordsQuietPeriod: a
+// freshly-acked cold-start checkpoint must first stand up a brand new binlog
+// dump connection before canal.RunFrom starts actually delivering events,
+// which can comfortably exceed a single quiet period under CI load - a single
+// quiet-period pass would then (wrongly) conclude the stream is exhausted
+// before the record we're waiting for ever arrives.
+const drainUntilTimeout = 30 * time.Second
+
+// drainRecordsUntil reads and acks records from source, polling with short
+// per-call timeouts, until want returns true for the accumulated records or
+// drainUntilTimeout elapses (whichever comes first). Use this instead of
+// drainRecords when the very next thing the caller expects is a specific
+// record that depends on replication just (re)starting - e.g. immediately
+// after acking a cold-start checkpoint - rather than draining a stream that is
+// already known to be warmed up and caught up.
+func drainRecordsUntil(
+	ctx context.Context, is *is.I, source *Source,
+	want func([]opencdc.Record) bool,
+) []opencdc.Record {
+	is.Helper()
+
+	var all []opencdc.Record
+	deadline := time.Now().Add(drainUntilTimeout)
+
+	for time.Now().Before(deadline) {
+		readCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+		recs, err := source.ReadN(readCtx, 10)
+		cancel()
+
+		for _, rec := range recs {
+			is.NoErr(source.Ack(ctx, rec.Position))
+			all = append(all, rec)
+		}
+
+		if want(all) {
+			return all
+		}
+
+		if err != nil && !errors.Is(err, context.DeadlineExceeded) {
+			is.NoErr(err)
+		}
+	}
+
+	return all
+}
+
 func parseTestPosition(is *is.I, pos opencdc.Position) common.Position {
 	is.Helper()
 	parsed, err := common.ParseSDKPosition(pos)
@@ -192,6 +239,10 @@ func TestCrash_MidSnapshot_SIGKILL_ConcurrentWrites(t *testing.T) {
 	restartCtx, restartCancel := context.WithCancel(ctx)
 	defer restartCancel()
 	source2 := testSourceOpen(restartCtx, is, cfg, breakPosition)
+	// source2's canal actually starts replicating (unlike the killed sources
+	// above, whose canal killSource explicitly closes) - it must be torn down,
+	// or its binlog-dump connection leaks and starves later tests/packages.
+	t.Cleanup(func() { _ = source2.Teardown(context.Background()) })
 
 	all := drainRecords(restartCtx, is, source2)
 
@@ -269,6 +320,9 @@ func TestCrash_DoubleCrash_GuardsClone(t *testing.T) {
 	runCtx3, cancel3 := context.WithCancel(ctx)
 	defer cancel3()
 	source3 := testSourceOpen(runCtx3, is, cfg, secondBreak)
+	// source3's canal actually starts replicating and is never killed; it must
+	// be torn down or its binlog-dump connection leaks.
+	t.Cleanup(func() { _ = source3.Teardown(context.Background()) })
 
 	all := drainRecords(runCtx3, is, source3)
 
@@ -316,6 +370,9 @@ func TestCrash_AfterSnapshotCompletes_BeforeFirstCDCAck(t *testing.T) {
 	restartCtx, restartCancel := context.WithCancel(ctx)
 	defer restartCancel()
 	source2 := testSourceOpen(restartCtx, is, cfg, snapshotDonePosition)
+	// source2's canal actually starts replicating and is never killed; it must
+	// be torn down or its binlog-dump connection leaks.
+	t.Cleanup(func() { _ = source2.Teardown(context.Background()) })
 
 	all := drainRecords(restartCtx, is, source2)
 
@@ -361,6 +418,9 @@ func TestCrash_ColdStart_CheckpointAckedBeforeKill(t *testing.T) {
 	// this is the ordinary steady-state resume path (source.go), not a second
 	// cold start.
 	source2 := testSourceOpen(restartCtx, is, cfg, checkpointRec.Position)
+	// source2's canal actually starts replicating and is never killed; it must
+	// be torn down or its binlog-dump connection leaks.
+	t.Cleanup(func() { _ = source2.Teardown(context.Background()) })
 
 	all := drainRecords(restartCtx, is, source2)
 	is.True(hasRecordFor(all, opencdc.OperationCreate, 1))
@@ -409,6 +469,10 @@ func TestCrash_ColdStart_KillBeforeCheckpointAck(t *testing.T) {
 	restartCtx, restartCancel := context.WithCancel(ctx)
 	defer restartCancel()
 	source2 := testSourceOpen(restartCtx, is, cfg, nil)
+	// source2's canal actually starts replicating (once the fresh checkpoint
+	// below is acked) and is never killed; it must be torn down or its
+	// binlog-dump connection leaks.
+	t.Cleanup(func() { _ = source2.Teardown(context.Background()) })
 
 	// A fresh checkpoint must be emitted again - not skipped - and acking it
 	// must cleanly unblock steady-state replication.
@@ -416,7 +480,12 @@ func TestCrash_ColdStart_KillBeforeCheckpointAck(t *testing.T) {
 
 	is.NoErr(db.Create(&crashRow{ID: 2, Val: "after-second-checkpoint-ack"}).Error)
 
-	all := drainRecords(restartCtx, is, source2)
+	// The checkpoint ack just launched a brand new binlog-dump connection;
+	// give it a generous, polled window to actually start delivering rather
+	// than a single fixed quiet period (see drainRecordsUntil).
+	all := drainRecordsUntil(restartCtx, is, source2, func(recs []opencdc.Record) bool {
+		return hasRecordFor(recs, opencdc.OperationCreate, 2)
+	})
 	is.True(hasRecordFor(all, opencdc.OperationCreate, 2))
 }
 
@@ -456,6 +525,9 @@ func TestCrash_SnapshotDisabled_ColdStart(t *testing.T) {
 	restartCtx, restartCancel := context.WithCancel(ctx)
 	defer restartCancel()
 	source2 := testSourceOpen(restartCtx, is, cfg, checkpointRec.Position)
+	// source2's canal actually starts replicating and is never killed; it must
+	// be torn down or its binlog-dump connection leaks.
+	t.Cleanup(func() { _ = source2.Teardown(context.Background()) })
 
 	all := drainRecords(restartCtx, is, source2)
 

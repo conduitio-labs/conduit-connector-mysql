@@ -34,10 +34,14 @@ import (
 func TestIsSyncClosed(t *testing.T) {
 	is := is.New(t)
 
-	// The %v-formatted form go-mysql produces at start-sync (chain broken).
-	startSyncFormatted := fmt.Errorf(
-		"start sync replication at binlog (binlog.000002, 56244) error %v",
-		replication.ErrSyncClosed)
+	// The form go-mysql produces at start-sync: a fresh error whose Unwrap chain
+	// does NOT reach ErrSyncClosed (canal/sync.go uses errors.Errorf("... %v",
+	// err), flattening the cause to text). Built by string concatenation to
+	// faithfully reproduce that broken chain — a fmt.Errorf("%w") would defeat
+	// the very case this guards.
+	startSyncFormatted := errors.New(
+		"start sync replication at binlog (binlog.000002, 56244) error " +
+			replication.ErrSyncClosed.Error())
 
 	is.True(isSyncClosed(replication.ErrSyncClosed))                            // bare sentinel
 	is.True(isSyncClosed(fmt.Errorf("wrapped: %w", replication.ErrSyncClosed))) // errors.Is form

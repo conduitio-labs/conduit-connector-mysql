@@ -19,13 +19,19 @@ at-least-once floor. The position change is additive and backward compatible for
 mid-snapshot **downgrade** reintroduces the pre-fix behavior and is called out as unsafe.
 
 Per DeVaris's 2026-07-24 sign-off, two amendments are folded in. First, the same durability gap on
-**CDC cold-start** (empty snapshot or `snapshot.enabled=false`) is closed by emitting one synthetic
-checkpoint record carrying `P0` at cold-start and not advancing the binlog read past `P0` until that
-record is acked — the SDK offers no position-only checkpoint, so a real record is the only durable
-channel; its downstream visibility is a flagged maintainer tradeoff. Second, a hard `Version` field
-is added to the `Position` envelope: a position whose version exceeds the connector's max-known
-version is refused with a stable error code, making a future downgrade detectable rather than
-silently lossy (forward-looking from this release onward).
+**CDC cold-start** (empty snapshot or `snapshot.enabled=false`) is **strongly mitigated — not fully
+eliminated** — by emitting one synthetic checkpoint record carrying `P0` at cold-start and not
+advancing the binlog read past `P0` until that record is acked. Because the SDK offers no
+position-only checkpoint, `P0` is durable only once a record is acked; a crash before that first ack
+still re-captures a fresh position and loses writes in a one-ack-round-trip sub-window. The gate
+converts pre-fix "read an event then lose it" into "read nothing until `P0` is durable", shrinking
+the exposure to an irreducible residual; full closure requires an SDK position-only-checkpoint
+primitive (feature request tracked). The record's downstream visibility is a flagged maintainer
+tradeoff. The **primary mid-snapshot bug is fully closed** — it has a full-re-snapshot safety net
+when nothing was acked, which cold-start structurally lacks. Second, a hard `Version` field is added
+to the `Position` envelope: a position whose version exceeds the connector's max-known version is
+refused with a stable error code, making a future downgrade detectable rather than silently lossy
+(forward-looking from this release onward).
 
 ## Context
 
@@ -99,8 +105,10 @@ The bug is confined to the snapshot phase and the snapshot to CDC handoff.
 
 - Guarantee at-least-once delivery across a mid-snapshot restart (uphold Invariant 3).
 - Persist `P0` durably for the entire snapshot phase so restart resumes CDC from `P0`.
-- **Close the CDC cold-start durability gap too** (empty snapshot and `snapshot.enabled=false`): a
-  crash before the first CDC record is acked must not lose the `(P0, restart]` window.
+- **Strongly mitigate the CDC cold-start durability gap** (empty snapshot and
+  `snapshot.enabled=false`): shrink the crash-before-first-ack loss window to an irreducible one-ack
+  round-trip. Full elimination is a non-goal here — it requires an SDK position-only-checkpoint
+  primitive (tracked separately).
 - Keep the position format readable by version N and N+1 (additive, backward compatible on upgrade).
 - **Add a `Position` envelope version field** so a future higher-versioned position is detected and
   refused on downgrade rather than silently mis-read.
@@ -307,12 +315,17 @@ occur in `(P0, restart]` and the process crashes before that first ack, the pers
 `nil`, restart takes a fresh master `P1 > P0`, and the intervening events are lost. (If the DB is
 idle so no events occur, there is nothing to lose — the gap only bites when events happened but
 were not acked.) This is the same corruption class as the primary bug, so per DeVaris's sign-off it
-is fixed here, not deferred.
+is **strongly mitigated** here, not deferred. It cannot be *fully* eliminated with the primitives the
+SDK exposes today (see below), so an irreducible residual remains.
 
-**Why the snapshot fix doesn't cover it.** The snapshot fix tolerates a crash before the first ack
-because a `nil` position triggers a *full re-snapshot* that re-anchors a fresh `P0'` and re-reads
-every row — nothing is lost. CDC has no "re-read from scratch": a fresh master **skips** history, it
-cannot recover it. So cold-start needs `P0` durable **before** the read advances past `P0`.
+**Why this is only mitigated, while the mid-snapshot bug is fully closed.** The snapshot fix tolerates
+a crash before the first ack because a `nil` position triggers a *full re-snapshot* that re-anchors a
+fresh `P0'` and re-reads every row — nothing is lost. That re-read safety net is why the primary
+mid-snapshot bug (#180) is **fully closed**. CDC has no equivalent "re-read from scratch": a fresh
+master **skips** binlog history and cannot recover it. So cold-start would need `P0` durable *before*
+the read advances past `P0` — but making `P0` durable requires a record ack, and a crash can always
+land before that first ack. The gate below shrinks the window to a single ack round-trip; it cannot
+drive it to zero.
 
 **What the SDK supports.** Investigated SDK v0.14.1: the `Source` interface is
 `Open`/`ReadN`/`Ack`/`Teardown` (`source.go:45-100`); there is no position-only checkpoint,
@@ -328,24 +341,31 @@ when starting from no CDC position), before calling `canal.RunFrom`:
    (so a later restart sees `pos.CdcPosition != nil` and takes the ordinary steady-state
    resume-from-`P0` path — no second synthetic record is emitted on resume).
 3. **Do not start `canal.RunFrom(P0)` until that record is acked.** Gating the binlog advance on the
-   ack is what closes the window: until `P0` is durable, the connector has not read past `P0`, so a
-   crash simply re-captures a fresh `P0'` on restart with nothing lost. Only after the ack does the
-   read advance, and by then `P0` is the durable floor.
+   ack **minimizes** the window: until `P0` is durable the connector has not read past `P0`, so a
+   crash re-captures a fresh position on restart. Once the ack lands, `P0` is the durable floor and
+   the read advances. This does **not** make the window zero: if the crash lands *before* the
+   checkpoint ack, nothing is persisted, restart re-captures a fresh `P0'' > P0`, and any events in
+   `(P0, P0'']` are lost — the irreducible one-ack-round-trip residual. The value of the gate is that
+   it converts the pre-fix behavior "read an event, then lose it on crash" into "read nothing until
+   `P0` is durable", which is a real improvement, not a full fix.
 
 Invariant comment to add at the gate site:
 
 ```go
-// Invariant 3: on CDC cold-start, persist P0 (via the checkpoint record's ack)
-// BEFORE advancing the binlog read past P0. A fresh master position cannot recover
-// binlog history it skips, so the read must not advance until P0 is durable.
+// Invariant 3 (mitigation): on CDC cold-start, do not advance the binlog read past
+// P0 until P0 is durable (checkpoint record acked). A fresh master position cannot
+// recover skipped history. Residual: a crash before the first ack still loses events
+// in (P0, P0'']; full closure needs an SDK position-only-checkpoint primitive.
 ```
 
 Analysis of the lighter alternative (set the *first real* CDC record's position to resume-from-`P0`
-instead of a synthetic record): it leaves a **real** residual sub-window. Events can be read and
-emitted but not yet acked when the crash hits; with no acked record the position is `nil` and
-restart jumps to a fresh master, losing them. Because there is no re-read fallback, that residual is
-data loss, not duplicates — so this option is *not* correct, and is rejected. Only gating the read
-on a durable `P0` (the synthetic-record approach) is correct.
+instead of a synthetic record): it leaves a **larger, messier** residual. Events are read and emitted
+but not yet acked when the crash hits; with no acked record the position is `nil`, restart jumps to a
+fresh master, and those already-read events are lost — a wider window than the gate's, and one that
+grows with read-ahead. Both approaches share the same irreducible "before first ack" residual, but
+the gate confines it to the pre-read window (read nothing until `P0` durable) rather than losing
+events already pulled off the binlog. The gate is therefore chosen as the better mitigation — neither
+is a full fix.
 
 **FLAGGED MAINTAINER DECISION — the synthetic record is downstream-visible.** The SDK has no
 position-only channel, so the checkpoint is a real record that flows to the destination. It reuses
@@ -361,10 +381,14 @@ Consequences DeVaris must accept explicitly:
   (e.g. down), cold-start blocks — correct (no data at risk, no false progress) but must be logged
   clearly. See Open questions.
 
-If DeVaris prefers zero stream pollution over closing this specific window, the fallback is to keep
-cold-start as a documented known-gap and pursue an SDK position-only-checkpoint feature separately;
-that is the alternative the flag exists to surface. Chosen default: close the gap now with the
-synthetic record.
+If DeVaris prefers zero stream pollution over shrinking this window, the fallback is to keep
+cold-start as a documented known-gap. Chosen default (per sign-off): keep the checkpoint as a
+**mitigation** and accept the documented irreducible residual.
+
+**Path to full closure (tracked).** The residual disappears only if the SDK gains a position-only
+checkpoint primitive (persist a position without emitting a downstream record). An SDK feature
+request is filed as the tracked path to zero cold-start exposure; until it lands, cold-start remains
+mitigated-not-eliminated. See Decision log for the issue link.
 
 ## Position format change and migration
 
@@ -437,15 +461,18 @@ captures `P0` under the lock. Non-empty tables carry `cdc_start` on their record
 
 **All tables empty / snapshot yields zero records.** With every table empty, `len(workers) == 0` and
 `ReadN` returns `ErrSnapshotIteratorDone` immediately (`snapshot_iterator.go:149-152`) — no snapshot
-record carries `cdc_start`. This is a **CDC cold-start**, now covered by the cold-start mechanism:
-the connector emits a synthetic checkpoint record carrying `P0` and gates `canal.RunFrom(P0)` on its
-ack, so a crash before the first CDC ack re-captures a fresh `P0'` with nothing lost, and once the
-checkpoint is acked `P0` is the durable floor. Fixed, not a caveat.
+record carries `cdc_start`. This is a **CDC cold-start**, **strongly mitigated** (not fixed) by the
+cold-start mechanism: the connector emits a synthetic checkpoint carrying `P0` and gates
+`canal.RunFrom(P0)` on its ack, so once the checkpoint is acked `P0` is the durable floor. **Residual:**
+a crash *before* the checkpoint ack persists nothing, so restart re-captures a fresh `P0''` and loses
+any events in `(P0, P0'']` — the irreducible one-ack-round-trip window. Unlike mid-snapshot, there is
+no re-read safety net here. This case is the reason cold-start is "mitigated", not "fixed".
 
 **Snapshot disabled (`snapshot.enabled=false`).** No snapshot phase; the connector goes straight to
 CDC (`getStartPosition` -> current master, `cdc_iterator.go:121-138`). Same CDC cold-start as above:
-the synthetic checkpoint carrying `P0`, gated on its ack, closes the `(P0, restart]` window that a
-crash-before-first-ack would otherwise lose. Fixed.
+the gated synthetic checkpoint shrinks the `(P0, restart]` exposure to the one-ack residual but does
+not eliminate it. **Strongly mitigated, not fixed.** Only the primary mid-snapshot case is fully
+closed; full cold-start closure awaits an SDK position-only-checkpoint primitive (tracked).
 
 **Multi-table.** `P0` is a single server-wide coordinate stored once at `SnapshotPosition.CDCStart`,
 not per table. Each table resumes from its own `LastRead`; one CDC stream seeds from the single `P0`.
@@ -526,13 +553,19 @@ kill that abandons in-memory state — between persisting snapshot progress and 
   later ones (guards the load-bearing "persist `P0` before `LastRead`" invariant).
 - Crash after snapshot completion, before first CDC ack: kill at the handoff, restart, assert
   `(P0, restart]` writes are delivered.
-- **Cold-start test (kill before first CDC ack).** Run with an empty snapshot (or
-  `snapshot.enabled=false`); at cold-start, after `P0` is captured but with the synthetic checkpoint
-  **not yet acked**, issue an `UPDATE`/`DELETE`/`INSERT`, then SIGKILL before any ack; restart and
-  assert those writes are delivered (from `P0` replay), i.e. no loss. Add the variant where the
-  checkpoint **is** acked before the kill and assert the same. Pre-fix this loses the writes (fresh
-  master); post-fix it does not. Also assert the synthetic record carries the `mysql.checkpoint`
-  metadata key so downstream filters can identify it.
+- **Cold-start mitigation test (two variants — asserts the boundary, including the residual).** Run
+  with an empty snapshot (or `snapshot.enabled=false`).
+  - *Checkpoint-acked variant (the mitigation works):* let the synthetic checkpoint be acked, then
+    issue `UPDATE`/`DELETE`/`INSERT`, SIGKILL, restart, and assert those writes are delivered from
+    `P0` replay — no loss. This is the primary value the gate provides.
+  - *Kill-before-checkpoint-ack variant (documents the irreducible residual):* issue writes, then
+    SIGKILL *before* the checkpoint is acked; restart. Because nothing was persisted, restart
+    re-captures a fresh position and those writes are lost. Assert the connector does **not** falsely
+    claim to have delivered them, i.e. the test encodes the known residual rather than asserting an
+    impossible zero-loss. This keeps the doc and the test honest and flags if a future SDK primitive
+    closes the gap (the test would then be tightened).
+  - Assert the synthetic record carries the `mysql.checkpoint` metadata key so downstream filters can
+    identify it.
 - Serialization upgrade/downgrade tests from the migration section (including the version-refusal
   path: `version = CurrentPositionVersion + 1` -> `ErrPositionVersionUnsupported`).
 
@@ -591,3 +624,12 @@ All resolved by DeVaris on 2026-07-24 (see Decision log):
   on `mysql.checkpoint=true`); (b) on destination-down at cold-start the connector blocks
   indefinitely with a loud periodic log, no configurable timeout (a timeout would reopen the loss
   window). Design is fully signed off for implementation.
+- **2026-07-24 — cold-start is a MITIGATION, not a full fix (implementation feedback).**
+  Implementation surfaced that the checkpoint gate cannot make the cold-start window zero: durability
+  needs a record ack, and a crash before the first checkpoint ack still loses events in `(P0, P0'']`.
+  DeVaris chose to **keep** the checkpoint as a mitigation (not drop it), accepting the documented
+  irreducible residual, because it strictly improves on pre-fix ("read nothing until `P0` durable"
+  vs. "read then lose"). The primary mid-snapshot bug (#180) remains **fully closed** (re-snapshot
+  safety net). An SDK position-only-checkpoint feature request is filed as the tracked path to zero
+  cold-start exposure: ConduitIO/conduit-connector-sdk#378. All
+  cold-start framing in this doc says "mitigated, not eliminated" to match.

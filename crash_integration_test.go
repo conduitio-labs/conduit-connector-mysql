@@ -64,7 +64,25 @@ type crashRow struct {
 // cleanup has no bearing on what the test is actually verifying.
 func killSource(cancel context.CancelFunc, source *Source) {
 	cancel()
+	forceCloseConnections(source)
+}
 
+// forceCloseConnections releases a source's low-level MySQL resources — the
+// canal binlog-dump connection and the database pool — WITHOUT the graceful
+// Source.Teardown path. This is what killSource uses to model a hard kill, and
+// what teardownForCleanup uses for t.Cleanup.
+//
+// Cleanup must not go through graceful Teardown: a test that stops reading
+// before the snapshot fully drains can leave a fetch worker blocked on the
+// unbuffered data channel, and snapshotIterator.Teardown's tomb.Wait() (not
+// context-bounded) would then block forever — hanging the whole suite until the
+// 10-minute go-test timeout. Directly closing the canal here severs the
+// binlog-dump connection (which is the resource that, if leaked, starves later
+// tests — e.g. TestDestination_OperationCreate timing out), and canal.Close
+// unblocks RunFrom so its goroutine exits. Graceful Teardown behaviour is
+// verified by the dedicated tests (e.g. GracefulTeardownWhileCheckpointUnacked
+// and each crash test's own assertions), not by cleanup.
+func forceCloseConnections(source *Source) {
 	if ci, ok := source.iterator.(*combinedIterator); ok {
 		if cdc, ok := ci.cdcIterator.(*cdcIterator); ok && cdc.canal != nil {
 			cdc.canal.Close()
@@ -73,6 +91,12 @@ func killSource(cancel context.CancelFunc, source *Source) {
 	if source.db != nil {
 		_ = source.db.Close()
 	}
+}
+
+// teardownForCleanup releases source's connections from a t.Cleanup. It force-
+// closes rather than calling graceful Teardown — see forceCloseConnections.
+func teardownForCleanup(source *Source) {
+	forceCloseConnections(source)
 }
 
 // drainRecords reads and acks whatever the source produces until no new record
@@ -242,7 +266,7 @@ func TestCrash_MidSnapshot_SIGKILL_ConcurrentWrites(t *testing.T) {
 	// source2's canal actually starts replicating (unlike the killed sources
 	// above, whose canal killSource explicitly closes) - it must be torn down,
 	// or its binlog-dump connection leaks and starves later tests/packages.
-	t.Cleanup(func() { _ = source2.Teardown(context.Background()) })
+	t.Cleanup(func() { teardownForCleanup(source2) })
 
 	all := drainRecords(restartCtx, is, source2)
 
@@ -322,7 +346,7 @@ func TestCrash_DoubleCrash_GuardsClone(t *testing.T) {
 	source3 := testSourceOpen(runCtx3, is, cfg, secondBreak)
 	// source3's canal actually starts replicating and is never killed; it must
 	// be torn down or its binlog-dump connection leaks.
-	t.Cleanup(func() { _ = source3.Teardown(context.Background()) })
+	t.Cleanup(func() { teardownForCleanup(source3) })
 
 	all := drainRecords(runCtx3, is, source3)
 
@@ -372,7 +396,7 @@ func TestCrash_AfterSnapshotCompletes_BeforeFirstCDCAck(t *testing.T) {
 	source2 := testSourceOpen(restartCtx, is, cfg, snapshotDonePosition)
 	// source2's canal actually starts replicating and is never killed; it must
 	// be torn down or its binlog-dump connection leaks.
-	t.Cleanup(func() { _ = source2.Teardown(context.Background()) })
+	t.Cleanup(func() { teardownForCleanup(source2) })
 
 	all := drainRecords(restartCtx, is, source2)
 
@@ -420,7 +444,7 @@ func TestCrash_ColdStart_CheckpointAckedBeforeKill(t *testing.T) {
 	source2 := testSourceOpen(restartCtx, is, cfg, checkpointRec.Position)
 	// source2's canal actually starts replicating and is never killed; it must
 	// be torn down or its binlog-dump connection leaks.
-	t.Cleanup(func() { _ = source2.Teardown(context.Background()) })
+	t.Cleanup(func() { teardownForCleanup(source2) })
 
 	all := drainRecords(restartCtx, is, source2)
 	is.True(hasRecordFor(all, opencdc.OperationCreate, 1))
@@ -472,7 +496,7 @@ func TestCrash_ColdStart_KillBeforeCheckpointAck(t *testing.T) {
 	// source2's canal actually starts replicating (once the fresh checkpoint
 	// below is acked) and is never killed; it must be torn down or its
 	// binlog-dump connection leaks.
-	t.Cleanup(func() { _ = source2.Teardown(context.Background()) })
+	t.Cleanup(func() { teardownForCleanup(source2) })
 
 	// A fresh checkpoint must be emitted again - not skipped - and acking it
 	// must cleanly unblock steady-state replication.
@@ -527,7 +551,7 @@ func TestCrash_SnapshotDisabled_ColdStart(t *testing.T) {
 	source2 := testSourceOpen(restartCtx, is, cfg, checkpointRec.Position)
 	// source2's canal actually starts replicating and is never killed; it must
 	// be torn down or its binlog-dump connection leaks.
-	t.Cleanup(func() { _ = source2.Teardown(context.Background()) })
+	t.Cleanup(func() { teardownForCleanup(source2) })
 
 	all := drainRecords(restartCtx, is, source2)
 

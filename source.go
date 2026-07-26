@@ -160,16 +160,55 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 	if sdkPos != nil {
 		parsed, err := common.ParseSDKPosition(sdkPos)
 		if err != nil {
+			// Covers both malformed JSON and common.ErrPositionVersionUnsupported
+			// (a position written by a newer connector build than this one).
 			return fmt.Errorf("bad source position given: %w", err)
 		}
 		pos = parsed
 	}
 
+	// Invariant 3: restart seeding. The branch taken here determines whether CDC
+	// resumes from a durable P0 or captures a fresh one; see
+	// docs/design-documents/20260724-snapshot-cdc-position-handoff.md.
+	var startSnapshotPosition *common.SnapshotPosition
+	var startCdcPosition *common.CdcPosition
+	switch {
+	case pos.CdcPosition != nil:
+		// Steady-state CDC restart: the snapshot (if any) already completed and
+		// persisted a cdc_position. Resume CDC from it directly.
+		startCdcPosition = pos.CdcPosition
+		sdk.Logger(ctx).Info().Msg("restart: resuming steady-state cdc from persisted position")
+
+	case pos.SnapshotPosition != nil && pos.SnapshotPosition.CDCStart != nil:
+		// Mid-snapshot restart with a known P0: seed CDC from the persisted P0
+		// (not a fresh master position) so the binlog window (P0, restart] is
+		// replayed, and resume the snapshot from its persisted per-table
+		// LastRead. This is the fix for the data-loss bug this design closes.
+		startCdcPosition = pos.SnapshotPosition.CDCStart
+		startSnapshotPosition = pos.SnapshotPosition
+		sdk.Logger(ctx).Info().
+			Str("cdc_start_binlog_file", startCdcPosition.Name).
+			Uint32("cdc_start_binlog_pos", startCdcPosition.Pos).
+			Msg("restart: resuming mid-snapshot from persisted cdc start position (P0)")
+
+	default:
+		// No persisted P0: either a genuinely fresh start, or a legacy position
+		// written before this fix existed (pos.SnapshotPosition set, CDCStart
+		// nil). Fall back to today's behavior: capture a fresh P0 under the lock
+		// (or, if the snapshot is empty/disabled, a fresh CDC start position - a
+		// known, documented gap for that case; see the design doc's Failure
+		// modes section and Related section (SDK position-only-checkpoint,
+		// ConduitIO/conduit-connector-sdk#378) for why a fresh capture is safe
+		// for the mid-snapshot path this fix closes).
+		startSnapshotPosition = pos.SnapshotPosition
+		sdk.Logger(ctx).Info().Msg("restart: no persisted cdc start position, falling back to a fresh capture")
+	}
+
 	s.iterator, err = newCombinedIterator(ctx, combinedIteratorConfig{
 		db:                    s.db,
 		tableKeys:             tableKeys,
-		startSnapshotPosition: pos.SnapshotPosition,
-		startCdcPosition:      pos.CdcPosition,
+		startSnapshotPosition: startSnapshotPosition,
+		startCdcPosition:      startCdcPosition,
 		database:              s.config.MysqlCfg().DBName,
 		canalRegexes:          canalRegexes,
 		serverID:              serverID,

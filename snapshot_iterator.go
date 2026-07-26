@@ -135,6 +135,22 @@ func (s *snapshotIterator) setupWorkers(ctx context.Context) error {
 	return nil
 }
 
+// setCDCStart stamps the CDC start position (P0) that buildRecord will attach to
+// every subsequently emitted snapshot record as SnapshotPosition.CDCStart. It
+// must be called before start(ctx) is invoked (see the Invariant 3 comment on
+// newCombinedIterator and buildRecord): P0 must be durable on the very first
+// snapshot record so a mid-snapshot restart can resume CDC from it instead of a
+// fresh, later master position.
+func (s *snapshotIterator) setCDCStart(p0 *common.CdcPosition) {
+	if p0 == nil {
+		return
+	}
+	// Copy so lastPosition owns its value rather than aliasing the caller's
+	// (e.g. the cdcIterator's live position field).
+	cdcStart := *p0
+	s.lastPosition.CDCStart = &cdcStart
+}
+
 func (s *snapshotIterator) start(ctx context.Context) {
 	for _, worker := range s.workers {
 		s.t.Go(func() error {
@@ -219,6 +235,15 @@ func (s *snapshotIterator) Teardown(ctx context.Context) error {
 	return nil
 }
 
+// buildRecord advances lastPosition with the newly fetched row and marshals it
+// into the record's position.
+//
+// Invariant 3: persist the CDC start position (P0) on every snapshot record so a
+// mid-snapshot restart resumes CDC from P0. Resuming from a fresh master position
+// would silently drop writes to already-copied rows in (P0, P1]. lastPosition.CDCStart
+// is set once by setCDCStart, before start(ctx) runs and therefore before this method
+// is ever called (see newCombinedIterator), so every record built here - including
+// the very first one - carries it via ToSDKPosition.
 func (s *snapshotIterator) buildRecord(d fetchData) opencdc.Record {
 	s.lastPosition.Snapshots[d.table] = d.position
 

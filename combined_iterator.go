@@ -106,13 +106,31 @@ func newCombinedIterator(
 
 	sdk.Logger(ctx).Info().Msg("setup fetch workers")
 
-	if config.startCdcPosition == nil {
+	// Invariant 3: P0 (the cdc start position) must be captured or seeded here,
+	// under the table lock and before any fetch worker starts reading, and
+	// threaded into the snapshot iterator before it starts so that buildRecord
+	// stamps it on every emitted record - including the very first one. See
+	// docs/design-documents/20260724-snapshot-cdc-position-handoff.md.
+	var p0 *common.CdcPosition
+	if config.startCdcPosition != nil {
+		// Restart with an already-durable P0: either a mid-snapshot resume
+		// (persisted as SnapshotPosition.CDCStart) or a steady-state CDC restart
+		// (persisted as CdcPosition). Either way P0 is already known; no need to
+		// capture a new one.
+		p0 = config.startCdcPosition
+	} else {
+		// Fresh snapshot phase: capture P0 now, still under the lock, before
+		// unlocking and starting any worker. This runs regardless of whether any
+		// table actually has rows to snapshot - a snapshot over all-empty tables
+		// still needs P0 threaded through for CDC to start from afterward.
 		if err := cdcIterator.obtainStartPosition(); err != nil {
 			return nil, fmt.Errorf("failed to fetch start cdc position: %w", err)
 		}
+		p0 = cdcIterator.position
 
 		sdk.Logger(ctx).Info().Msg("fetched cdc start position")
 	}
+	snapshotIterator.setCDCStart(p0)
 
 	if err := unlockTables(); err != nil {
 		return nil, err

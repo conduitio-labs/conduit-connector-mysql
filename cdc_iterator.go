@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
@@ -31,14 +32,28 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
+// ErrCDCStartPositionUnavailable is a stable, actionable error returned when the
+// binlog file a CDC resume requires is no longer available on the server (e.g.
+// purged by binlog_expire_logs_seconds). Before this fix, this failure mode
+// stalled ReadN forever instead of surfacing an error; see the Decision section
+// of docs/design-documents/20260724-snapshot-cdc-position-handoff.md.
+var ErrCDCStartPositionUnavailable = errors.New("cdc start position unavailable")
+
 type cdcIterator struct {
 	config   cdcIteratorConfig
 	canal    *canal.Canal
 	position *common.CdcPosition
 
 	canalDoneC     chan struct{}
-	canalRunErrC   chan error
 	parsedRecordsC chan opencdc.Record
+
+	// canalRunDoneC is closed exactly once, when canal.RunFrom returns; canalRunErr
+	// holds its return value. Closing (rather than sending on an unbuffered
+	// channel) lets both ReadN and Teardown independently observe the same
+	// outcome without racing each other for a single delivery - see wrapCanalRunErr
+	// and Teardown.
+	canalRunDoneC chan struct{}
+	canalRunErr   error
 }
 
 type cdcIteratorConfig struct {
@@ -64,7 +79,7 @@ func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (*cdcIterator
 		config:         config,
 		canal:          canal,
 		position:       config.startPosition,
-		canalRunErrC:   make(chan error),
+		canalRunDoneC:  make(chan struct{}),
 		canalDoneC:     make(chan struct{}),
 		parsedRecordsC: make(chan opencdc.Record),
 	}, nil
@@ -86,6 +101,8 @@ func (c *cdcIterator) obtainStartPosition() error {
 	return nil
 }
 
+// start begins binlog replication immediately from the iterator's start
+// position (set by obtainStartPosition, or seeded from a persisted position).
 func (c *cdcIterator) start(ctx context.Context) error {
 	startPosition, err := c.getStartPosition()
 	if err != nil {
@@ -112,7 +129,8 @@ func (c *cdcIterator) start(ctx context.Context) error {
 			pos = *startPosition.PrevPosition
 		}
 
-		c.canalRunErrC <- c.canal.RunFrom(pos.ToMysqlPos())
+		c.canalRunErr = c.canal.RunFrom(pos.ToMysqlPos())
+		close(c.canalRunDoneC)
 	}()
 
 	return nil
@@ -151,6 +169,8 @@ func (c *cdcIterator) ReadN(ctx context.Context, n int) ([]opencdc.Record, error
 		return nil, ctx.Err()
 	case <-c.canalDoneC:
 		return nil, fmt.Errorf("canal is closed")
+	case <-c.canalRunDoneC:
+		return nil, c.wrapCanalRunErr()
 	case rec := <-c.parsedRecordsC:
 		recs = append(recs, rec)
 	}
@@ -165,6 +185,12 @@ func (c *cdcIterator) ReadN(ctx context.Context, n int) ([]opencdc.Record, error
 			return recs, ctx.Err()
 		case <-c.canalDoneC:
 			return recs, fmt.Errorf("canal is closed")
+		case <-c.canalRunDoneC:
+			if len(recs) > 0 {
+				// Deliver what we already have; the error surfaces on the next call.
+				return recs, nil
+			}
+			return recs, c.wrapCanalRunErr()
 		default:
 			// No more records currently available
 			return recs, nil
@@ -172,6 +198,51 @@ func (c *cdcIterator) ReadN(ctx context.Context, n int) ([]opencdc.Record, error
 	}
 
 	return recs, nil
+}
+
+// isSyncClosed reports whether err is go-mysql's benign "Sync was closed"
+// signal — the expected result of canal.Close() interrupting RunFrom. errors.Is
+// alone is insufficient: when Close lands during the initial "start sync
+// replication" phase, go-mysql wraps ErrSyncClosed with errors.Errorf("... %v",
+// err) (canal/sync.go), which formats the cause with %v and breaks the Unwrap
+// chain, so only a string match catches it. The message is a stable sentinel in
+// the pinned go-mysql v1.14.0 (replication.ErrSyncClosed = "Sync was closed").
+func isSyncClosed(err error) bool {
+	if err == nil {
+		return false
+	}
+	return errors.Is(err, replication.ErrSyncClosed) ||
+		strings.Contains(err.Error(), replication.ErrSyncClosed.Error())
+}
+
+// wrapCanalRunErr turns canal.RunFrom's return value into a stable, actionable
+// error. A graceful Teardown-triggered close is reported as such; any other
+// error (most commonly a purged/expired binlog file) is reported as
+// ErrCDCStartPositionUnavailable, naming the binlog file and position that could
+// not be resumed from. Before this fix (mid-snapshot P0 resume,
+// docs/design-documents/20260724-snapshot-cdc-position-handoff.md) this failure
+// mode was never surfaced: ReadN blocked forever and the error was only drained
+// (and discarded into the Teardown error, if any) once Teardown ran.
+func (c *cdcIterator) wrapCanalRunErr() error {
+	err := c.canalRunErr
+	if err == nil {
+		return errors.New("canal is closed")
+	}
+	if isSyncClosed(err) {
+		return fmt.Errorf("canal is closed: %w", err)
+	}
+
+	var name string
+	var pos uint32
+	if c.position != nil {
+		name, pos = c.position.Name, c.position.Pos
+	}
+
+	return fmt.Errorf(
+		"%w: cannot resume cdc replication from binlog file %q at position %d - the binlog is likely "+
+			"purged or expired; increase binlog retention (binlog_expire_logs_seconds) or clear the "+
+			"connector's position to trigger a fresh snapshot: %w",
+		ErrCDCStartPositionUnavailable, name, pos, err)
 }
 
 func (c *cdcIterator) Teardown(ctx context.Context) error {
@@ -182,9 +253,11 @@ func (c *cdcIterator) Teardown(ctx context.Context) error {
 	case <-ctx.Done():
 		//nolint:wrapcheck // no need to wrap canceled error
 		return ctx.Err()
-	case err := <-c.canalRunErrC:
-		if errors.Is(err, replication.ErrSyncClosed) {
-			// Using error level might be too much.
+	case <-c.canalRunDoneC:
+		err := c.canalRunErr
+		if isSyncClosed(err) {
+			// Benign: canal.Close() interrupted RunFrom. Using error level might
+			// be too much.
 			sdk.Logger(ctx).Warn().Err(err).Msg("error found when closing mysql canal")
 			return nil
 		} else if err != nil {

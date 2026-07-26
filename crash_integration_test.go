@@ -474,7 +474,18 @@ func TestCrash_ColdStart_KillBeforeCheckpointAck(t *testing.T) {
 	testutils.CreateTables(is, db, &crashRow{})
 	tableName := testutils.TableName(is, db, &crashRow{})
 
-	cfg := map[string]string{"tables": tableName}
+	// snapshot.enabled=false: this test's whole point is that a SECOND cold
+	// start (source2, below) correctly re-triggers another checkpoint after
+	// the first one crashed before being acked. If snapshot stayed enabled, the
+	// row inserted just below would make source2's restart a plain snapshot
+	// instead of a cold start (a non-empty table has no cold-start gap to
+	// begin with - see combined_iterator.go), which would defeat the test.
+	// Disabling snapshot makes cold start content-blind: it happens regardless
+	// of table contents, matching this test's actual intent.
+	cfg := map[string]string{
+		"tables":           tableName,
+		"snapshot.enabled": "false",
+	}
 
 	runCtx, cancel := context.WithCancel(ctx)
 	source := testSourceOpen(runCtx, is, cfg, nil)

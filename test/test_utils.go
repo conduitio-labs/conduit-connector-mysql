@@ -220,15 +220,39 @@ func CountUsers(is *is.I, db DB) int {
 	return int(count)
 }
 
+// readNextRecord reads the next record from iterator, transparently skipping
+// (and acking) any leading synthetic CDC cold-start checkpoint record - see
+// common.CheckpointMetadataKey / cdcIterator.startColdStart in the root
+// package. Any consumer that opens a source with no persisted or
+// snapshot-carried CDC start position (e.g. a snapshot-enabled source on an
+// empty table) will see exactly one such record before anything else; test
+// helpers asserting on "the next real record" must tolerate it rather than
+// misread it as data. It is emitted at most once per cold start, so this loop
+// terminates after at most one skip in practice.
+func readNextRecord(ctx context.Context, is *is.I, iterator common.Iterator) opencdc.Record {
+	is.Helper()
+
+	for {
+		recs, err := iterator.ReadN(ctx, 1)
+		is.NoErr(err)
+		is.True(len(recs) == 1)
+		rec := recs[0]
+
+		if rec.Metadata[common.CheckpointMetadataKey] == "true" {
+			is.NoErr(iterator.Ack(ctx, rec.Position))
+			continue
+		}
+
+		return rec
+	}
+}
+
 func ReadAndAssertCreate(
 	ctx context.Context, is *is.I,
 	iterator common.Iterator, user User,
 ) opencdc.Record {
 	is.Helper()
-	recs, err := iterator.ReadN(ctx, 1)
-	is.NoErr(err)
-	is.True(len(recs) == 1)
-	rec := recs[0]
+	rec := readNextRecord(ctx, is, iterator)
 	is.NoErr(iterator.Ack(ctx, rec.Position))
 
 	is.Equal(rec.Operation, opencdc.OperationCreate)
@@ -246,10 +270,7 @@ func ReadAndAssertUpdate(
 	iterator common.Iterator, prev, next User,
 ) opencdc.Record {
 	is.Helper()
-	recs, err := iterator.ReadN(ctx, 1)
-	is.NoErr(err)
-	is.True(len(recs) == 1)
-	rec := recs[0]
+	rec := readNextRecord(ctx, is, iterator)
 	is.NoErr(iterator.Ack(ctx, rec.Position))
 
 	is.Equal(rec.Operation, opencdc.OperationUpdate)
@@ -271,10 +292,7 @@ func ReadAndAssertDelete(
 ) opencdc.Record {
 	is.Helper()
 
-	recs, err := iterator.ReadN(ctx, 1)
-	is.NoErr(err)
-	is.True(len(recs) == 1)
-	rec := recs[0]
+	rec := readNextRecord(ctx, is, iterator)
 	is.NoErr(iterator.Ack(ctx, rec.Position))
 
 	is.Equal(rec.Operation, opencdc.OperationDelete)

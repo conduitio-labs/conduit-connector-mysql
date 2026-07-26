@@ -18,20 +18,18 @@ from the binlog. Replay produces duplicates for already-copied rows, which is ac
 at-least-once floor. The position change is additive and backward compatible for upgrade; a
 mid-snapshot **downgrade** reintroduces the pre-fix behavior and is called out as unsafe.
 
-Per DeVaris's 2026-07-24 sign-off, two amendments are folded in. First, the same durability gap on
-**CDC cold-start** (empty snapshot or `snapshot.enabled=false`) is **strongly mitigated — not fully
-eliminated** — by emitting one synthetic checkpoint record carrying `P0` at cold-start and not
-advancing the binlog read past `P0` until that record is acked. Because the SDK offers no
-position-only checkpoint, `P0` is durable only once a record is acked; a crash before that first ack
-still re-captures a fresh position and loses writes in a one-ack-round-trip sub-window. The gate
-converts pre-fix "read an event then lose it" into "read nothing until `P0` is durable", shrinking
-the exposure to an irreducible residual; full closure requires an SDK position-only-checkpoint
-primitive (feature request tracked). The record's downstream visibility is a flagged maintainer
-tradeoff. The **primary mid-snapshot bug is fully closed** — it has a full-re-snapshot safety net
-when nothing was acked, which cold-start structurally lacks. Second, a hard `Version` field is added
-to the `Position` envelope: a position whose version exceeds the connector's max-known version is
-refused with a stable error code, making a future downgrade detectable rather than silently lossy
-(forward-looking from this release onward).
+This fix **fully closes** the mid-snapshot bug (#180). It deliberately does **not** attempt the
+related **CDC cold-start** gap (empty snapshot or `snapshot.enabled=false`), which is a documented,
+scoped-out known gap: the only mechanism available in this connector — emitting a synthetic
+checkpoint record — leaks a MySQL-source-specific, malformed record into broker-neutral pipelines
+and breaks destinations, so it is not worth doing for a mechanism that could only *mitigate* (never
+close) the gap. The clean fix is a position-only checkpoint in the SDK
+(`ConduitIO/conduit-connector-sdk#378`), which persists a position with zero stream pollution;
+cold-start closure is deferred to it. See the Cold-start durability section.
+
+A hard `Version` field is also added to the `Position` envelope: a position whose version exceeds the
+connector's max-known version is refused with a stable error code, making a future downgrade
+detectable rather than silently mis-read (forward-looking from this release onward).
 
 ## Context
 
@@ -103,12 +101,9 @@ The bug is confined to the snapshot phase and the snapshot to CDC handoff.
 
 **Goals**
 
-- Guarantee at-least-once delivery across a mid-snapshot restart (uphold Invariant 3).
+- Guarantee at-least-once delivery across a mid-snapshot restart (uphold Invariant 3). This **fully
+  closes** the mid-snapshot bug (#180).
 - Persist `P0` durably for the entire snapshot phase so restart resumes CDC from `P0`.
-- **Strongly mitigate the CDC cold-start durability gap** (empty snapshot and
-  `snapshot.enabled=false`): shrink the crash-before-first-ack loss window to an irreducible one-ack
-  round-trip. Full elimination is a non-goal here — it requires an SDK position-only-checkpoint
-  primitive (tracked separately).
 - Keep the position format readable by version N and N+1 (additive, backward compatible on upgrade).
 - **Add a `Position` envelope version field** so a future higher-versioned position is detected and
   refused on downgrade rather than silently mis-read.
@@ -116,16 +111,18 @@ The bug is confined to the snapshot phase and the snapshot to CDC handoff.
   second-crash regression).
 - Convert the expired-binlog resume from a silent stall into a loud fail-stop with a stable error
   code, since persist-`P0` heightens expired-binlog exposure on resume.
-- Ship the regression tests that would have caught this: SIGKILL-mid-snapshot, double-crash, and
-  cold-start (kill before first CDC ack).
+- Ship the regression tests that would have caught this: SIGKILL-mid-snapshot and double-crash.
 
 **Non-goals**
 
+- **Closing the CDC cold-start durability gap** (empty snapshot and `snapshot.enabled=false`). This
+  is a documented known gap, deferred to the SDK position-only-checkpoint primitive
+  (`ConduitIO/conduit-connector-sdk#378`). The only in-connector mechanism — a synthetic checkpoint
+  record — breaks broker-neutral destinations and is rejected (see Cold-start durability).
 - Making the snapshot transactional / removing the reliance on CDC replay (see Alternative A).
 - Eliminating duplicate delivery on resume — duplicates are acceptable under at-least-once and are
   the safe trade against a gap.
-- Any change to `conduit-connector-protocol` or the opencdc record shape (the cold-start checkpoint
-  reuses an existing opencdc operation; see the Cold-start subsection).
+- Any change to `conduit-connector-protocol` or the opencdc record shape.
 
 ## Constraints
 
@@ -139,7 +136,8 @@ The bug is confined to the snapshot phase and the snapshot to CDC handoff.
 - Conduit persists the position of **acked** records only. The SDK `Source` interface is
   `Open`/`ReadN`/`Ack`/`Teardown` (SDK v0.14.1 `source.go:45-100`) — there is **no** position-only
   checkpoint, heartbeat, or side channel. To persist any position (including `P0`), a record
-  carrying it must be emitted and acked. This constrains the cold-start fix (see below).
+  carrying it must be emitted and acked. This is why the cold-start gap cannot be closed cleanly in
+  the connector today and is deferred to SDK #378 (see Cold-start durability).
 - Binlog retention is finite. Resuming from `P0` requires `P0`'s binlog file to still exist.
 - Changing serialized position format is Tier-1: it must round-trip across N/N+1 with an
   upgrade/downgrade test (CLAUDE.md data-integrity discipline).
@@ -308,87 +306,51 @@ so operators can size retention against expected downtime.
 
 ### CDC cold-start durability (empty snapshot / `snapshot.enabled=false`)
 
+**This is a scoped-out known gap.** This fix does **not** attempt to close it. The mid-snapshot bug
+is fully closed; cold-start durability is deferred to the SDK (`ConduitIO/conduit-connector-sdk#378`).
+The rest of this section states the gap honestly and explains why no in-connector mechanism is worth
+shipping.
+
 **The gap.** When there is no snapshot phase to carry `P0` — every table empty, or
 `snapshot.enabled=false` — the connector captures `P0` (`getStartPosition` -> current master,
-`cdc_iterator.go:121-138`) but persists nothing until the first CDC record is acked. If events
-occur in `(P0, restart]` and the process crashes before that first ack, the persisted position is
-`nil`, restart takes a fresh master `P1 > P0`, and the intervening events are lost. (If the DB is
-idle so no events occur, there is nothing to lose — the gap only bites when events happened but
-were not acked.) This is the same corruption class as the primary bug, so per DeVaris's sign-off it
-is **strongly mitigated** here, not deferred. It cannot be *fully* eliminated with the primitives the
-SDK exposes today (see below), so an irreducible residual remains.
+`cdc_iterator.go:121-138`) but persists nothing until the first CDC record is acked. If events occur
+in `(P0, restart]` and the process crashes before that first ack, the persisted position is `nil`,
+restart takes a fresh master `P1 > P0`, and the intervening events are lost. (If the DB is idle so no
+events occur, there is nothing to lose — the gap only bites when events happened but were not acked.)
 
-**Why this is only mitigated, while the mid-snapshot bug is fully closed.** The snapshot fix tolerates
-a crash before the first ack because a `nil` position triggers a *full re-snapshot* that re-anchors a
-fresh `P0'` and re-reads every row — nothing is lost. That re-read safety net is why the primary
+**Why cold-start cannot borrow the mid-snapshot safety net.** The mid-snapshot fix tolerates a crash
+before the first ack because a `nil` position triggers a *full re-snapshot* that re-anchors a fresh
+`P0'` and re-reads every row — nothing is lost. That re-read safety net is why the primary
 mid-snapshot bug (#180) is **fully closed**. CDC has no equivalent "re-read from scratch": a fresh
 master **skips** binlog history and cannot recover it. So cold-start would need `P0` durable *before*
-the read advances past `P0` — but making `P0` durable requires a record ack, and a crash can always
-land before that first ack. The gate below shrinks the window to a single ack round-trip; it cannot
-drive it to zero.
+the read advances past `P0` — but making `P0` durable requires a record ack (see below), and a crash
+can always land before that first ack.
 
-**What the SDK supports.** Investigated SDK v0.14.1: the `Source` interface is
-`Open`/`ReadN`/`Ack`/`Teardown` (`source.go:45-100`); there is no position-only checkpoint,
-heartbeat, or open-with-position-write hook, and no such mechanism in the source middleware. The
-**only** way to persist a position is to emit a record and have it acked. (Contrast Postgres, whose
-server-side replication slot anchors the LSN and needs no such record — see Constraints.)
+**Why the SDK gives no clean mechanism.** SDK v0.14.1's `Source` interface is
+`Open`/`ReadN`/`Ack`/`Teardown` (`source.go:45-100`) — there is no position-only checkpoint,
+heartbeat, or open-with-position-write hook, and none in the source middleware. The **only** way to
+persist a position is to emit a record and have it acked. (Contrast Postgres, whose server-side
+replication slot anchors the LSN and needs no such record — see Constraints.)
 
-**Mechanism (chosen): synthetic checkpoint record, gated on its own ack.** At CDC cold-start (only
-when starting from no CDC position), before calling `canal.RunFrom`:
+**Why the only available in-connector mechanism is rejected.** The single mechanism the SDK permits —
+emitting a synthetic "checkpoint" record carrying `P0` at cold-start — is **downstream-visible and
+actively breaks destinations**, so it is not shipped:
 
-1. Capture `P0 = GetMasterPos()`.
-2. Emit exactly one **synthetic checkpoint record** whose `Position` is a `CdcPosition = P0`
-   (so a later restart sees `pos.CdcPosition != nil` and takes the ordinary steady-state
-   resume-from-`P0` path — no second synthetic record is emitted on resume).
-3. **Do not start `canal.RunFrom(P0)` until that record is acked.** Gating the binlog advance on the
-   ack **minimizes** the window: until `P0` is durable the connector has not read past `P0`, so a
-   crash re-captures a fresh position on restart. Once the ack lands, `P0` is the durable floor and
-   the read advances. This does **not** make the window zero: if the crash lands *before* the
-   checkpoint ack, nothing is persisted, restart re-captures a fresh `P0'' > P0`, and any events in
-   `(P0, P0'']` are lost — the irreducible one-ack-round-trip residual. The value of the gate is that
-   it converts the pre-fix behavior "read an event, then lose it on crash" into "read nothing until
-   `P0` is durable", which is a real improvement, not a full fix.
+- The synthetic record has no `collection` metadata and a non-JSON key, so the **MySQL destination's**
+  `batchRecords` / `GetCollection` errors with `ErrMetadataFieldNotFound` on any
+  cold-start-source -> destination pipeline. It breaks the very connector family it lives in.
+- Worse, it is a **MySQL-source-specific record leaking into a broker-neutral pipeline**. A cold-start
+  MySQL source -> Postgres / S3 / Kafka destination would ship the same malformed, source-specific
+  record to destinations that know nothing about it. Patching every destination to filter a
+  source-specific metadata key is untenable — especially for a mechanism that could only *mitigate*
+  the gap (a crash before the checkpoint's own ack still loses `(P0, restart]`), never close it.
 
-Invariant comment to add at the gate site:
-
-```go
-// Invariant 3 (mitigation): on CDC cold-start, do not advance the binlog read past
-// P0 until P0 is durable (checkpoint record acked). A fresh master position cannot
-// recover skipped history. Residual: a crash before the first ack still loses events
-// in (P0, P0'']; full closure needs an SDK position-only-checkpoint primitive.
-```
-
-Analysis of the lighter alternative (set the *first real* CDC record's position to resume-from-`P0`
-instead of a synthetic record): it leaves a **larger, messier** residual. Events are read and emitted
-but not yet acked when the crash hits; with no acked record the position is `nil`, restart jumps to a
-fresh master, and those already-read events are lost — a wider window than the gate's, and one that
-grows with read-ahead. Both approaches share the same irreducible "before first ack" residual, but
-the gate confines it to the pre-read window (read nothing until `P0` durable) rather than losing
-events already pulled off the binlog. The gate is therefore chosen as the better mitigation — neither
-is a full fix.
-
-**FLAGGED MAINTAINER DECISION — the synthetic record is downstream-visible.** The SDK has no
-position-only channel, so the checkpoint is a real record that flows to the destination. It reuses
-an existing opencdc operation (no protocol/record-shape change) and is marked with a distinguishing
-metadata key (e.g. `mysql.checkpoint=true`) with an empty/tombstone payload and a synthetic key.
-Consequences DeVaris must accept explicitly:
-
-- Destinations and processors must **tolerate** one such record per cold-start (empty payload,
-  synthetic key). Strict-schema destinations may reject it; a downstream filter on the metadata key
-  is the mitigation.
-- It appears once per cold-start (once per pipeline lifetime in the common case), not per record.
-- The gate adds one ack round-trip of latency at cold-start (only). If the destination never acks
-  (e.g. down), cold-start blocks — correct (no data at risk, no false progress) but must be logged
-  clearly. See Open questions.
-
-If DeVaris prefers zero stream pollution over shrinking this window, the fallback is to keep
-cold-start as a documented known-gap. Chosen default (per sign-off): keep the checkpoint as a
-**mitigation** and accept the documented irreducible residual.
-
-**Path to full closure (tracked).** The residual disappears only if the SDK gains a position-only
-checkpoint primitive (persist a position without emitting a downstream record). An SDK feature
-request is filed as the tracked path to zero cold-start exposure; until it lands, cold-start remains
-mitigated-not-eliminated. See Decision log for the issue link.
+**Deferred to SDK #378 (the clean fix).** The gap closes properly once the SDK exposes a
+**position-only checkpoint** — persist a position without emitting a downstream record — tracked as
+`ConduitIO/conduit-connector-sdk#378`. That has zero stream pollution and is broker-neutral. Until it
+lands, cold-start is a documented known gap: a crash-before-first-CDC-ack on an empty-snapshot or
+`snapshot.enabled=false` source can lose events in `(P0, restart]`. This is noted in the README /
+runbook so operators can weigh it (e.g. prefer running an initial snapshot, which is fully covered).
 
 ## Position format change and migration
 
@@ -461,18 +423,15 @@ captures `P0` under the lock. Non-empty tables carry `cdc_start` on their record
 
 **All tables empty / snapshot yields zero records.** With every table empty, `len(workers) == 0` and
 `ReadN` returns `ErrSnapshotIteratorDone` immediately (`snapshot_iterator.go:149-152`) — no snapshot
-record carries `cdc_start`. This is a **CDC cold-start**, **strongly mitigated** (not fixed) by the
-cold-start mechanism: the connector emits a synthetic checkpoint carrying `P0` and gates
-`canal.RunFrom(P0)` on its ack, so once the checkpoint is acked `P0` is the durable floor. **Residual:**
-a crash *before* the checkpoint ack persists nothing, so restart re-captures a fresh `P0''` and loses
-any events in `(P0, P0'']` — the irreducible one-ack-round-trip window. Unlike mid-snapshot, there is
-no re-read safety net here. This case is the reason cold-start is "mitigated", not "fixed".
+record carries `cdc_start`. This is a **CDC cold-start** and a **documented known gap, NOT mitigated**
+by this fix: a crash before the first CDC record is acked loses events in `(P0, restart]` (see
+Cold-start durability). Unlike mid-snapshot there is no re-read safety net, and the only in-connector
+mechanism (a synthetic record) breaks broker-neutral destinations. Deferred to SDK #378.
 
 **Snapshot disabled (`snapshot.enabled=false`).** No snapshot phase; the connector goes straight to
-CDC (`getStartPosition` -> current master, `cdc_iterator.go:121-138`). Same CDC cold-start as above:
-the gated synthetic checkpoint shrinks the `(P0, restart]` exposure to the one-ack residual but does
-not eliminate it. **Strongly mitigated, not fixed.** Only the primary mid-snapshot case is fully
-closed; full cold-start closure awaits an SDK position-only-checkpoint primitive (tracked).
+CDC (`getStartPosition` -> current master, `cdc_iterator.go:121-138`). Same **CDC cold-start known
+gap** as above — not addressed here, deferred to SDK #378. Only the primary mid-snapshot case is
+fully closed.
 
 **Multi-table.** `P0` is a single server-wide coordinate stored once at `SnapshotPosition.CDCStart`,
 not per table. Each table resumes from its own `LastRead`; one CDC stream seeds from the single `P0`.
@@ -553,19 +512,10 @@ kill that abandons in-memory state — between persisting snapshot progress and 
   later ones (guards the load-bearing "persist `P0` before `LastRead`" invariant).
 - Crash after snapshot completion, before first CDC ack: kill at the handoff, restart, assert
   `(P0, restart]` writes are delivered.
-- **Cold-start mitigation test (two variants — asserts the boundary, including the residual).** Run
-  with an empty snapshot (or `snapshot.enabled=false`).
-  - *Checkpoint-acked variant (the mitigation works):* let the synthetic checkpoint be acked, then
-    issue `UPDATE`/`DELETE`/`INSERT`, SIGKILL, restart, and assert those writes are delivered from
-    `P0` replay — no loss. This is the primary value the gate provides.
-  - *Kill-before-checkpoint-ack variant (documents the irreducible residual):* issue writes, then
-    SIGKILL *before* the checkpoint is acked; restart. Because nothing was persisted, restart
-    re-captures a fresh position and those writes are lost. Assert the connector does **not** falsely
-    claim to have delivered them, i.e. the test encodes the known residual rather than asserting an
-    impossible zero-loss. This keeps the doc and the test honest and flags if a future SDK primitive
-    closes the gap (the test would then be tightened).
-  - Assert the synthetic record carries the `mysql.checkpoint` metadata key so downstream filters can
-    identify it.
+- Expired-binlog fail-stop test: seed a persisted `cdc_start = P0` whose binlog file is no longer
+  available, restart, and assert `ReadN`/startup returns the stable error code instead of hanging
+  (guards the `canalRunErrC` surfacing; distinguish the benign `replication.ErrSyncClosed` on
+  teardown from a real `RunFrom` failure).
 - Serialization upgrade/downgrade tests from the migration section (including the version-refusal
   path: `version = CurrentPositionVersion + 1` -> `ErrPositionVersionUnsupported`).
 
@@ -577,13 +527,14 @@ will build on; it is introduced here scoped to this bug.
 
 - Land as a Tier-1 fix with the primary SIGKILL regression test verified to fail without the code
   change and pass with it.
-- Changelog and README: document the additive `version` + `cdc_start` position fields, the
-  downstream-visible cold-start checkpoint record (and the `mysql.checkpoint` metadata key to filter
-  it), the upgrade caveat (in-progress snapshots are not retroactively fixed), and the downgrade
-  hazard (unsafe mid-snapshot).
-- Operations runbook entry: symptom (missing/stale/phantom rows after an initial-sync or cold-start
-  restart) -> diagnosis (pre-fix version, or a downgrade/in-progress-upgrade) -> remediation (upgrade
-  and re-snapshot; ensure binlog retention exceeds expected downtime).
+- Changelog and README: document the additive `version` + `cdc_start` position fields, the upgrade
+  caveat (in-progress snapshots are not retroactively fixed), the downgrade hazard (unsafe
+  mid-snapshot), and the **CDC cold-start known gap** (empty snapshot / `snapshot.enabled=false` can
+  lose `(P0, restart]` on a crash before the first CDC ack; deferred to SDK #378 — prefer running an
+  initial snapshot, which is fully covered).
+- Operations runbook entry: symptom (missing/stale/phantom rows after an initial-sync restart) ->
+  diagnosis (pre-fix version, or a downgrade/in-progress-upgrade, or the cold-start known gap) ->
+  remediation (upgrade and re-snapshot; ensure binlog retention exceeds expected downtime).
 - No `conduit-connector-protocol` change and no opencdc record-shape change; no coordinated
   multi-repo release required.
 
@@ -599,16 +550,10 @@ will build on; it is introduced here scoped to this bug.
 
 ## Open questions
 
-All resolved by DeVaris on 2026-07-24 (see Decision log):
-
-- **Cold-start block-if-destination-down — RESOLVED: indefinite block + loud log, no timeout.** If
-  the destination never acks the checkpoint (e.g. down at pipeline start), cold-start blocks until it
-  does. This is correct-by-design (until `P0` is durable the connector must not advance the binlog
-  read); a timeout that abandoned the gate would reopen the loss window. The connector emits a clear,
-  stable, periodic log line explaining why cold-start is waiting. No configurable timeout.
-- **Cold-start checkpoint opt-out — RESOLVED: no opt-out; on by default.** The synthetic checkpoint
-  is always emitted at cold-start (correctness first). Destinations that cannot tolerate it filter on
-  the `mysql.checkpoint=true` metadata key. No config flag to disable it.
+None open. The cold-start durability gap is scoped out of this fix and tracked in the SDK as
+`ConduitIO/conduit-connector-sdk#378` (position-only checkpoint). Earlier cold-start questions
+(destination-down blocking, checkpoint opt-out) are moot — the synthetic-checkpoint mechanism they
+concerned has been dropped (see Decision log).
 
 ## Decision log
 
@@ -633,3 +578,16 @@ All resolved by DeVaris on 2026-07-24 (see Decision log):
   safety net). An SDK position-only-checkpoint feature request is filed as the tracked path to zero
   cold-start exposure: ConduitIO/conduit-connector-sdk#378. All
   cold-start framing in this doc says "mitigated, not eliminated" to match.
+- **2026-07-25 — cold-start mechanism DROPPED entirely (supersedes the three entries above).**
+  DeVaris dropped the synthetic-checkpoint mechanism. Rationale: the checkpoint record is
+  downstream-visible *and actively breaks destinations*. It has no `collection` metadata and a
+  non-JSON key, so the MySQL destination's `batchRecords` / `GetCollection` errors with
+  `ErrMetadataFieldNotFound` on any cold-start-source -> destination pipeline; worse, it is a
+  MySQL-source-specific record leaking into broker-neutral pipelines (a cold-start MySQL source ->
+  Postgres/S3/Kafka destination would ship the same malformed record to destinations that know
+  nothing about it). Patching every destination to filter a source-specific key is untenable for a
+  mechanism that only *mitigates* (never closes) the gap. **Decision:** drop it; cold-start is now a
+  documented known gap (an explicit non-goal), closed properly later via the SDK position-only
+  checkpoint (`ConduitIO/conduit-connector-sdk#378`), which persists a position with zero stream
+  pollution. This doc's mid-snapshot fix (#180, fully closed) and the `Version` field are unchanged;
+  all cold-start content is reframed as a deferred known gap with no in-connector mechanism.

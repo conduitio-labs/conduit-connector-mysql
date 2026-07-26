@@ -408,14 +408,7 @@ func TestSnapshotEnabled(t *testing.T) {
 
 	testutils.DeleteUser(is, db, user2)
 
-	// CDC cold start (Invariant 3): with snapshot.enabled=false there is no
-	// snapshot record to carry P0, so the very first record is a synthetic
-	// checkpoint that must be acked before binlog replication (and therefore any
-	// real CDC record) begins. See
-	// docs/design-documents/20260724-snapshot-cdc-position-handoff.md.
-	testutils.ReadAndAssertColdStartCheckpoint(ctx, is, source)
-
-	// We should only get CDC events after that (no snapshot records)
+	// We should only get CDC events (no snapshot records)
 	testutils.ReadAndAssertCreate(ctx, is, source, user3)
 	testutils.ReadAndAssertUpdate(ctx, is, source, user1Before, user1Updated)
 	testutils.ReadAndAssertDelete(ctx, is, source, user2)

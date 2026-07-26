@@ -287,36 +287,7 @@ type recordBatch struct {
 	recs  []opencdc.Record
 }
 
-// filterCheckpointRecords drops synthetic CDC cold-start checkpoint records
-// (see common.CheckpointMetadataKey / cdcIterator.startColdStart in this
-// package) before they ever reach batching.
-//
-// They are not ordinary data and must never be treated as such: they carry no
-// Collection metadata (GetCollection would return ErrMetadataFieldNotFound,
-// exactly the case the "error when collection metadata is missing" test in
-// destination_test.go guards for real records) and a synthetic, non-JSON key
-// (parseRecordKey's json.Unmarshal would fail on it). A pipeline that connects
-// this repo's own source directly to this repo's own destination - a
-// realistic, even common, topology - must not have Destination.Write error out
-// or attempt a bogus delete because of this record. Silently no-op'ing it here
-// is always correct: the record's only job is to durably persist a binlog
-// position via its ack, which the caller still gets (Write returns len(recs)
-// on success, counting every record handed to it, checkpoint or not).
-func filterCheckpointRecords(recs []opencdc.Record) []opencdc.Record {
-	// Zero-cap slice: forces a fresh backing array on the first append, so the
-	// caller's slice is never mutated in place.
-	filtered := recs[:0:0]
-	for _, rec := range recs {
-		if rec.Metadata[common.CheckpointMetadataKey] == "true" {
-			continue
-		}
-		filtered = append(filtered, rec)
-	}
-	return filtered
-}
-
 func batchRecords(recs []opencdc.Record) ([]recordBatch, error) {
-	recs = filterCheckpointRecords(recs)
 	if len(recs) == 0 {
 		return nil, nil
 	}

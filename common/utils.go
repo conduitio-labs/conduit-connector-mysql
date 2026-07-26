@@ -107,12 +107,6 @@ func (h *zerologHandler) WithGroup(name string) slog.Handler {
 
 const ServerIDKey = "mysql.serverID"
 
-// CheckpointMetadataKey marks a synthetic CDC cold-start checkpoint record (see
-// cdcIterator.startColdStart in the root package). Destinations and processors
-// that cannot tolerate this record should filter on it: it carries an
-// empty/tombstone payload and a synthetic key, not real table data.
-const CheckpointMetadataKey = "mysql.checkpoint"
-
 func GetServerID(ctx context.Context, db *sqlx.DB) (string, error) {
 	var serverIDRow struct {
 		ServerID uint64 `db:"server_id"`

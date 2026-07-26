@@ -195,8 +195,11 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 		// No persisted P0: either a genuinely fresh start, or a legacy position
 		// written before this fix existed (pos.SnapshotPosition set, CDCStart
 		// nil). Fall back to today's behavior: capture a fresh P0 under the lock
-		// (or, if the snapshot is empty/disabled, the CDC cold-start checkpoint
-		// path). See the design doc's Failure modes section for why this is safe.
+		// (or, if the snapshot is empty/disabled, a fresh CDC start position - a
+		// known, documented gap for that case; see the design doc's Failure
+		// modes section and Related section (SDK position-only-checkpoint,
+		// ConduitIO/conduit-connector-sdk#378) for why a fresh capture is safe
+		// for the mid-snapshot path this fix closes).
 		startSnapshotPosition = pos.SnapshotPosition
 		sdk.Logger(ctx).Info().Msg("restart: no persisted cdc start position, falling back to a fresh capture")
 	}

@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	"github.com/conduitio/conduit-commons/csync"
@@ -28,6 +29,34 @@ import (
 )
 
 var ErrSnapshotIteratorDone = errors.New("snapshot complete")
+
+// DefaultTeardownAckTimeout bounds how long Teardown waits for outstanding
+// snapshot acks before proceeding with teardown regardless.
+//
+// It exists because Teardown previously waited on those acks with only the
+// caller's context for liveness, and the Conduit SDK calls a plugin's Teardown
+// with a context carrying NO deadline (sourcePluginAdapter.Teardown). So a
+// boundary ack that never arrived meant Teardown never returned: a graceful
+// stop could not complete and the operator had to kill -9 a pipeline that
+// reported itself as stopping. That is invariant 7 (SIGTERM drains and
+// checkpoints before exit) violated, and it was reproducible — see
+// handoff_ack_gate_integration_test.go.
+//
+// Proceeding early is SAFE here, and safer than waiting forever. Teardown does
+// not advance the source position: whatever was last acked is what the engine
+// persisted. Snapshot rows whose acks never arrived are simply re-read on the
+// next run, so the cost of this bound is at worst duplicate delivery, never a
+// gap (invariant 3 holds). The cost of NOT having it is an unbounded hang.
+//
+// 10s deliberately mirrors conduit's own DefaultTeardownFlushTimeout
+// (pkg/connector/source.go), which bounds the equivalent wait on the engine
+// side for the same reason: comfortably shorter than a typical Kubernetes
+// termination grace period, so a stuck ack degrades to a slightly-slow clean
+// shutdown rather than a SIGKILL.
+//
+// A var, not a const, solely so tests can lower it. Production code must never
+// reassign it.
+var DefaultTeardownAckTimeout = 10 * time.Second
 
 type (
 	// fetchData is the data that is fetched from a table row. As the iterator
@@ -222,8 +251,25 @@ func (s *snapshotIterator) Teardown(ctx context.Context) error {
 			"cannot teardown snapshot mode, fetchers exited unexpectedly: %w", err)
 	}
 
-	if err := s.acks.Wait(ctx); err != nil {
-		return fmt.Errorf("failed to wait for snapshot acks: %w", err)
+	// Invariant 7: bound this wait. See DefaultTeardownAckTimeout for why an
+	// unbounded wait here made graceful shutdown impossible, and why proceeding
+	// early is safe (unacked snapshot rows replay; teardown advances no
+	// position). Derived from ctx so an already-cancelled caller still short-
+	// circuits immediately rather than waiting out the full bound.
+	ackCtx, cancelAcks := context.WithTimeout(ctx, DefaultTeardownAckTimeout)
+	defer cancelAcks()
+
+	if err := s.acks.Wait(ackCtx); err != nil {
+		// Deliberately NOT returned as an error. Teardown's job is to release
+		// resources; failing it on un-arrived acks leaves the caller with a
+		// half-torn-down connector and no better options. Log loudly instead so
+		// the condition is visible, then continue.
+		sdk.Logger(ctx).Warn().Err(err).
+			Dur("timeout", DefaultTeardownAckTimeout).
+			Msg("snapshot acks did not arrive before teardown; proceeding. " +
+				"Unacked snapshot rows will be re-read on the next run (at-least-once " +
+				"preserved). Persistent occurrences mean acks are not reaching the " +
+				"connector — check for a stalled destination or a paused pipeline")
 	}
 
 	// waiting for the workers to finish will allow us to have an easier time

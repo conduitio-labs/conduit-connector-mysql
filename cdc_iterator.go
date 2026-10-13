@@ -123,9 +123,11 @@ func (c *cdcIterator) start(ctx context.Context) error {
 		c.config.snapshottedTables,
 	)
 
-	go func() {
-		c.canal.SetEventHandler(eventHandler)
+	// Set the handler before the goroutine starts: canal.Close reads it, so a
+	// Close racing a not-yet-scheduled goroutine was a data race.
+	c.canal.SetEventHandler(eventHandler)
 
+	go func() {
 		// We need to run canal from Previous position to be sure
 		// we didn't lose any record from multi-row mysql replication
 		// event.

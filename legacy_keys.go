@@ -18,7 +18,9 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	sdk "github.com/conduitio/conduit-connector-sdk"
@@ -55,10 +57,6 @@ func resolveLegacyKeys(
 	ctx context.Context, db *sqlx.DB, database string, pos *common.SnapshotPosition, keyColumns common.TableKeys,
 ) error {
 	for table, tp := range pos.Snapshots {
-		if !hasLegacyKey(tp) {
-			continue
-		}
-
 		if _, configured := keyColumns[table]; !configured {
 			// No longer read: nothing resumes from it. Leave the entry as it was.
 			continue
@@ -72,7 +70,7 @@ func resolveLegacyKeys(
 		resolved, reason := resolveTablePosition(tp, keyColumns[table], types)
 		if reason != "" {
 			sdk.Logger(ctx).Warn().Str("table", table).
-				Msg("cannot interpret the position written by an older version for this table (" + reason +
+				Msg("cannot use the saved snapshot position for this table (" + reason +
 					"); restarting its snapshot from the first row. Rows already delivered will be delivered again")
 			delete(pos.Snapshots, table)
 			continue
@@ -81,21 +79,6 @@ func resolveLegacyKeys(
 	}
 
 	return nil
-}
-
-func hasLegacyKey(tp common.TablePosition) bool {
-	isLegacy := func(v any) bool { _, ok := v.(common.LegacyKey); return ok }
-	if tp.SingleKey != nil && (isLegacy(tp.SingleKey.LastRead) || isLegacy(tp.SingleKey.SnapshotEnd)) {
-		return true
-	}
-	if tp.MultipleKey != nil {
-		for _, item := range *tp.MultipleKey {
-			if isLegacy(item.LastRead) || isLegacy(item.SnapshotEnd) {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func columnTypes(db *sqlx.DB, database, table string) (map[string]string, error) {
@@ -130,11 +113,17 @@ func resolveTablePosition(
 			return tp, "the table's key columns changed"
 		}
 		lastRead, reason := resolveLegacyValue(tp.SingleKey.LastRead, keys[0], types)
+		if reason == "" {
+			reason = checkKeyClass(lastRead, keys[0], types)
+		}
 		if reason != "" {
 			return tp, reason
 		}
 		// SnapshotEnd is informational (the end is recomputed on resume).
 		snapshotEnd, endReason := resolveLegacyValue(tp.SingleKey.SnapshotEnd, keys[0], types)
+		if endReason == "" {
+			endReason = checkKeyClass(snapshotEnd, keys[0], types)
+		}
 		if endReason != "" {
 			snapshotEnd = nil
 		}
@@ -152,10 +141,16 @@ func resolveTablePosition(
 				column = keys[i]
 			}
 			lastRead, reason := resolveLegacyValue(item.LastRead, column, types)
+			if reason == "" {
+				reason = checkKeyClass(lastRead, column, types)
+			}
 			if reason != "" {
 				return tp, reason
 			}
 			snapshotEnd, endReason := resolveLegacyValue(item.SnapshotEnd, column, types)
+			if endReason == "" {
+				endReason = checkKeyClass(snapshotEnd, column, types)
+			}
 			if endReason != "" {
 				snapshotEnd = nil
 			}
@@ -189,4 +184,63 @@ func resolveLegacyValue(v any, column string, types map[string]string) (any, str
 	default:
 		return nil, fmt.Sprintf("unexpected text key for column %q of type %s", column, dataType)
 	}
+}
+
+var (
+	numericKeyTypes = map[string]bool{
+		"tinyint": true, "smallint": true, "mediumint": true, "int": true, "integer": true, "bigint": true,
+		"float": true, "double": true, "real": true, "year": true,
+	}
+	// byteKeyTypes are the types whose driver value is []byte.
+	byteKeyTypes = legacyBase64Types
+)
+
+// checkKeyClass reports why v cannot be a key of the column's current type, or
+// "" when it can. The saved position says what the key was when it was written;
+// if the column has since been retyped (INT to VARCHAR, say), seeking from that
+// value compares across classes and MySQL's implicit conversion can skip rows
+// (last_read 3 on a VARCHAR column holding a..f resumed with none of them).
+// Invariant 3: restart the table instead; duplicates, never loss.
+//
+// The classes are numeric, byte/text (including DECIMAL, TIME, ENUM) and
+// temporal. A column type outside the known lists is not checked.
+func checkKeyClass(v any, column string, types map[string]string) string {
+	if v == nil {
+		return ""
+	}
+	dataType, known := types[strings.ToLower(column)]
+	if !known {
+		return fmt.Sprintf("key column %q not found", column)
+	}
+
+	var ok bool
+	switch {
+	case numericKeyTypes[dataType]:
+		switch x := v.(type) {
+		case int64, uint64, float32, float64:
+			ok = true
+		case []byte:
+			// The driver returns a BIGINT UNSIGNED above the int64 range as its
+			// decimal digits. Only a numeric string is a numeric key.
+			_, err := strconv.ParseFloat(string(x), 64)
+			ok = err == nil
+		}
+	case byteKeyTypes[dataType]:
+		switch v.(type) {
+		case []byte, string:
+			ok = true
+		}
+	case legacyTimeTypes[dataType]:
+		switch v.(type) {
+		case time.Time, string:
+			ok = true
+		}
+	default:
+		return ""
+	}
+
+	if !ok {
+		return fmt.Sprintf("the saved key is a %T but column %q is now %s: the column was retyped", v, column, dataType)
+	}
+	return ""
 }

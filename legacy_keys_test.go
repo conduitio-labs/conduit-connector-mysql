@@ -16,6 +16,7 @@ package mysql
 
 import (
 	"testing"
+	"time"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	"github.com/matryer/is"
@@ -91,4 +92,36 @@ func TestResolveTablePosition(t *testing.T) {
 		is.Equal(reason, "")
 		is.Equal(got.SingleKey.LastRead, int64(9007199254740993))
 	})
+}
+
+func TestCheckKeyClass(t *testing.T) {
+	types := map[string]string{"i": "bigint", "u": "varchar", "d": "decimal", "t": "datetime", "j": "json"}
+	tests := []struct {
+		column string
+		v      any
+		fits   bool
+	}{
+		{"i", int64(1), true},
+		{"i", uint64(1), true},
+		{"i", float64(1), true},
+		{"i", []byte("18446744073709551615"), true},
+		{"i", []byte("abc"), false},
+		{"i", time.Now(), false},
+		{"u", []byte("a"), true},
+		{"u", "a", true},
+		{"u", int64(3), false},
+		{"u", time.Now(), false},
+		{"d", []byte("1.00"), true},
+		{"d", int64(1), false},
+		{"t", time.Now(), true},
+		{"t", "2020-01-01T00:00:00Z", true},
+		{"t", int64(1), false},
+		{"t", []byte("x"), false},
+		{"j", int64(1), true}, // unknown class: not checked
+		{"i", nil, true},      // no saved key yet
+	}
+	for _, tc := range tests {
+		is := is.New(t)
+		is.Equal(checkKeyClass(tc.v, tc.column, types) == "", tc.fits)
+	}
 }

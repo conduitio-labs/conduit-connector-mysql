@@ -17,8 +17,8 @@ package mysql
 import (
 	"testing"
 
-	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	"github.com/conduitio/conduit-commons/opencdc"
+	"github.com/conduitio/conduit-connector-mysql/common"
 	"github.com/matryer/is"
 )
 

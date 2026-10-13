@@ -21,7 +21,7 @@ import (
 	"sort"
 	"testing"
 
-	testutils "github.com/conduitio-labs/conduit-connector-mysql/test"
+	testutils "github.com/conduitio/conduit-connector-mysql/test"
 	"github.com/matryer/is"
 )
 

@@ -16,9 +16,12 @@ package mysql
 
 import (
 	"context"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	"github.com/conduitio/conduit-commons/opencdc"
@@ -97,6 +100,14 @@ func newCombinedIterator(
 	if err != nil {
 		return nil, err
 	}
+	// Every error return below must release the lock: a returned error leaves no
+	// iterator to do it later, and writers stay blocked on the locked tables.
+	// unlockTables is idempotent; the explicit call further down reports its error.
+	defer func() {
+		if err := unlockTables(); err != nil {
+			sdk.Logger(ctx).Warn().Err(err).Msg("failed to release table lock")
+		}
+	}()
 
 	sdk.Logger(ctx).Info().Msg("locked tables")
 
@@ -191,18 +202,57 @@ func (c *combinedIterator) Teardown(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
+// lockTables takes a global read lock on tables and returns the function that
+// releases it.
+//
+// FLUSH TABLES ... WITH READ LOCK and UNLOCK TABLES are session-scoped, so both
+// must run on the same connection. They previously went through the sql.DB pool,
+// where the UNLOCK could be handed a different connection, do nothing, and leave
+// every table read-locked on the idle connection that took the lock until the
+// pool closed. The lock now lives on one dedicated connection, and the returned
+// function is safe to call more than once: it releases the lock on the first
+// call, and a connection whose UNLOCK failed is discarded rather than returned to
+// the pool still holding the lock (closing the session releases it).
 func lockTables(ctx context.Context, db *sqlx.DB, tables []string) (func() error, error) {
 	tableList := strings.Join(tables, ", ")
 
-	_, err := db.ExecContext(ctx, "FLUSH TABLES "+tableList+" WITH READ LOCK")
+	conn, err := db.Connx(ctx)
 	if err != nil {
+		return nil, fmt.Errorf("failed to get a dedicated connection to lock tables: %w", err)
+	}
+
+	if _, err := conn.ExecContext(ctx, "FLUSH TABLES "+tableList+" WITH READ LOCK"); err != nil {
+		discardConn(conn)
 		return nil, fmt.Errorf("failed to flush table list '%s' and acquire lock: %w", tableList, err)
 	}
 
+	var (
+		once      sync.Once
+		unlockErr error
+	)
 	return func() error {
-		if _, err := db.ExecContext(ctx, "UNLOCK TABLES"); err != nil {
-			return fmt.Errorf("failed to unlock tables after getting cdc position: %w", err)
-		}
-		return nil
+		once.Do(func() {
+			// Not the caller's context: a cancelled context must not leave the
+			// lock behind. Closing the session also releases it.
+			unlockCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+			defer cancel()
+
+			if _, err := conn.ExecContext(unlockCtx, "UNLOCK TABLES"); err != nil {
+				unlockErr = fmt.Errorf("failed to unlock tables after getting cdc position: %w", err)
+				discardConn(conn)
+				return
+			}
+			if err := conn.Close(); err != nil {
+				unlockErr = fmt.Errorf("failed to release the lock connection: %w", err)
+			}
+		})
+		return unlockErr
 	}, nil
+}
+
+// discardConn closes the underlying connection instead of returning it to the
+// pool, which ends its session and with it any lock it holds.
+func discardConn(conn *sqlx.Conn) {
+	_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+	_ = conn.Close()
 }

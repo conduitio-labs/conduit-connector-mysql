@@ -525,8 +525,7 @@ func (h *cdcEventHandler) OnRow(e *canal.RowsEvent) error {
 	// Invariant 6: halt before building any record if the row image left a
 	// column out; see checkSkippedColumns.
 	if err := checkSkippedColumns(e); err != nil {
-		synced := h.canal.SyncedPosition()
-		err.BinlogFile, err.AfterPos = synced.Name, synced.Pos
+		err.BinlogFile = h.canal.SyncedPosition().Name
 		return err
 	}
 

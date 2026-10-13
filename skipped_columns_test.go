@@ -105,6 +105,7 @@ func TestCheckSkippedColumns(t *testing.T) {
 				CodeSkippedColumns, `"meroxadb.t"`, "update", `"mysql-bin.000003"`, "1234-1456",
 				"binlog_row_image", "SET SESSION binlog_row_image = 'FULL'", "SET PERSIST", "reconnect every writer",
 				"does not carry deletes", "ALL captured tables", "SHOW BINLOG EVENTS",
+				"truncate the destination and then re-snapshot", "after the snapshot completes, reconcile",
 			} {
 				is.True(strings.Contains(msg, want)) // message must contain want
 			}
@@ -162,19 +163,13 @@ func TestCheckSkippedColumns_CompressedTransaction(t *testing.T) {
 	is.Equal(err.StartPos, uint32(0))
 	is.Equal(err.EndPos, uint32(0))
 
-	err.BinlogFile, err.AfterPos = "mysql-bin.000003", 500
+	err.BinlogFile = "mysql-bin.000003"
 	msg := err.Error()
 	is.True(!strings.Contains(msg, "4294967"))
 	is.True(strings.Contains(msg, "compressed transaction"))
-	is.True(strings.Contains(msg, "follows position 500"))
-	is.True(strings.Contains(msg, "FROM 500"))
-
-	// No saved position yet: no FROM to offer.
-	err.AfterPos = 0
-	msg = err.Error()
-	is.True(!strings.Contains(msg, "follows position"))
-	is.True(!strings.Contains(msg, "FROM"))
+	is.True(strings.Contains(msg, "exact event position unavailable"))
 	is.True(strings.Contains(msg, "Transaction_payload"))
+	is.True(!strings.Contains(msg, "FROM"))
 
 	// EventSize larger than LogPos underflows the same way without LogPos == 0.
 	e.Header = &replication.EventHeader{LogPos: 30, EventSize: 40}
@@ -196,6 +191,21 @@ func TestWrapCanalRunErr_PartialJSON(t *testing.T) {
 	is.True(strings.Contains(err.Error(), CodePartialJSONUnsupported))
 	is.True(strings.Contains(err.Error(), "SET PERSIST binlog_row_value_options"))
 	is.True(strings.Contains(err.Error(), "ALL captured tables"))
+	is.True(strings.Contains(err.Error(), "re-snapshot and, after the snapshot completes, reconcile"))
+	is.True(!strings.Contains(err.Error(), "after position 0")) // 0 is "unknown", not a position
+
+	is.True(strings.Contains(err.Error(), "after position 123"))
+
+	// A zero position (canal has saved none) is unknown, not a position.
+	c.position.Pos = 0
+	err = c.wrapCanalRunErr()
+	is.True(errors.Is(err, ErrPartialJSONUnsupported))
+	is.True(!strings.Contains(err.Error(), "after position"))
+	is.True(strings.Contains(err.Error(), "exact event position unavailable"))
+
+	// Only canal's full message counts, not any error that mentions the event name.
+	is.True(isPartialJSON(errors.New("PartialUpdateRowsEvent not supported now")))
+	is.True(!isPartialJSON(errors.New("saw a PartialUpdateRowsEvent")))
 
 	// Any other canal failure is still reported as an unavailable start position.
 	c.canalRunErr = errors.New("some other canal failure")

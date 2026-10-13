@@ -159,9 +159,15 @@ the writers.
 #### Recovery
 
 **Resuming means a re-snapshot, and a snapshot does not carry deletes.** Rows deleted at the source while the
-pipeline was halted would stay in the destination. Before you clear the connector's position, truncate the
-destination tables or fully reconcile them against the source, deletes included, for ALL captured tables, not
-only the table named in the error.
+pipeline was halted would stay in the destination. Do one of the following, for ALL captured tables, not only
+the table named in the error:
+
+- truncate the destination tables, then clear the connector's position to re-snapshot; or
+- clear the connector's position to re-snapshot, and after the snapshot has completed reconcile the destination
+  against the source, deletes included.
+
+Do not reconcile first and re-snapshot afterwards: rows deleted at the source between the reconcile and the
+start of the snapshot would stay in the destination.
 
 1. Stop the cause. Set `binlog_row_image = 'FULL'` for the writers, and for the server use
    `SET PERSIST binlog_row_image = 'FULL'` (`SET GLOBAL` does not survive a restart). Then reconnect every
@@ -169,8 +175,9 @@ only the table named in the error.
 2. The event is already in the binlog, so every restart halts on it. Find its transaction with
    `SHOW BINLOG EVENTS IN '<file>'` (the error gives the start position of the event); with GTIDs enabled,
    the `Gtid` event just before it names the GTID.
-3. Truncate or fully reconcile the destination for all captured tables, including deletes.
+3. Truncate the destination for all captured tables, or plan to reconcile it after the snapshot (see above).
 4. Clear the connector's position to re-snapshot.
+5. If you chose to reconcile, do it once the snapshot has completed, including deletes, for all captured tables.
 
 A lighter way to resume after the event is tracked in
 [#212](https://github.com/ConduitIO/conduit-connector-mysql/issues/212).

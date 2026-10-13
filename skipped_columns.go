@@ -33,8 +33,9 @@ var ErrSkippedColumns = errors.New("row image skipped columns")
 
 // recoveryNote is the part of every halt message that states what resuming
 // costs. A re-snapshot does not carry deletes, so it comes first.
-const recoveryNote = "Recovery re-snapshots, and a snapshot does not carry deletes: before clearing the connector's " +
-	"position, truncate the destination or fully reconcile it, including deletes, for ALL captured tables"
+const recoveryNote = "Recovery re-snapshots, and a snapshot does not carry deletes: either truncate the destination " +
+	"and then re-snapshot, or re-snapshot and, after the snapshot completes, reconcile the destination including " +
+	"deletes (reconciling before the snapshot misses rows deleted in between), for ALL captured tables"
 
 // SkippedColumnsError reports a row event whose image did not log every
 // column. The server does that when the writing session (or the server) runs
@@ -53,11 +54,9 @@ type SkippedColumnsError struct {
 	EndPos   uint32
 	// Compressed is true when the event came out of a compressed transaction
 	// (binlog_transaction_compression=ON). go-mysql gives such sub-events a
-	// zero log position, so the exact position is unknown; AfterPos then
-	// names canal's last saved position before the transaction, or is 0 when
-	// canal has not saved one yet.
+	// zero log position, so the exact position is unknown. canal's saved
+	// position is 0 in that case too, so there is nothing better to offer.
 	Compressed bool
-	AfterPos   uint32
 	// Columns are the distinct skipped column names, in table order.
 	Columns []string
 }
@@ -67,16 +66,8 @@ type SkippedColumnsError struct {
 func (e *SkippedColumnsError) Error() string {
 	var where, find string
 	if e.Compressed {
-		// AfterPos is canal's last saved position; it is 0 until canal has
-		// saved one since it started, and then there is nothing to point at.
 		where = "inside a compressed transaction (binlog_transaction_compression=ON), exact event position unavailable"
 		find = fmt.Sprintf("SHOW BINLOG EVENTS IN '%s' and look for the Transaction_payload events", e.BinlogFile)
-		if e.AfterPos > 0 {
-			where = fmt.Sprintf("inside a compressed transaction (binlog_transaction_compression=ON) that follows "+
-				"position %d, exact event position unavailable", e.AfterPos)
-			find = fmt.Sprintf("SHOW BINLOG EVENTS IN '%s' FROM %d and look for the Transaction_payload event",
-				e.BinlogFile, e.AfterPos)
-		}
 	} else {
 		where = fmt.Sprintf("position %d-%d", e.StartPos, e.EndPos)
 		find = fmt.Sprintf("SHOW BINLOG EVENTS IN '%s' and read the events that precede position %d", e.BinlogFile, e.StartPos)
@@ -100,8 +91,8 @@ func (e *SkippedColumnsError) Error() string {
 func (e *SkippedColumnsError) Is(target error) bool { return target == ErrSkippedColumns }
 
 // checkSkippedColumns returns a *SkippedColumnsError when any row image in the
-// event left a column out, and nil otherwise. The caller fills BinlogFile and
-// AfterPos, which need the live canal position.
+// event left a column out, and nil otherwise. The caller fills BinlogFile,
+// which needs the live canal position.
 //
 // Invariant 6: schema handling never silently mangles data. A nil in
 // Rows[i][c] with c in SkippedColumns[i] means "not logged", not NULL;
@@ -163,9 +154,10 @@ const CodePartialJSONUnsupported = "MYSQL_PARTIAL_JSON_UNSUPPORTED"
 var ErrPartialJSONUnsupported = errors.New("partial JSON update unsupported")
 
 // partialUpdateEventName is how go-mysql names a PartialUpdateRowsEvent in the
-// error canal returns for event types it does not handle. canal formats the
-// event type into a fresh error, so only a string match recognizes it.
-const partialUpdateEventName = "PartialUpdateRowsEvent"
+// error canal returns for event types it does not handle ("<type> not
+// supported now"). canal formats the event type into a fresh error, so only a
+// string match recognizes it.
+const partialUpdateEventName = "PartialUpdateRowsEvent not supported"
 
 // PartialJSONError reports that canal stopped on a PartialUpdateRowsEvent,
 // which a writer produces with binlog_row_value_options=PARTIAL_JSON when it
@@ -179,14 +171,20 @@ type PartialJSONError struct {
 }
 
 func (e *PartialJSONError) Error() string {
+	// canal's saved position is 0 until it has saved one (always, inside
+	// compressed transactions); do not print it as if it were real.
+	where := fmt.Sprintf("binlog file %q, exact event position unavailable", e.BinlogFile)
+	if e.AfterPos > 0 {
+		where = fmt.Sprintf("binlog file %q, after position %d", e.BinlogFile, e.AfterPos)
+	}
 	return fmt.Sprintf(
-		"%s: binlog file %q, after position %d: the server logged a partial JSON update "+
+		"%s: %s: the server logged a partial JSON update "+
 			"(config: binlog_row_value_options=PARTIAL_JSON), which this connector cannot read: %v. "+
 			"Fix: disable it for the writers (SET SESSION binlog_row_value_options = '', and for the server "+
 			"SET PERSIST binlog_row_value_options = '') and reconnect every writer, because existing sessions keep their "+
 			"value. The event is already in the binlog and will fail every restart. %s. "+
 			"Then clear the connector's position to re-snapshot",
-		CodePartialJSONUnsupported, e.BinlogFile, e.AfterPos, e.Cause, recoveryNote)
+		CodePartialJSONUnsupported, where, e.Cause, recoveryNote)
 }
 
 // Unwrap returns the canal error.

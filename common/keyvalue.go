@@ -40,6 +40,17 @@ import (
 // type. A value written by an older build is a bare JSON scalar; it is still
 // read (see decodeKeyValue) so existing positions keep working.
 
+// LegacyKey is a bare JSON string read from a snapshot position written before
+// keys were tagged (envelope version 0 or 1). What it means depends on the type
+// of the key column, which a position does not record: the old encoder wrote a
+// []byte value (CHAR/VARCHAR/TEXT, BINARY/VARBINARY/BLOB, DECIMAL, TIME) as
+// base64 text, and a time.Time value (DATE, DATETIME, TIMESTAMP) as RFC 3339
+// text. It must be resolved against the column type before it is used as a
+// query argument (see resolveLegacyKeys in package mysql); using it as is would
+// seek from the wrong key and silently skip rows. Never returned for positions
+// written by this build.
+type LegacyKey string
+
 const (
 	keyTypeInt64   = "int64"
 	keyTypeUint64  = "uint64"
@@ -94,6 +105,13 @@ func encodeKeyValue(v any) (json.RawMessage, error) {
 		t = taggedKeyValue{keyTypeTime, x.Format(time.RFC3339Nano)}
 	case bool:
 		t = taggedKeyValue{keyTypeBool, strconv.FormatBool(x)}
+	case LegacyKey:
+		// An unresolved legacy key (a table no longer read) round-trips as it was.
+		raw, err := json.Marshal(string(x))
+		if err != nil {
+			return nil, fmt.Errorf("failed to encode snapshot key: %w", err)
+		}
+		return raw, nil
 	default:
 		return nil, fmt.Errorf("unsupported snapshot key type %T", v)
 	}
@@ -110,10 +128,11 @@ func encodeKeyValue(v any) (json.RawMessage, error) {
 // uint64 or float64 (exactly, instead of always float64); strings, booleans
 // and null are returned as they were.
 //
-// Known limitation of the legacy form: a DECIMAL, text or binary key was stored
-// as base64 text indistinguishable from a real string, so it is returned as that
-// string. A legacy position on such a key can still seek wrongly once; the
-// first position written by this build is exact.
+// A legacy bare string is returned as a LegacyKey, not a string: it is base64
+// text for text, binary and DECIMAL columns, and the position does not say which
+// column type it came from. The snapshot resolves it against the key column's
+// type, and restarts the table from its first row (duplicates, never a gap) when
+// it cannot.
 func decodeKeyValue(raw json.RawMessage) (any, error) {
 	raw = bytes.TrimSpace(raw)
 	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
@@ -132,7 +151,7 @@ func decodeKeyValue(raw json.RawMessage) (any, error) {
 		if err := json.Unmarshal(raw, &s); err != nil {
 			return nil, fmt.Errorf("invalid snapshot key: %w", err)
 		}
-		return s, nil
+		return LegacyKey(s), nil
 	case 't', 'f':
 		var b bool
 		if err := json.Unmarshal(raw, &b); err != nil {

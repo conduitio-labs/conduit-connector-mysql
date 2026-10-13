@@ -77,7 +77,7 @@ func TestSnapshotResume_KeyTypes(t *testing.T) {
 					var pos opencdc.Position
 					for i := 1; i <= k; i++ {
 						recs := readOne(ctx, is, source)
-						is.Equal(payloadInt(recs[0], "v"), int64(i))
+						is.Equal(payloadInt(recs[0]), int64(i))
 						is.NoErr(source.Ack(ctx, recs[0].Position))
 						pos = recs[0].Position
 					}
@@ -91,7 +91,7 @@ func TestSnapshotResume_KeyTypes(t *testing.T) {
 					for want := k + 1; want <= n; want++ {
 						recs := readOne(ctx, is, source2)
 						is.Equal(recs[0].Operation, opencdc.OperationSnapshot)
-						is.Equal(payloadInt(recs[0], "v"), int64(want)) // no row skipped or repeated
+						is.Equal(payloadInt(recs[0]), int64(want)) // no row skipped or repeated
 						is.NoErr(source2.Ack(ctx, recs[0].Position))
 					}
 
@@ -117,8 +117,8 @@ func readOne(ctx context.Context, is *is.I, source *Source) []opencdc.Record {
 	return recs
 }
 
-func payloadInt(rec opencdc.Record, field string) int64 {
-	switch v := rec.Payload.After.(opencdc.StructuredData)[field].(type) {
+func payloadInt(rec opencdc.Record) int64 {
+	switch v := rec.Payload.After.(opencdc.StructuredData)["v"].(type) {
 	case int32:
 		return int64(v)
 	case int64:
@@ -172,7 +172,7 @@ func TestSnapshotResume_FromPreviousBuildPosition(t *testing.T) {
 
 	for want := 3; want <= 4; want++ {
 		recs := readOne(ctx, is, source2)
-		is.Equal(payloadInt(recs[0], "v"), int64(want))
+		is.Equal(payloadInt(recs[0]), int64(want))
 		is.NoErr(source2.Ack(ctx, recs[0].Position))
 	}
 }

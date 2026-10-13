@@ -81,13 +81,15 @@ type SnapshotPosition struct {
 	CDCStart *CdcPosition `json:"cdc_start,omitempty"`
 }
 
-func (p SnapshotPosition) ToSDKPosition() opencdc.Position {
+// ToSDKPosition marshals the position. It fails, rather than writing a lossy
+// position, when a table's last-read key has a Go type that cannot be encoded
+// type-exactly (see keyvalue.go).
+func (p SnapshotPosition) ToSDKPosition() (opencdc.Position, error) {
 	v, err := json.Marshal(Position{Version: SnapshotPositionVersion, SnapshotPosition: &p})
 	if err != nil {
-		// This should never happen, all Position structs should be valid.
-		panic(err)
+		return nil, fmt.Errorf("failed to marshal snapshot position: %w", err)
 	}
-	return v
+	return v, nil
 }
 
 // Clone deep-copies the position, including CDCStart. This is load-bearing: the

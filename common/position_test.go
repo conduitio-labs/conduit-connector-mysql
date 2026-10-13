@@ -72,7 +72,8 @@ func TestPosition_SnapshotVersionRoundTrip(t *testing.T) {
 		},
 	}
 
-	sdkPos := snapshotPos.ToSDKPosition()
+	sdkPos, err := snapshotPos.ToSDKPosition()
+	is.NoErr(err)
 
 	parsed, err := ParseSDKPosition(sdkPos)
 	is.NoErr(err)
@@ -179,7 +180,8 @@ func TestPosition_ForwardCompat_NReadsNPlus1(t *testing.T) {
 		},
 		CDCStart: &CdcPosition{ReplicationEventPosition: ReplicationEventPosition{Name: "binlog.000002", Pos: 8}},
 	}
-	raw := nPlus1.ToSDKPosition()
+	raw, err := nPlus1.ToSDKPosition()
+	is.NoErr(err)
 
 	var legacy legacyPosition
 	is.NoErr(json.Unmarshal(raw, &legacy))
@@ -321,7 +323,9 @@ func TestSnapshotPosition_KeysRoundTripExactly(t *testing.T) {
 				"c": {MultipleKey: &TablePositionMultipleKey{{KeyName: "a", LastRead: tc.key, SnapshotEnd: tc.key}}},
 			}}
 
-			parsed, err := ParseSDKPosition(in.ToSDKPosition())
+			raw, err := in.ToSDKPosition()
+			is.NoErr(err)
+			parsed, err := ParseSDKPosition(raw)
 			is.NoErr(err)
 
 			got := parsed.SnapshotPosition.Snapshots
@@ -335,8 +339,13 @@ func TestSnapshotPosition_KeysRoundTripExactly(t *testing.T) {
 
 func TestSnapshotPosition_UnsupportedKeyType(t *testing.T) {
 	is := is.New(t)
-	_, err := json.Marshal(TablePositionSingleKey{LastRead: struct{}{}})
+	pos := SnapshotPosition{Snapshots: SnapshotPositions{
+		"t": {SingleKey: &TablePositionSingleKey{LastRead: struct{}{}}},
+	}}
+	// An error, never a panic and never a lossy position.
+	raw, err := pos.ToSDKPosition()
 	is.True(err != nil)
+	is.True(raw == nil)
 }
 
 // Positions written before the tagged form: bare scalars. Integers must now
@@ -351,7 +360,7 @@ func TestSnapshotPosition_LegacyKeysStillDecode(t *testing.T) {
 		{"int above 2^53, exact", `{"version":1,"snapshot_position":{"snapshots":{"t":{"SingleKey":{"last_read":9007199254740993,"snapshot_end":9007199254740999}}}}}`, int64(9007199254740993)},
 		{"uint above int64, exact", `{"version":1,"snapshot_position":{"snapshots":{"t":{"SingleKey":{"last_read":18446744073709551615,"snapshot_end":1}}}}}`, uint64(math.MaxUint64)},
 		{"float", `{"version":1,"snapshot_position":{"snapshots":{"t":{"SingleKey":{"last_read":1.5,"snapshot_end":2.5}}}}}`, 1.5},
-		{"string", `{"version":1,"snapshot_position":{"snapshots":{"t":{"SingleKey":{"last_read":"abc","snapshot_end":"abd"}}}}}`, "abc"},
+		{"string is an unresolved legacy key", `{"version":1,"snapshot_position":{"snapshots":{"t":{"SingleKey":{"last_read":"abc","snapshot_end":"abd"}}}}}`, LegacyKey("abc")},
 		{"null last_read", `{"version":1,"snapshot_position":{"snapshots":{"t":{"SingleKey":{"last_read":null,"snapshot_end":3}}}}}`, nil},
 	}
 	for _, tc := range tests {
@@ -390,7 +399,9 @@ func TestPosition_DowngradeBehaviour(t *testing.T) {
 	var env struct {
 		Version int `json:"version"`
 	}
-	is.NoErr(json.Unmarshal(snap.ToSDKPosition(), &env))
+	rawSnap, err := snap.ToSDKPosition()
+	is.NoErr(err)
+	is.NoErr(json.Unmarshal(rawSnap, &env))
 	is.True(env.Version > previousMaxPositionVersion) // the previous build refuses it
 
 	is.NoErr(json.Unmarshal(CdcPosition{}.ToSDKPosition(), &env))

@@ -232,11 +232,13 @@ func byteValuedColumn(dataType, class string) bool {
 	case classText, classBinary, classTime, classEnum, classSet, classBit:
 		return true
 	case classNumber:
-		return dataType == "decimal" || dataType == "numeric"
+		return isDecimalType(dataType)
 	default:
 		return false
 	}
 }
+
+func isDecimalType(dataType string) bool { return dataType == "decimal" || dataType == "numeric" }
 
 // maxInt64 is the largest value the driver returns as an integer; a BIGINT
 // UNSIGNED above it comes back as its decimal digits.
@@ -306,7 +308,7 @@ func checkKeyClass(v any, column, keyType string, types map[string]string) strin
 			ok = true
 		case []byte:
 			switch {
-			case dataType == "decimal" || dataType == "numeric":
+			case isDecimalType(dataType):
 				// The driver returns DECIMAL as bytes. Whether the bytes came
 				// from a DECIMAL or from a text key that merely looks numeric
 				// is only known when keyType was recorded.

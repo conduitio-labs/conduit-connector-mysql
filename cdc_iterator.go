@@ -238,6 +238,19 @@ func (c *cdcIterator) wrapCanalRunErr() error {
 		return skipped
 	}
 
+	// canal rejects a PartialUpdateRowsEvent before the handler runs; it is
+	// not a purged binlog either.
+	if isPartialJSON(err) {
+		pj := &PartialJSONError{Cause: err}
+		if c.canal != nil {
+			synced := c.canal.SyncedPosition()
+			pj.BinlogFile, pj.AfterPos = synced.Name, synced.Pos
+		} else if c.position != nil {
+			pj.BinlogFile, pj.AfterPos = c.position.Name, c.position.Pos
+		}
+		return pj
+	}
+
 	var name string
 	var pos uint32
 	if c.position != nil {
@@ -512,7 +525,8 @@ func (h *cdcEventHandler) OnRow(e *canal.RowsEvent) error {
 	// Invariant 6: halt before building any record if the row image left a
 	// column out; see checkSkippedColumns.
 	if err := checkSkippedColumns(e); err != nil {
-		err.BinlogFile = h.canal.SyncedPosition().Name
+		synced := h.canal.SyncedPosition()
+		err.BinlogFile, err.AfterPos = synced.Name, synced.Pos
 		return err
 	}
 

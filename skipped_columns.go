@@ -31,18 +31,33 @@ const CodeSkippedColumns = "MYSQL_ROW_IMAGE_SKIPPED_COLUMNS"
 // ErrSkippedColumns matches (errors.Is) every SkippedColumnsError.
 var ErrSkippedColumns = errors.New("row image skipped columns")
 
+// recoveryNote is the part of every halt message that states what resuming
+// costs. A re-snapshot does not carry deletes, so it comes first.
+const recoveryNote = "Recovery re-snapshots, and a snapshot does not carry deletes: before clearing the connector's " +
+	"position, truncate the destination or fully reconcile it, including deletes, for ALL captured tables"
+
 // SkippedColumnsError reports a row event whose image did not log every
 // column. The server does that when the writing session (or the server) runs
-// with binlog_row_image=MINIMAL or NOBLOB. The skipped values are not NULL,
-// they are unknown, and go-mysql hands them over as nil.
+// with binlog_row_image=MINIMAL or NOBLOB, for updates and deletes and also
+// for inserts (every column the INSERT does not name is skipped, defaulted and
+// nullable ones included). The skipped values are unknown: not NULL and not
+// the column default. go-mysql hands them over as nil.
 type SkippedColumnsError struct {
 	Table      string // schema.table
 	Action     string // insert, update or delete
 	BinlogFile string
 	// StartPos and EndPos bound the rows event in BinlogFile. EndPos is the
 	// log_pos MySQL prints in SHOW BINLOG EVENTS (end_log_pos).
+	// Both are zero when Compressed is true.
 	StartPos uint32
 	EndPos   uint32
+	// Compressed is true when the event came out of a compressed transaction
+	// (binlog_transaction_compression=ON). go-mysql gives such sub-events a
+	// zero log position, so the exact position is unknown; AfterPos then
+	// names canal's last saved position before the transaction, or is 0 when
+	// canal has not saved one yet.
+	Compressed bool
+	AfterPos   uint32
 	// Columns are the distinct skipped column names, in table order.
 	Columns []string
 }
@@ -50,25 +65,43 @@ type SkippedColumnsError struct {
 // Error returns the code, what happened, and the fix, on one line so it
 // survives log pipelines and Conduit's error reporting.
 func (e *SkippedColumnsError) Error() string {
+	var where, find string
+	if e.Compressed {
+		// AfterPos is canal's last saved position; it is 0 until canal has
+		// saved one since it started, and then there is nothing to point at.
+		where = "inside a compressed transaction (binlog_transaction_compression=ON), exact event position unavailable"
+		find = fmt.Sprintf("SHOW BINLOG EVENTS IN '%s' and look for the Transaction_payload events", e.BinlogFile)
+		if e.AfterPos > 0 {
+			where = fmt.Sprintf("inside a compressed transaction (binlog_transaction_compression=ON) that follows "+
+				"position %d, exact event position unavailable", e.AfterPos)
+			find = fmt.Sprintf("SHOW BINLOG EVENTS IN '%s' FROM %d and look for the Transaction_payload event",
+				e.BinlogFile, e.AfterPos)
+		}
+	} else {
+		where = fmt.Sprintf("position %d-%d", e.StartPos, e.EndPos)
+		find = fmt.Sprintf("SHOW BINLOG EVENTS IN '%s' and read the events that precede position %d", e.BinlogFile, e.StartPos)
+	}
 	return fmt.Sprintf(
-		"%s: %s on table %q at binlog file %q position %d-%d: the row image did not log column(s) [%s], "+
-			"so their values are unknown and would be delivered as NULL "+
+		"%s: %s on table %q at binlog file %q %s: the row image did not log column(s) [%s], "+
+			"so their values are unknown (delivering the event would overwrite real data with NULL or zero values; "+
+			"for an INSERT the true value is the column default) "+
 			"(config: binlog_row_image=MINIMAL or NOBLOB in the writing session or on the server). "+
-			"Fix: set binlog_row_image=FULL for the writing session (SET SESSION binlog_row_image = 'FULL') and "+
-			"for the server (SET GLOBAL binlog_row_image = 'FULL'). This event is already in the binlog and "+
-			"will halt every restart: to find its transaction (and its GTID, if GTIDs are on) run "+
-			"SHOW BINLOG EVENTS IN '%s' and read the events that precede position %d, "+
-			"reconcile the affected rows downstream, then clear the connector's position to re-snapshot",
-		CodeSkippedColumns, e.Action, e.Table, e.BinlogFile, e.StartPos, e.EndPos,
-		strings.Join(e.Columns, ", "), e.BinlogFile, e.StartPos)
+			"Fix: set binlog_row_image=FULL for the writers (SET SESSION binlog_row_image = 'FULL', and for the "+
+			"server SET PERSIST binlog_row_image = 'FULL'; SET GLOBAL alone does not survive a restart) and "+
+			"reconnect every writer, because existing sessions, pooled ones included, keep their value. "+
+			"This event is already in the binlog and will halt every restart. %s. "+
+			"To find its transaction (and its GTID, if GTIDs are on) run %s, "+
+			"then clear the connector's position to re-snapshot",
+		CodeSkippedColumns, e.Action, e.Table, e.BinlogFile, where, strings.Join(e.Columns, ", "),
+		recoveryNote, find)
 }
 
 // Is makes errors.Is(err, ErrSkippedColumns) true.
 func (e *SkippedColumnsError) Is(target error) bool { return target == ErrSkippedColumns }
 
 // checkSkippedColumns returns a *SkippedColumnsError when any row image in the
-// event left a column out, and nil otherwise. The caller fills BinlogFile,
-// which needs the live canal position.
+// event left a column out, and nil otherwise. The caller fills BinlogFile and
+// AfterPos, which need the live canal position.
 //
 // Invariant 6: schema handling never silently mangles data. A nil in
 // Rows[i][c] with c in SkippedColumns[i] means "not logged", not NULL;
@@ -111,8 +144,59 @@ func checkSkippedColumns(e *canal.RowsEvent) *SkippedColumnsError {
 		Columns: names,
 	}
 	if e.Header != nil {
-		err.EndPos = e.Header.LogPos
-		err.StartPos = e.Header.LogPos - e.Header.EventSize
+		if e.Header.LogPos == 0 || e.Header.EventSize > e.Header.LogPos {
+			// Sub-event of a compressed transaction: LogPos is 0, and
+			// LogPos-EventSize would underflow. Report it as unknown.
+			err.Compressed = true
+		} else {
+			err.EndPos = e.Header.LogPos
+			err.StartPos = e.Header.LogPos - e.Header.EventSize
+		}
 	}
 	return err
+}
+
+// CodePartialJSONUnsupported is the stable error code for ErrPartialJSONUnsupported.
+const CodePartialJSONUnsupported = "MYSQL_PARTIAL_JSON_UNSUPPORTED"
+
+// ErrPartialJSONUnsupported matches (errors.Is) every PartialJSONError.
+var ErrPartialJSONUnsupported = errors.New("partial JSON update unsupported")
+
+// partialUpdateEventName is how go-mysql names a PartialUpdateRowsEvent in the
+// error canal returns for event types it does not handle. canal formats the
+// event type into a fresh error, so only a string match recognizes it.
+const partialUpdateEventName = "PartialUpdateRowsEvent"
+
+// PartialJSONError reports that canal stopped on a PartialUpdateRowsEvent,
+// which a writer produces with binlog_row_value_options=PARTIAL_JSON when it
+// updates part of a JSON column. canal rejects it before the handler runs, so
+// the row cannot be read at all.
+type PartialJSONError struct {
+	BinlogFile string
+	// AfterPos is the last position canal saved before the event.
+	AfterPos uint32
+	Cause    error
+}
+
+func (e *PartialJSONError) Error() string {
+	return fmt.Sprintf(
+		"%s: binlog file %q, after position %d: the server logged a partial JSON update "+
+			"(config: binlog_row_value_options=PARTIAL_JSON), which this connector cannot read: %v. "+
+			"Fix: disable it for the writers (SET SESSION binlog_row_value_options = '', and for the server "+
+			"SET PERSIST binlog_row_value_options = '') and reconnect every writer, because existing sessions keep their "+
+			"value. The event is already in the binlog and will fail every restart. %s. "+
+			"Then clear the connector's position to re-snapshot",
+		CodePartialJSONUnsupported, e.BinlogFile, e.AfterPos, e.Cause, recoveryNote)
+}
+
+// Unwrap returns the canal error.
+func (e *PartialJSONError) Unwrap() error { return e.Cause }
+
+// Is makes errors.Is(err, ErrPartialJSONUnsupported) true.
+func (e *PartialJSONError) Is(target error) bool { return target == ErrPartialJSONUnsupported }
+
+// isPartialJSON reports whether err is canal's rejection of a
+// PartialUpdateRowsEvent.
+func isPartialJSON(err error) bool {
+	return err != nil && strings.Contains(err.Error(), partialUpdateEventName)
 }

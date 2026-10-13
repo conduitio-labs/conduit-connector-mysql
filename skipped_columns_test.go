@@ -19,6 +19,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	"github.com/conduitio/conduit-commons/opencdc"
 	"github.com/go-mysql-org/go-mysql/canal"
 	"github.com/go-mysql-org/go-mysql/replication"
@@ -102,7 +103,8 @@ func TestCheckSkippedColumns(t *testing.T) {
 			msg := asErr.Error()
 			for _, want := range []string{
 				CodeSkippedColumns, `"meroxadb.t"`, "update", `"mysql-bin.000003"`, "1234-1456",
-				"binlog_row_image", "SET SESSION binlog_row_image = 'FULL'", "SHOW BINLOG EVENTS",
+				"binlog_row_image", "SET SESSION binlog_row_image = 'FULL'", "SET PERSIST", "reconnect every writer",
+				"does not carry deletes", "ALL captured tables", "SHOW BINLOG EVENTS",
 			} {
 				is.True(strings.Contains(msg, want)) // message must contain want
 			}
@@ -141,4 +143,61 @@ func TestCdcEventHandler_OnRow_NoHaltWithoutSkippedColumns(t *testing.T) {
 			is.Equal(len(recC), 1)
 		})
 	}
+}
+
+// Sub-events of a compressed transaction carry LogPos 0. The start position
+// must not underflow and the message must say the position is unknown.
+func TestCheckSkippedColumns_CompressedTransaction(t *testing.T) {
+	is := is.New(t)
+	e := &canal.RowsEvent{
+		Table:          skippedTestTable(),
+		Action:         canal.UpdateAction,
+		Header:         &replication.EventHeader{LogPos: 0, EventSize: 40},
+		SkippedColumns: [][]int{{1}, {0}},
+	}
+
+	err := checkSkippedColumns(e)
+	is.True(err != nil)
+	is.True(err.Compressed)
+	is.Equal(err.StartPos, uint32(0))
+	is.Equal(err.EndPos, uint32(0))
+
+	err.BinlogFile, err.AfterPos = "mysql-bin.000003", 500
+	msg := err.Error()
+	is.True(!strings.Contains(msg, "4294967"))
+	is.True(strings.Contains(msg, "compressed transaction"))
+	is.True(strings.Contains(msg, "follows position 500"))
+	is.True(strings.Contains(msg, "FROM 500"))
+
+	// No saved position yet: no FROM to offer.
+	err.AfterPos = 0
+	msg = err.Error()
+	is.True(!strings.Contains(msg, "follows position"))
+	is.True(!strings.Contains(msg, "FROM"))
+	is.True(strings.Contains(msg, "Transaction_payload"))
+
+	// EventSize larger than LogPos underflows the same way without LogPos == 0.
+	e.Header = &replication.EventHeader{LogPos: 30, EventSize: 40}
+	err = checkSkippedColumns(e)
+	is.True(err != nil && err.Compressed && err.StartPos == 0)
+}
+
+func TestWrapCanalRunErr_PartialJSON(t *testing.T) {
+	is := is.New(t)
+	c := &cdcIterator{
+		position: &common.CdcPosition{ReplicationEventPosition: common.ReplicationEventPosition{Name: "binlog.000002", Pos: 123}},
+		// The form canal returns: a fresh error with the event type formatted in.
+		canalRunErr: errors.New("PartialUpdateRowsEvent not supported now"),
+	}
+
+	err := c.wrapCanalRunErr()
+	is.True(errors.Is(err, ErrPartialJSONUnsupported))
+	is.True(!errors.Is(err, ErrCDCStartPositionUnavailable))
+	is.True(strings.Contains(err.Error(), CodePartialJSONUnsupported))
+	is.True(strings.Contains(err.Error(), "SET PERSIST binlog_row_value_options"))
+	is.True(strings.Contains(err.Error(), "ALL captured tables"))
+
+	// Any other canal failure is still reported as an unavailable start position.
+	c.canalRunErr = errors.New("some other canal failure")
+	is.True(errors.Is(c.wrapCanalRunErr(), ErrCDCStartPositionUnavailable))
 }

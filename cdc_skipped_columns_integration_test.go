@@ -38,8 +38,10 @@ func setupSkippedTable(is *is.I, db testutils.DB) {
 	is.Helper()
 	is.NoErr(db.Exec("DROP TABLE IF EXISTS " + skippedTable).Error)
 	is.NoErr(db.Exec("CREATE TABLE " + skippedTable +
-		" (id INT PRIMARY KEY, name VARCHAR(20) NOT NULL, note VARCHAR(20) NULL, doc BLOB NULL)").Error)
-	is.NoErr(db.Exec("INSERT INTO " + skippedTable + " VALUES (1, 'a', 'keep', 'blob-value')").Error)
+		" (id INT PRIMARY KEY, name VARCHAR(20) NOT NULL, note VARCHAR(20) NULL, doc BLOB NULL, " +
+		"d VARCHAR(20) NOT NULL DEFAULT 'dflt')").Error)
+	is.NoErr(db.Exec("INSERT INTO " + skippedTable +
+		" (id, name, note, doc, d) VALUES (1, 'a', 'keep', 'blob-value', 'kept-default')").Error)
 }
 
 func skippedCdcIterator(ctx context.Context, t *testing.T, is *is.I) (*cdcIterator, func() error) {
@@ -148,7 +150,7 @@ func TestCDCIterator_SkippedColumns_RecordsBeforeTheHaltAreDelivered(t *testing.
 
 	it, teardown := skippedCdcIterator(ctx, t, is)
 
-	is.NoErr(db.Exec("INSERT INTO " + skippedTable + " VALUES (2, 'b', 'n2', 'd2')").Error)
+	is.NoErr(db.Exec("INSERT INTO " + skippedTable + " (id, name, note, doc) VALUES (2, 'b', 'n2', 'd2')").Error)
 	w := writerSession(ctx, t, is, "MINIMAL")
 	execOn(ctx, is, w, "UPDATE "+skippedTable+" SET name = 'b2' WHERE id = 2")
 
@@ -242,29 +244,131 @@ func TestCDCIterator_SkippedColumns_MinimalDeleteHalts(t *testing.T) {
 	_ = teardown()
 }
 
-// MINIMAL and NOBLOB log a full after image for INSERT, so a partial-image
-// session that only inserts must not be halted (no false halt).
-func TestCDCIterator_SkippedColumns_PartialImageInsertPasses(t *testing.T) {
-	for _, image := range []string{"MINIMAL", "NOBLOB"} {
-		t.Run(image, func(t *testing.T) {
+// Partial-image INSERTs. MINIMAL logs only the columns the statement names;
+// every omitted column is skipped, defaulted and nullable ones included
+// (observed on MySQL 8.0.39). NOBLOB skips an omitted BLOB but not an omitted
+// non-BLOB default. The binlog carries no value for a skipped column and the
+// default may have changed since, so the connector halts instead of filling it
+// from the schema.
+func TestCDCIterator_SkippedColumns_PartialImageInsert(t *testing.T) {
+	const tbl = skippedTable
+	cases := []struct {
+		name, image, stmt string
+		wantCols          []string // nil: must pass
+	}{
+		{
+			name: "MINIMAL omitted defaulted column halts", image: "MINIMAL",
+			stmt:     "INSERT INTO " + tbl + " (id, name, note, doc) VALUES (3, 'c', 'n3', 'b3')",
+			wantCols: []string{"d"},
+		},
+		{
+			name: "MINIMAL omitted nullable column halts", image: "MINIMAL",
+			stmt:     "INSERT INTO " + tbl + " (id, name, doc, d) VALUES (3, 'c', 'b3', 'd3')",
+			wantCols: []string{"note"},
+		},
+		{
+			name: "NOBLOB omitted BLOB halts", image: "NOBLOB",
+			stmt:     "INSERT INTO " + tbl + " (id, name, note, d) VALUES (3, 'c', 'n3', 'd3')",
+			wantCols: []string{"doc"},
+		},
+		{
+			name: "MINIMAL naming every column passes", image: "MINIMAL",
+			stmt: "INSERT INTO " + tbl + " (id, name, note, doc, d) VALUES (3, 'c', 'n3', 'b3', 'd3')",
+		},
+		{
+			name: "NOBLOB omitted non-BLOB default passes", image: "NOBLOB",
+			stmt: "INSERT INTO " + tbl + " (id, name, note, doc) VALUES (3, 'c', 'n3', 'b3')",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			ctx := testutils.TestContext(t)
 			is := is.New(t)
 			db := testutils.NewDB(t)
 			setupSkippedTable(is, db)
 
 			it, teardown := skippedCdcIterator(ctx, t, is)
+
+			w := writerSession(ctx, t, is, tc.image)
+			execOn(ctx, is, w, tc.stmt)
+
+			if tc.wantCols != nil {
+				se := readHalt(ctx, t, is, it)
+				is.Equal(se.Action, "insert")
+				is.Equal(se.Columns, tc.wantCols)
+				_ = teardown()
+				return
+			}
+
 			defer func() { is.NoErr(teardown()) }()
-
-			w := writerSession(ctx, t, is, image)
-			execOn(ctx, is, w, "INSERT INTO "+skippedTable+" VALUES (3, 'c', 'n3', 'd3')")
-
 			rec := readOne(ctx, is, it)
 			is.Equal(rec.Operation, opencdc.OperationCreate)
 			after := rec.Payload.After.(opencdc.StructuredData)
 			is.Equal(after["note"], "n3")
-			is.Equal(after["doc"], []byte("d3"))
+			is.Equal(after["doc"], []byte("b3"))
 		})
 	}
+}
+
+// A MINIMAL update inside a compressed transaction
+// (binlog_transaction_compression=ON). go-mysql gives the sub-event a zero
+// LogPos, so LogPos-EventSize used to underflow into "position 4294967256-0".
+func TestCDCIterator_SkippedColumns_CompressedTransactionHalts(t *testing.T) {
+	ctx := testutils.TestContext(t)
+	is := is.New(t)
+	db := testutils.NewDB(t)
+	setupSkippedTable(is, db)
+
+	it, teardown := skippedCdcIterator(ctx, t, is)
+
+	w := writerSession(ctx, t, is, "MINIMAL")
+	execOn(ctx, is, w, "SET SESSION binlog_transaction_compression = ON")
+	execOn(ctx, is, w, "UPDATE "+skippedTable+" SET name = 'a2' WHERE id = 1")
+
+	se := readHalt(ctx, t, is, it)
+	is.True(se.Compressed)
+	is.Equal(se.StartPos, uint32(0))
+	is.Equal(se.EndPos, uint32(0))
+	is.True(strings.HasPrefix(se.BinlogFile, "binlog."))
+	is.True(!strings.Contains(se.Error(), "4294967"))
+	is.True(strings.Contains(se.Error(), "compressed transaction"))
+
+	_ = teardown()
+}
+
+// canal cannot read the PartialUpdateRowsEvent that PARTIAL_JSON produces and
+// returns an error before OnRow. It must surface as its own code, not as a
+// purged binlog.
+func TestCDCIterator_PartialJSONUnsupported(t *testing.T) {
+	ctx := testutils.TestContext(t)
+	is := is.New(t)
+	db := testutils.NewDB(t)
+
+	is.NoErr(db.Exec("DROP TABLE IF EXISTS " + skippedTable).Error)
+	is.NoErr(db.Exec("CREATE TABLE " + skippedTable + " (id INT PRIMARY KEY, j JSON NULL)").Error)
+	// The JSON value has to be large enough for the server to log a diff.
+	is.NoErr(db.Exec("INSERT INTO " + skippedTable +
+		` VALUES (1, '{"a":1,"b":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}')`).Error)
+
+	it, teardown := skippedCdcIterator(ctx, t, is)
+
+	w := writerSession(ctx, t, is, "FULL")
+	execOn(ctx, is, w, "SET SESSION binlog_row_value_options = 'PARTIAL_JSON'")
+	execOn(ctx, is, w, "UPDATE "+skippedTable+" SET j = JSON_SET(j, '$.a', 2) WHERE id = 1")
+
+	rctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	recs, err := it.ReadN(rctx, 1)
+	is.Equal(len(recs), 0)
+	is.True(err != nil)
+	is.True(errors.Is(err, ErrPartialJSONUnsupported))
+	is.True(!errors.Is(err, ErrCDCStartPositionUnavailable))
+	is.True(strings.Contains(err.Error(), CodePartialJSONUnsupported))
+	is.True(strings.Contains(err.Error(), "binlog_row_value_options"))
+	is.True(!strings.Contains(err.Error(), "purged"))
+
+	_ = teardown()
 }
 
 // Virtual, stored and invisible columns are part of a FULL image. If MySQL

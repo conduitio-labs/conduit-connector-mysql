@@ -135,23 +135,53 @@ specification:
     ### Partial row images
 
     `binlog_row_image` is also a session variable. A writing session that sets it to `MINIMAL` or `NOBLOB` logs
-    only part of the row for updates and deletes (`MINIMAL`: the primary key and the changed columns; `NOBLOB`:
-    everything except unchanged `BLOB` and `TEXT` columns), even when the server value is `FULL`. The columns
-    left out are unknown, not NULL.
+    only part of the row, even when the server value is `FULL`:
 
-    The CDC source halts on the first such event instead of emitting the unknown columns as NULL. The error has
-    the code `MYSQL_ROW_IMAGE_SKIPPED_COLUMNS` and names the table, the action, the binlog file and position,
-    and the columns that were left out. Inserts are always logged in full and never halt. Snapshot rows are not
-    affected.
+    - `MINIMAL`, UPDATE: the before image holds only the primary key, and the after image holds only the changed
+      columns (the primary key is in it only if it changed).
+    - `MINIMAL`, DELETE: the before image holds only the primary key.
+    - `MINIMAL`, INSERT: the image holds only the columns the statement names. Every column it omits is skipped,
+      including columns with a `DEFAULT` and nullable columns, so an ORM that leaves defaulted columns out halts on
+      its first insert. An INSERT that names every column does not halt.
+    - `NOBLOB`: `BLOB` and `TEXT` columns that an UPDATE or DELETE did not change are skipped, and so is a `BLOB`
+      that an INSERT omits. An INSERT that omits a non-`BLOB` column with a default is logged in full.
 
-    To recover:
+    A skipped column is unknown. It is not NULL and it is not the column default: the binlog carries no value for
+    it, and the schema default may have changed since the row was written, so the connector does not fill it in.
 
-    1. Set `binlog_row_image = 'FULL'` for the writing session (and `SET GLOBAL binlog_row_image = 'FULL'` for
-       the server) so the problem does not recur.
+    The CDC source halts on the first such event instead of delivering zero values over real data. The error has
+    the code `MYSQL_ROW_IMAGE_SKIPPED_COLUMNS` and names the table, the action, the binlog file and position, and
+    the columns that were left out. Snapshot rows are not affected. If the event sits inside a compressed
+    transaction (`binlog_transaction_compression=ON`) the exact position is not available and the error says so.
+
+    The source also stops with the code `MYSQL_PARTIAL_JSON_UNSUPPORTED` when a writer logs partial JSON updates
+    (`binlog_row_value_options=PARTIAL_JSON`), which the connector cannot read. Set the option to an empty value for
+    the writers.
+
+    #### Recovery
+
+    **Resuming means a re-snapshot, and a snapshot does not carry deletes.** Rows deleted at the source while the
+    pipeline was halted would stay in the destination. Before you clear the connector's position, truncate the
+    destination tables or fully reconcile them against the source, deletes included, for ALL captured tables, not
+    only the table named in the error.
+
+    1. Stop the cause. Set `binlog_row_image = 'FULL'` for the writers, and for the server use
+       `SET PERSIST binlog_row_image = 'FULL'` (`SET GLOBAL` does not survive a restart). Then reconnect every
+       writer: existing sessions, pooled connections included, keep the value they started with.
     2. The event is already in the binlog, so every restart halts on it. Find its transaction with
        `SHOW BINLOG EVENTS IN '<file>'` (the error gives the start position of the event); with GTIDs enabled,
        the `Gtid` event just before it names the GTID.
-    3. Reconcile the affected rows downstream, then clear the connector's position to re-snapshot.
+    3. Truncate or fully reconcile the destination for all captured tables, including deletes.
+    4. Clear the connector's position to re-snapshot.
+
+    A lighter way to resume after the event is tracked in
+    [#212](https://github.com/ConduitIO/conduit-connector-mysql/issues/212).
+
+    #### Upgrading
+
+    If the binlog after the stored position already holds an event from a `MINIMAL` or `NOBLOB` session, including
+    an event that an older version had partly emitted, the upgraded connector halts on it after the restart. Older
+    versions delivered such events with zero values.
 
     ### MySQL User Privileges:
 

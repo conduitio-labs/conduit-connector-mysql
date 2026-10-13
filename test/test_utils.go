@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -65,7 +66,11 @@ func NewDB(t *testing.T) DB {
 	// We might want in the future to run many more tests using the Source itself, so that
 	// we don't have to do this dance.
 
-	dsnWithParseTime := DSN + "?parseTime=true"
+	sep := "?"
+	if strings.Contains(DSN, "?") {
+		sep = "&"
+	}
+	dsnWithParseTime := DSN + sep + "parseTime=true"
 
 	db, err := gorm.Open(gormmysql.Open(dsnWithParseTime), &gorm.Config{
 		Logger: logger.Discard,

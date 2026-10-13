@@ -17,8 +17,10 @@ package common
 import (
 	"encoding/json"
 	"errors"
+	"math"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/conduitio/conduit-commons/opencdc"
 	"github.com/matryer/is"
@@ -49,11 +51,11 @@ func TestPosition_VersionRoundTrip(t *testing.T) {
 
 	var raw map[string]any
 	is.NoErr(json.Unmarshal(sdkPos, &raw))
-	is.Equal(raw["version"], float64(CurrentPositionVersion))
+	is.Equal(raw["version"], float64(CDCPositionVersion))
 
 	parsed, err := ParseSDKPosition(sdkPos)
 	is.NoErr(err)
-	is.Equal(parsed.Version, CurrentPositionVersion)
+	is.Equal(parsed.Version, CDCPositionVersion)
 	is.True(parsed.CdcPosition != nil)
 	is.Equal(*parsed.CdcPosition, cdcPos)
 }
@@ -74,7 +76,7 @@ func TestPosition_SnapshotVersionRoundTrip(t *testing.T) {
 
 	parsed, err := ParseSDKPosition(sdkPos)
 	is.NoErr(err)
-	is.Equal(parsed.Version, CurrentPositionVersion)
+	is.Equal(parsed.Version, SnapshotPositionVersion)
 	is.True(parsed.SnapshotPosition != nil)
 	is.True(parsed.SnapshotPosition.CDCStart != nil)
 	is.Equal(*parsed.SnapshotPosition.CDCStart, *snapshotPos.CDCStart)
@@ -226,7 +228,7 @@ func TestPosition_GoldenFile_RoundTrip(t *testing.T) {
 
 	nPlus1Parsed, err := ParseSDKPosition([]byte(nPlus1JSON))
 	is.NoErr(err)
-	is.Equal(nPlus1Parsed.Version, CurrentPositionVersion)
+	is.Equal(nPlus1Parsed.Version, 1) // a version 1 snapshot position is still read
 	is.True(nPlus1Parsed.SnapshotPosition.CDCStart != nil)
 	is.Equal(nPlus1Parsed.SnapshotPosition.CDCStart.Name, "binlog.000001")
 	is.Equal(nPlus1Parsed.SnapshotPosition.CDCStart.Pos, uint32(4))
@@ -279,4 +281,117 @@ func TestCdcPosition_TableCoverage_AdditiveCompat(t *testing.T) {
 		is.True(parsed.CdcPosition.TableCoverage != nil)
 		is.True(!parsed.CdcPosition.TableCoverage.Hashed())
 	})
+}
+// previousMaxPositionVersion is CurrentPositionVersion of the build before keys
+// were written type-exactly.
+const previousMaxPositionVersion = 1
+
+func TestSnapshotPosition_KeysRoundTripExactly(t *testing.T) {
+	ts := time.Date(2024, 2, 29, 13, 14, 15, 123456000, time.UTC)
+
+	tests := []struct {
+		name string
+		key  any
+	}{
+		{"int64 above 2^53", int64(9007199254740993)},
+		{"int64 negative", int64(-9007199254740995)},
+		{"int64 max", int64(math.MaxInt64)},
+		{"uint64 above int64", uint64(1 << 63)},
+		{"uint64 max", uint64(math.MaxUint64)},
+		{"negative decimal bytes", []byte("-300.00")},
+		{"decimal bytes", []byte("12345678901234567890.123456789")},
+		{"text bytes", []byte("caf\xc3\xa9")},
+		{"binary bytes", []byte{0x00, 0xff, 0x80}},
+		{"empty bytes", []byte{}},
+		{"string", "plain"},
+		{"float64", 0.1},
+		{"float32", float32(0.1)},
+		{"time", ts},
+		{"bool", true},
+		{"nil", nil},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			is := is.New(t)
+
+			in := SnapshotPosition{Snapshots: SnapshotPositions{
+				"t": {SingleKey: &TablePositionSingleKey{LastRead: tc.key, SnapshotEnd: tc.key}},
+				"c": {MultipleKey: &TablePositionMultipleKey{{KeyName: "a", LastRead: tc.key, SnapshotEnd: tc.key}}},
+			}}
+
+			parsed, err := ParseSDKPosition(in.ToSDKPosition())
+			is.NoErr(err)
+
+			got := parsed.SnapshotPosition.Snapshots
+			is.Equal(got["t"].SingleKey.LastRead, tc.key)
+			is.Equal(got["t"].SingleKey.SnapshotEnd, tc.key)
+			is.Equal((*got["c"].MultipleKey)[0].LastRead, tc.key)
+			is.Equal((*got["c"].MultipleKey)[0].KeyName, "a")
+		})
+	}
+}
+
+func TestSnapshotPosition_UnsupportedKeyType(t *testing.T) {
+	is := is.New(t)
+	_, err := json.Marshal(TablePositionSingleKey{LastRead: struct{}{}})
+	is.True(err != nil)
+}
+
+// Positions written before the tagged form: bare scalars. Integers must now
+// be read exactly (they were always written exactly, and read back as float64).
+func TestSnapshotPosition_LegacyKeysStillDecode(t *testing.T) {
+	tests := []struct {
+		name string
+		json string
+		want any
+	}{
+		{"small int", `{"snapshot_position":{"snapshots":{"t":{"SingleKey":{"last_read":5,"snapshot_end":50}}}}}`, int64(5)},
+		{"int above 2^53, exact", `{"version":1,"snapshot_position":{"snapshots":{"t":{"SingleKey":{"last_read":9007199254740993,"snapshot_end":9007199254740999}}}}}`, int64(9007199254740993)},
+		{"uint above int64, exact", `{"version":1,"snapshot_position":{"snapshots":{"t":{"SingleKey":{"last_read":18446744073709551615,"snapshot_end":1}}}}}`, uint64(math.MaxUint64)},
+		{"float", `{"version":1,"snapshot_position":{"snapshots":{"t":{"SingleKey":{"last_read":1.5,"snapshot_end":2.5}}}}}`, 1.5},
+		{"string", `{"version":1,"snapshot_position":{"snapshots":{"t":{"SingleKey":{"last_read":"abc","snapshot_end":"abd"}}}}}`, "abc"},
+		{"null last_read", `{"version":1,"snapshot_position":{"snapshots":{"t":{"SingleKey":{"last_read":null,"snapshot_end":3}}}}}`, nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			is := is.New(t)
+			parsed, err := ParseSDKPosition([]byte(tc.json))
+			is.NoErr(err)
+			is.Equal(parsed.SnapshotPosition.Snapshots["t"].SingleKey.LastRead, tc.want)
+		})
+	}
+
+	t.Run("legacy composite key", func(t *testing.T) {
+		is := is.New(t)
+		parsed, err := ParseSDKPosition([]byte(`{"version":1,"snapshot_position":{"snapshots":{"c":{"MultipleKey":[{"key_name":"a","last_read":2,"snapshot_end":4},{"key_name":"b","last_read":3,"snapshot_end":9}]}}}}`))
+		is.NoErr(err)
+		mk := *parsed.SnapshotPosition.Snapshots["c"].MultipleKey
+		is.Equal(len(mk), 2)
+		is.Equal(mk[1].KeyName, "b")
+		is.Equal(mk[1].LastRead, int64(3))
+	})
+}
+
+func TestSnapshotPosition_UnknownKeyEncodingIsAnError(t *testing.T) {
+	is := is.New(t)
+	_, err := ParseSDKPosition([]byte(`{"version":2,"snapshot_position":{"snapshots":{"t":{"SingleKey":{"last_read":{"t":"hologram","v":"1"},"snapshot_end":null}}}}}`))
+	is.True(err != nil)
+	is.True(strings.Contains(err.Error(), "hologram"))
+}
+
+// A build that predates the tagged form refuses a snapshot position written by
+// this one (loud), and this build still writes CDC positions that build reads.
+func TestPosition_DowngradeBehaviour(t *testing.T) {
+	is := is.New(t)
+
+	snap := SnapshotPosition{Snapshots: SnapshotPositions{"t": {SingleKey: &TablePositionSingleKey{LastRead: int64(1), SnapshotEnd: int64(2)}}}}
+	var env struct {
+		Version int `json:"version"`
+	}
+	is.NoErr(json.Unmarshal(snap.ToSDKPosition(), &env))
+	is.True(env.Version > previousMaxPositionVersion) // the previous build refuses it
+
+	is.NoErr(json.Unmarshal(CdcPosition{}.ToSDKPosition(), &env))
+	is.True(env.Version <= previousMaxPositionVersion) // and still reads cdc positions
 }

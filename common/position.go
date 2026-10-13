@@ -31,11 +31,24 @@ const (
 	PositionTypeCDC      PositionType = "cdc"
 )
 
-// CurrentPositionVersion is the version stamped on every position this connector
-// writes. Bump it whenever a position-format change is not safely readable by the
-// previous reader. Absent/0 on read means a legacy pre-version position (treat as
-// readable, see ParseSDKPosition).
-const CurrentPositionVersion = 1
+const (
+	// CDCPositionVersion is stamped on cdc_position envelopes.
+	CDCPositionVersion = 1
+
+	// SnapshotPositionVersion is stamped on snapshot_position envelopes. It is 2
+	// because per-table keys are written type-exactly (see keyvalue.go), a form
+	// version 1 readers cannot interpret: they refuse the position (see
+	// ErrPositionVersionUnsupported) instead of seeking on a misread key. CDC
+	// positions are unaffected, so a downgrade is refused only while a snapshot
+	// is in progress.
+	SnapshotPositionVersion = 2
+
+	// CurrentPositionVersion is the highest envelope version this build reads.
+	// Bump it whenever a position-format change is not safely readable by the
+	// previous reader. Absent/0 on read means a legacy pre-version position
+	// (treat as readable, see ParseSDKPosition).
+	CurrentPositionVersion = SnapshotPositionVersion
+)
 
 // ErrPositionVersionUnsupported is returned by ParseSDKPosition when a persisted
 // position's envelope version is higher than the highest version this connector
@@ -69,7 +82,7 @@ type SnapshotPosition struct {
 }
 
 func (p SnapshotPosition) ToSDKPosition() opencdc.Position {
-	v, err := json.Marshal(Position{Version: CurrentPositionVersion, SnapshotPosition: &p})
+	v, err := json.Marshal(Position{Version: SnapshotPositionVersion, SnapshotPosition: &p})
 	if err != nil {
 		// This should never happen, all Position structs should be valid.
 		panic(err)
@@ -174,7 +187,7 @@ func (p ReplicationEventPosition) ToMysqlPos() mysql.Position {
 }
 
 func (p CdcPosition) ToSDKPosition() opencdc.Position {
-	v, err := json.Marshal(Position{Version: CurrentPositionVersion, CdcPosition: &p})
+	v, err := json.Marshal(Position{Version: CDCPositionVersion, CdcPosition: &p})
 	if err != nil {
 		// This should never happen, all Position structs should be valid.
 		panic(err)

@@ -22,6 +22,10 @@ import (
 // Error codes are public API: tooling and agents match on them. Never change
 // or reuse a code; add a new one.
 const (
+	// CodeTablesUnverified: a position written by an older version could not say
+	// whether the tables were snapshotted. Warning only.
+	CodeTablesUnverified = "mysql.snapshot.tables_unverified"
+
 	// CodeTablesAddedAfterCDC: tables were added to the connector's table list
 	// after it entered CDC, and a snapshot would be needed to cover them.
 	CodeTablesAddedAfterCDC = "mysql.snapshot.tables_added_after_cdc"

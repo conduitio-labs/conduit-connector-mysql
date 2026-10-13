@@ -1,8 +1,8 @@
-# Record snapshotted tables in the CDC position
+# Record table coverage in the CDC position
 
 ## Summary
 
-Add an optional `snapshotted_tables` field to `cdc_position`, carried on every CDC record, so a
+Add an optional `table_coverage` object to `cdc_position`, carried on every CDC record, so a
 restart can detect tables whose existing rows were never snapshotted instead of silently skipping
 them.
 
@@ -20,73 +20,92 @@ Before #158 a full re-snapshot on every restart happened to mask this.
 
 ## Decision
 
-`CdcPosition.SnapshottedTables *[]string` (`snapshotted_tables`, sorted table names).
+`CdcPosition.TableCoverage` (`table_coverage`), three disjoint sorted sets:
 
-- Absent (`nil`) means the position predates the field: coverage is unknown.
-- Present and empty means known: nothing was snapshotted (snapshot disabled from the start).
-- A run that snapshots stamps the set of tables it snapshotted. A CDC-only restart carries the
-  persisted set unchanged, so a later `snapshot.enabled=true` still sees the truth.
+- `snapshotted`: the pipeline snapshotted these tables.
+- `unverified`: tables adopted from a position written by an older build, which did not record
+  coverage. They are assumed, never claimed, to have been snapshotted. The connector warns about
+  them (`mysql.snapshot.tables_unverified`) on every start.
+- `cdc_only`: tables added by a pattern after CDC began. Their existing rows were not snapshotted.
+  Warned about once, then recorded.
 
-On `Open` with a `cdc_position` and the snapshot enabled:
+Absent (`nil`) means the position predates the field (coverage unknown). Present and empty means
+known: nothing has been snapshotted (snapshot disabled).
 
-| Persisted set | Tables not in it | Result |
+**Size.** The coverage rides on every CDC record at about 24 bytes per name. Above 200 tables
+(`MaxListedTables`) the sets are replaced by a SHA-256 over the sorted union, a count and a
+`has_unverified` flag, which is about 160 bytes at any size.
+
+On `Open` with a `cdc_position`, the carried coverage is first restricted to the tables currently
+configured (a table that left is forgotten). Then, with the snapshot enabled:
+
+| Persisted coverage | Tables not in it | Result |
 | --- | --- | --- |
 | known | none | continue |
-| known | some, `tables` is an explicit list of plain names | fail: `mysql.snapshot.tables_added_after_cdc`, config path `tables`, names the tables and the fix |
-| known | some, `tables` has `*` or a regex or an exclude | WARN with the same code; the persisted set is carried unchanged so the warning repeats until resolved |
-| unknown (legacy) | n/a | WARN that coverage is unverified, assume the current tables were covered, start recording |
+| known | some, `tables` is an explicit list of plain names | fail `mysql.snapshot.tables_added_after_cdc`, config path `tables`, naming the tables and the fix |
+| known | some, `tables` has `*`, a regex, an anchored name or an exclude | WARN once with the same code and record them as `cdc_only`; existing rows are not snapshotted |
+| unknown (legacy) | n/a | WARN `mysql.snapshot.tables_unverified`; adopt the current tables as `unverified`; tables added later are detected |
+| hashed | set differs from the hash | same as the two rows above, but the tables cannot be named (a removal looks like an addition) |
 
-With the snapshot disabled nothing is checked.
+With the snapshot disabled nothing is checked; the restricted coverage is carried so a later
+`snapshot.enabled=true` still sees the truth, and a legacy position stays legacy.
 
 Explicit means every rule is an include made of characters with no regex meaning. Table rules are
-unanchored regexes, so a plain name can still match longer names; such tables are treated as
-explicit and fail, which is the safe side.
+unanchored regexes, so a plain name can still match longer names, and such tables are treated as
+explicit and fail, which is the safe side. The escape is to anchor the rule (`^orders$`), which
+makes it a pattern.
 
 The fix an operator takes: start a new pipeline for the new tables, reset the pipeline's position
 to snapshot everything again (duplicates expected), or remove the tables from `tables`.
+
+## Consequences that need saying plainly
+
+- **Tables matched later by a pattern are CDC-only.** Their existing rows are not snapshotted and
+  are never delivered; only changes from the restart onwards are.
+- **Table dropped and recreated across restarts, explicit list: error.** A table absent at one
+  restart is forgotten, so when it is back it counts as added. This is deliberate: changes made
+  while it was outside `tables` were never captured, and the connector cannot tell a recreated
+  table from a new one.
+- **Hashed coverage is coarser.** With more than 200 tables an explicit list that merely loses a
+  table errors, because a subset cannot be verified from a hash.
+- **Legacy positions never become verified.** `unverified` is only cleared by a position reset.
 
 ## Alternatives
 
 - **Always re-snapshot only the new tables.** Needs per-table positions across CDC, a merge of
   two streams and ordering rules, which is a feature, not a safety fix. Deferred; this design does
   not preclude it.
-- **Store a hash of the table set.** Constant size, but the error could not name the tables and a
-  WARN could not say which tables are affected. Kept as the fallback if the list size below proves
-  a problem.
+- **Hash only.** Constant size, but the error could not name the tables. Kept only above the
+  threshold.
 - **Fail for patterns too.** Rejected: a pattern like `*` legitimately matches tables created
-  later, and refusing to start on every new table is worse than a loud warning for the pipelines
-  that use it.
+  later, and refusing to start on every new table is worse than a loud one-time warning for the
+  pipelines that use it.
 - **Bump the position `version`.** Rejected: older builds would refuse the position
   (`ErrPositionVersionUnsupported`), making rollback impossible. The field is additive.
+- **Adopt a legacy position's tables as snapshotted.** Rejected in review: it would assert
+  something nobody verified.
 
 ## Failure modes
 
-- **Crash anywhere:** the field is part of the position, written atomically with it by the
-  engine; nothing new is persisted separately.
-- **Position size:** the list rides on every CDC record. 1000 tables at about 30 bytes is about
-  30 KB per record. Acceptable for tens to hundreds of tables; revisit (hash fallback) if users
-  report pipelines with many thousands of tables.
-- **Table removed, then re-added:** the set still contains it, so no error, but changes made while
-  it was out of `tables` were never captured. Not detected; operators must treat removal as a
-  position reset.
+- **Crash anywhere:** the field is part of the position, written atomically with it by the engine;
+  nothing new is persisted separately.
 - **Snapshot interrupted, then restarted with more tables:** the mid-snapshot resume snapshots
-  every current table; the set stamped on CDC is taken from the run that finished the snapshot.
+  every current table; the coverage stamped on CDC is taken from the run that finished the snapshot.
 - **Mid-snapshot resume changes `tables`:** no check needed; the snapshot covers the new tables.
-- **Legacy position:** cannot be verified; the WARN says so. An operator who knows tables were
-  added since can reset.
 
 ## Upgrade and rollback
 
-- N+1 reading an N position: field absent, treated as unknown, WARN, begins recording. Tested
-  (`TestUpgrade_LegacyCDCPosition_WarnsAndStartsRecording`, `TestCdcPosition_SnapshottedTables_AdditiveCompat`).
-- N reading an N+1 position: the field is ignored by the JSON decoder and dropped on N's next
-  write, returning the position to unknown. Tested with a struct that lacks the field.
+- N+1 reading an N position: field absent, treated as unknown, adopted as unverified with a
+  warning. Tested (`TestUpgrade_LegacyCDCPosition_AdoptsTablesAsUnverified`).
+- N reading an N+1 position: the field is ignored by the JSON decoder and dropped on N's next write,
+  returning the position to unknown. Tested with a struct that lacks the field
+  (`TestCdcPosition_TableCoverage_AdditiveCompat`).
 - `version` stays 1. Rollback is a plain downgrade; the only loss is the protection.
 
 ## Observability
 
-WARN logs carry the code `mysql.snapshot.tables_added_after_cdc` and the table names; the startup
-error carries the same code. Alert on that code in pipeline errors and logs.
+Both WARN codes (`mysql.snapshot.tables_added_after_cdc`, `mysql.snapshot.tables_unverified`) and
+the startup error carry the table names where the position allows. Alert on those codes.
 
 ## Related
 

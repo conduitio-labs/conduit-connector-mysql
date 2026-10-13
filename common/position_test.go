@@ -244,14 +244,13 @@ type oldPosition struct {
 	} `json:"cdc_position,omitempty"`
 }
 
-func TestCdcPosition_SnapshottedTables_AdditiveCompat(t *testing.T) {
+func TestCdcPosition_TableCoverage_AdditiveCompat(t *testing.T) {
 	t.Run("N+1 writes, N reads", func(t *testing.T) {
 		is := is.New(t)
-		tables := []string{"a", "b"}
 		raw := CdcPosition{
 			ReplicationEventPosition: ReplicationEventPosition{Name: "binlog.000001", Pos: 9},
 			Index:                    1,
-			SnapshottedTables:        &tables,
+			TableCoverage:            NewTableCoverage([]string{"a", "b"}, nil, nil),
 		}.ToSDKPosition()
 
 		var old oldPosition
@@ -262,23 +261,22 @@ func TestCdcPosition_SnapshottedTables_AdditiveCompat(t *testing.T) {
 		is.Equal(old.CdcPosition.Index, 1)
 	})
 
-	t.Run("N writes, N+1 reads: legacy position has unknown set", func(t *testing.T) {
+	t.Run("N writes, N+1 reads: legacy position has unknown coverage", func(t *testing.T) {
 		is := is.New(t)
 		legacy := opencdc.Position(`{"version":1,"cdc_position":{"name":"binlog.000004","pos":120,"idx":2,"prev":{"name":"binlog.000004","pos":80}}}`)
 		parsed, err := ParseSDKPosition(legacy)
 		is.NoErr(err)
-		is.True(parsed.CdcPosition.SnapshottedTables == nil)
+		is.True(parsed.CdcPosition.TableCoverage == nil)
 		is.Equal(parsed.CdcPosition.Pos, uint32(120))
 	})
 
-	t.Run("empty set is distinct from absent", func(t *testing.T) {
+	t.Run("known-empty is distinct from absent", func(t *testing.T) {
 		is := is.New(t)
-		empty := []string{}
-		raw := CdcPosition{SnapshottedTables: &empty}.ToSDKPosition()
-		is.True(strings.Contains(string(raw), `"snapshotted_tables":[]`))
+		raw := CdcPosition{TableCoverage: NewTableCoverage(nil, nil, nil)}.ToSDKPosition()
+		is.True(strings.Contains(string(raw), `"table_coverage":{}`))
 		parsed, err := ParseSDKPosition(raw)
 		is.NoErr(err)
-		is.True(parsed.CdcPosition.SnapshottedTables != nil)
-		is.Equal(len(*parsed.CdcPosition.SnapshottedTables), 0)
+		is.True(parsed.CdcPosition.TableCoverage != nil)
+		is.True(!parsed.CdcPosition.TableCoverage.Hashed())
 	})
 }

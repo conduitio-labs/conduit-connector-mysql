@@ -210,8 +210,8 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 		fetchSize:             s.config.FetchSize,
 		// Issue #158: a position that already carries a cdc_position means the
 		// snapshot completed in an earlier run; never run it again.
-		snapshotEnabled:   s.config.SnapshotEnabled && plan.mode != startModeCDCResume,
-		snapshottedTables: coverage.carry,
+		snapshotEnabled: s.config.SnapshotEnabled && plan.mode != startModeCDCResume,
+		coverage:        coverage.carry,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create snapshot iterator: %w", err)
@@ -459,15 +459,17 @@ func (s *Source) getTableKeys(ctx context.Context, dbName string) (common.TableK
 // coverageDecision is the outcome of checking which tables a restart can
 // trust to be covered by a snapshot.
 type coverageDecision struct {
-	// carry is stamped on every CDC position written by this run.
-	carry *[]string
+	// carry is stamped on every CDC position written by this run. nil keeps a
+	// legacy position's "unknown".
+	carry *common.TableCoverage
 	// warnings are logged at WARN by Open.
 	warnings []string
 }
 
 // tablesAreExplicit reports whether every table rule is a plain table name
-// (an include with no regex metacharacters). Anything else, including "*",
-// is a pattern that can match tables created later.
+// (an include with no regex metacharacters). Anything else, including "*" and
+// an anchored name such as "^orders$", is a pattern that is allowed to match
+// tables created later.
 func tablesAreExplicit(rules []string) bool {
 	if len(rules) == 0 {
 		return false
@@ -493,8 +495,12 @@ func tablesAreExplicit(rules []string) bool {
 // configuration after the pipeline entered CDC (or a snapshot switched on for
 // a pipeline that ran CDC-only) would otherwise have its pre-existing rows
 // silently never delivered. Invariant 3: that is a loss path, so for an
-// explicit table list it is an error, and for patterns it is a warning
-// (patterns match tables we cannot reasonably refuse to start over).
+// explicit table list it is an error, and for patterns it is a warning, issued
+// once and then recorded (patterns match tables we cannot reasonably refuse to
+// start over).
+//
+// The carried coverage is always restricted to the tables currently
+// configured, so a table removed and added back later is treated as added.
 //
 // tables are the resolved table names; explicit says the configured rules are
 // plain names. See docs/design-documents/20261012-cdc-snapshotted-tables.md.
@@ -506,56 +512,81 @@ func resolveCoverage(plan startPlan, snapshotEnabled bool, tables []string, expl
 		// runs, every current table is covered by the time CDC starts; when
 		// disabled, nothing is.
 		if snapshotEnabled {
-			return coverageDecision{carry: &current}, nil
+			return coverageDecision{carry: common.NewTableCoverage(current, nil, nil)}, nil
 		}
-		none := []string{}
-		return coverageDecision{carry: &none}, nil
+		return coverageDecision{carry: common.NewTableCoverage(nil, nil, nil)}, nil
 	}
 
-	persisted := plan.cdcPosition.SnapshottedTables
-	if !snapshotEnabled {
-		// Nothing is checked and nothing is claimed: keep whatever the
-		// position said (including "unknown") so a later switch to
-		// snapshot.enabled=true still sees the truth.
-		return coverageDecision{carry: persisted}, nil
-	}
+	persisted := plan.cdcPosition.TableCoverage
 
 	if persisted == nil {
+		// Legacy position: whether the tables were snapshotted is unknown.
+		if !snapshotEnabled {
+			return coverageDecision{}, nil
+		}
+		// Adopt the tables as unverified, never as snapshotted. Later additions
+		// are detected against them; the warning repeats on every start.
 		return coverageDecision{
-			carry: &current,
-			warnings: []string{
-				"restart from a cdc position written before snapshotted_tables existed: " +
-					"cannot verify that every table in `tables` was snapshotted; assuming they were and " +
-					"recording the table set from now on",
-			},
+			carry: common.NewTableCoverage(nil, current, nil),
+			warnings: []string{fmt.Sprintf(
+				"%s: restart from a cdc position written by an older version, which did not record which tables were "+
+					"snapshotted. The tables in `tables` %v are ASSUMED to have been snapshotted but this cannot be "+
+					"verified; if any was added after the pipeline entered CDC its existing rows were never delivered. "+
+					"Tables added from now on are detected. Reset the position to snapshot everything again to clear this warning",
+				CodeTablesUnverified, current)},
 		}, nil
 	}
 
-	var added []string
-	for _, t := range current {
-		if !slices.Contains(*persisted, t) {
-			added = append(added, t)
+	restricted := persisted.Restrict(current)
+	decision := coverageDecision{carry: restricted}
+
+	if restricted.HasUnverifiedTables() {
+		unverified := fmt.Sprintf("%v", restricted.Unverified)
+		if restricted.Hashed() {
+			unverified = "(not listed: large table set)"
 		}
+		decision.warnings = append(decision.warnings, fmt.Sprintf(
+			"%s: tables %s were adopted from a position written by an older version and could not be verified as "+
+				"snapshotted; if any was added after the pipeline entered CDC its existing rows were never delivered. "+
+				"Reset the position to snapshot everything again to clear this warning",
+			CodeTablesUnverified, unverified))
 	}
-	if len(added) == 0 {
-		return coverageDecision{carry: persisted}, nil
+
+	if !snapshotEnabled {
+		return decision, nil
+	}
+
+	added, changed := persisted.Added(current)
+	if !changed {
+		return decision, nil
 	}
 
 	if explicit {
 		return coverageDecision{}, newError(ErrTablesAddedAfterCDC, CodeTablesAddedAfterCDC, "tables",
 			"start a new pipeline for these tables, or reset this pipeline's position to snapshot everything again "+
-				"(expect duplicates), or remove them from `tables`",
-			"tables %v were added after this pipeline entered CDC, so their existing rows were never snapshotted "+
-				"and would be silently skipped", added)
+				"(expect duplicates), or remove them from `tables`. If a plain name in `tables` matches more tables than "+
+				"intended, anchor it as ^name$ (a pattern); patterns only warn and the new tables are then delivered "+
+				"from CDC only",
+			"%s were added after this pipeline entered CDC, so their existing rows were never snapshotted "+
+				"and would be silently skipped", describeAdded(added, persisted, current))
 	}
 
-	return coverageDecision{
-		carry: persisted,
-		warnings: []string{fmt.Sprintf(
-			"%s: tables %v match `tables` but were added after this pipeline entered CDC; their existing rows are NOT "+
-				"snapshotted (only changes from now on are delivered). Start a new pipeline or reset the position to "+
-				"snapshot them", CodeTablesAddedAfterCDC, added)},
-	}, nil
+	// Patterns: warn once, then record the tables so the warning does not repeat.
+	decision.carry = persisted.WithCDCOnly(added, current)
+	decision.warnings = append(decision.warnings, fmt.Sprintf(
+		"%s: %s match `tables` but were added after this pipeline entered CDC; their existing rows are NOT "+
+			"snapshotted and will not be delivered, only changes from now on are (CDC-only). This is logged once. "+
+			"Start a new pipeline or reset the position to snapshot them",
+		CodeTablesAddedAfterCDC, describeAdded(added, persisted, current)))
+	return decision, nil
+}
+
+func describeAdded(added []string, persisted *common.TableCoverage, current []string) string {
+	if persisted.Hashed() {
+		return fmt.Sprintf("tables (the position stores %d tables as a hash, so the new ones cannot be named; "+
+			"the configuration now matches %d)", persisted.Count, len(current))
+	}
+	return fmt.Sprintf("tables %v", added)
 }
 
 func sortedUnique(in []string) []string {

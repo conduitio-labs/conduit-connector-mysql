@@ -47,9 +47,8 @@ type combinedIteratorConfig struct {
 	disableCanalLogging   bool
 	snapshotEnabled       bool
 
-	// snapshottedTables is the coverage set stamped on CDC positions; see
-	// resolveCoverage.
-	snapshottedTables *[]string
+	// coverage is stamped on CDC positions; see resolveCoverage.
+	coverage *common.TableCoverage
 }
 
 func newCombinedIterator(
@@ -63,7 +62,7 @@ func newCombinedIterator(
 		disableCanalLogging: config.disableCanalLogging,
 		db:                  config.db,
 		startPosition:       config.startCdcPosition,
-		snapshottedTables:   config.snapshottedTables,
+		coverage:            config.coverage,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cdc iterator: %w", err)

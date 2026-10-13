@@ -16,6 +16,7 @@ package mysql
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
@@ -329,5 +330,43 @@ func TestCDCIterator_RestartOnEventCenter(t *testing.T) {
 	users = append(users, newUsers...)
 	for i := lastIdx; i < len(users); i++ {
 		testutils.ReadAndAssertCreate(ctx, is, iterator, *users[i])
+	}
+}
+
+// Regression test for the Close/SetEventHandler race seen in CI under -race:
+// start used to install the canal event handler from the goroutine it spawned,
+// so a Close right after Open could read the handler while that goroutine wrote
+// it. The handler must be installed before start returns. canal exposes no
+// getter, so this reads its unexported field by reflection.
+//
+// It cannot be fully deterministic against the old code: the old goroutine may
+// win the race to install the handler before this check runs, and the data race
+// itself only shows under -race. It fails with the old code whenever the
+// scheduler does not run the new goroutine first, which is the common case.
+func TestCdcIterator_StartInstallsHandlerBeforeReturning(t *testing.T) {
+	ctx := testutils.TestContext(t)
+	is := is.New(t)
+	db := testutils.NewDB(t).SqlxDB
+
+	config, err := mysql.ParseDSN(testutils.DSN)
+	is.NoErr(err)
+
+	for range 20 {
+		iterator, err := newCdcIterator(ctx, cdcIteratorConfig{
+			mysqlConfig:         config,
+			tables:              []string{"users"},
+			tableKeys:           testutils.TablePrimaryKeys,
+			db:                  db,
+			disableCanalLogging: true,
+		})
+		is.NoErr(err)
+		is.NoErr(iterator.obtainStartPosition())
+		is.NoErr(iterator.start(ctx))
+
+		handler := reflect.ValueOf(iterator.canal).Elem().FieldByName("eventHandler").Elem()
+		is.Equal(handler.Type().String(), "*mysql.cdcEventHandler")
+
+		iterator.canal.Close()
+		<-iterator.canalRunDoneC
 	}
 }

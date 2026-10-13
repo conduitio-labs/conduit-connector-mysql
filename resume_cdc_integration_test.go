@@ -29,6 +29,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	testutils "github.com/conduitio-labs/conduit-connector-mysql/test"
 	"github.com/conduitio/conduit-commons/opencdc"
 	sdk "github.com/conduitio/conduit-connector-sdk"
@@ -229,14 +230,21 @@ func cdcPositionAfterOneChange(ctx context.Context, is *is.I, db testutils.DB, c
 	return pos
 }
 
-func snapshotted(is *is.I, pos opencdc.Position) []string {
+func coverageOf(is *is.I, pos opencdc.Position) common.TableCoverage {
 	is.Helper()
 	cdc := parseTestPosition(is, pos).CdcPosition
 	is.True(cdc != nil)
-	if cdc.SnapshottedTables == nil {
-		return nil
+	is.True(cdc.TableCoverage != nil)
+	return *cdc.TableCoverage
+}
+
+func snapshotted(is *is.I, pos opencdc.Position) []string {
+	is.Helper()
+	c := coverageOf(is, pos)
+	if c.Snapshotted == nil {
+		return []string{}
 	}
-	return *cdc.SnapshottedTables
+	return c.Snapshotted
 }
 
 func resetTables(is *is.I, db testutils.DB) {
@@ -266,7 +274,38 @@ func TestRestart_TableAddedAfterCDC_ExplicitList_Fails(t *testing.T) {
 	is.Equal(coded.Code, "mysql.snapshot.tables_added_after_cdc")
 	is.Equal(coded.ConfigPath, "tables")
 	is.True(strings.Contains(coded.Message, "late_rows"))
-	is.True(coded.Fix != "")
+	is.True(strings.Contains(coded.Fix, "^name$"))
+}
+
+// A table removed from the configuration and added back later is not assumed
+// covered: changes made while it was out of `tables` were never captured.
+func TestRestart_TableRemovedThenReadded_IsDetected(t *testing.T) {
+	ctx := testutils.TestContext(t)
+	is := is.New(t)
+	db := testutils.NewDB(t)
+	resetTables(is, db)
+	testutils.CreateTables(is, db, &lateRow{})
+	is.NoErr(db.Create(&crashRow{ID: 1, Val: "a"}).Error)
+	is.NoErr(db.Create(&lateRow{ID: 1, Val: "b"}).Error)
+
+	both := map[string]string{"tables": "crash_rows,late_rows"}
+	pos1 := cdcPositionAfterOneChange(ctx, is, db, both)
+	is.Equal(snapshotted(is, pos1), []string{"crash_rows", "late_rows"})
+
+	// Run 2 without late_rows: the coverage forgets it.
+	runCtx, cancel := context.WithCancel(ctx)
+	source, err := openSource(runCtx, is, map[string]string{"tables": "crash_rows"}, pos1)
+	is.NoErr(err)
+	is.NoErr(db.Create(&crashRow{ID: 200, Val: "x"}).Error)
+	recs := drainRecords(ctx, is, source)
+	is.True(len(recs) > 0)
+	pos2 := recs[len(recs)-1].Position
+	is.Equal(snapshotted(is, pos2), []string{"crash_rows"})
+	killSource(cancel, source)
+
+	// Run 3 adds it back: refused.
+	_, err = openSource(ctx, is, map[string]string{"tables": "crash_rows,late_rows"}, pos2)
+	is.True(errors.Is(err, ErrTablesAddedAfterCDC))
 }
 
 func TestRestart_TableAddedAfterCDC_Pattern_WarnsOnly(t *testing.T) {
@@ -302,7 +341,19 @@ func TestRestart_TableAddedAfterCDC_Pattern_WarnsOnly(t *testing.T) {
 	is.Equal(countSnapshots(got), 0)
 	is.Equal(len(got), 1)
 	is.Equal(got[0].Operation, opencdc.OperationCreate)
-	is.Equal(snapshotted(is, got[0].Position), []string{"crash_rows"}) // still not claimed
+	c := coverageOf(is, got[0].Position)
+	is.Equal(c.Snapshotted, []string{"crash_rows"}) // never claimed as snapshotted
+	is.Equal(c.CDCOnly, []string{"late_rows"})      // recorded, so the warning is not repeated
+	killSource(cancel, source)
+
+	// The next restart is silent about it.
+	logCtx2, logs2 := capturedLogContext()
+	runCtx2, cancel2 := context.WithCancel(logCtx2)
+	defer cancel2()
+	source2, err := openSource(runCtx2, is, map[string]string{"tables": "^(crash|late)_rows$"}, got[0].Position)
+	is.NoErr(err)
+	t.Cleanup(func() { teardownForCleanup(source2) })
+	is.True(!strings.Contains(logs2.String(), `"level":"warn"`))
 }
 
 // Same rule when snapshot.enabled is switched on for a pipeline that has been
@@ -328,14 +379,16 @@ func TestRestart_SnapshotFlippedOn_AfterCDCOnly_Fails(t *testing.T) {
 	t.Cleanup(func() { teardownForCleanup(source) })
 }
 
-// Upgrade test: a cdc_position written by the previous build (no
-// snapshotted_tables) opened by this build must resume, warn that the table set
-// is unverified, and start recording it.
-func TestUpgrade_LegacyCDCPosition_WarnsAndStartsRecording(t *testing.T) {
+// Upgrade test: a cdc_position written by the previous build (no table_coverage)
+// opened by this build must resume and adopt the configured tables as
+// UNVERIFIED, never as snapshotted, warning on every start; tables added
+// afterwards are detected.
+func TestUpgrade_LegacyCDCPosition_AdoptsTablesAsUnverified(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 	db := testutils.NewDB(t)
 	resetTables(is, db)
+	testutils.CreateTables(is, db, &lateRow{})
 	is.NoErr(db.Create(&crashRow{ID: 1, Val: "a"}).Error)
 
 	cfg := func() map[string]string { return map[string]string{"tables": "crash_rows"} }
@@ -344,10 +397,10 @@ func TestUpgrade_LegacyCDCPosition_WarnsAndStartsRecording(t *testing.T) {
 	// Rewrite it exactly as the previous build would have written it.
 	var raw map[string]any
 	is.NoErr(json.Unmarshal(pos, &raw))
-	delete(raw["cdc_position"].(map[string]any), "snapshotted_tables")
+	delete(raw["cdc_position"].(map[string]any), "table_coverage")
 	legacy, err := json.Marshal(raw)
 	is.NoErr(err)
-	is.True(!strings.Contains(string(legacy), "snapshotted_tables"))
+	is.True(!strings.Contains(string(legacy), "table_coverage"))
 
 	is.NoErr(db.Create(&crashRow{ID: 101, Val: "after-upgrade"}).Error)
 
@@ -356,23 +409,29 @@ func TestUpgrade_LegacyCDCPosition_WarnsAndStartsRecording(t *testing.T) {
 	source, err := openSource(runCtx, is, cfg(), legacy)
 	is.NoErr(err)
 	is.True(strings.Contains(logs.String(), `"level":"warn"`))
-	is.True(strings.Contains(logs.String(), "cannot verify"))
+	is.True(strings.Contains(logs.String(), "mysql.snapshot.tables_unverified"))
+	is.True(strings.Contains(logs.String(), "ASSUMED"))
 
 	got := drainRecords(runCtx, is, source)
 	is.Equal(countSnapshots(got), 0)
 	is.True(hasRecordFor(got, opencdc.OperationCreate, 101))
 	upgraded := got[len(got)-1].Position
-	is.Equal(snapshotted(is, upgraded), []string{"crash_rows"})
+	c := coverageOf(is, upgraded)
+	is.Equal(c.Unverified, []string{"crash_rows"})
+	is.Equal(len(c.Snapshotted), 0) // never claimed covered
 	killSource(cancel, source)
 
-	// Restart from the upgraded position: verified, no warning.
+	// Restart: still warned, still unverified.
 	logCtx2, logs2 := capturedLogContext()
 	runCtx2, cancel2 := context.WithCancel(logCtx2)
-	defer cancel2()
 	source2, err := openSource(runCtx2, is, cfg(), upgraded)
 	is.NoErr(err)
-	t.Cleanup(func() { teardownForCleanup(source2) })
-	is.True(!strings.Contains(logs2.String(), "cannot verify"))
+	is.True(strings.Contains(logs2.String(), "mysql.snapshot.tables_unverified"))
+	killSource(cancel2, source2)
+
+	// A table added afterwards is detected, relative to the adopted set.
+	_, err = openSource(ctx, is, map[string]string{"tables": "crash_rows,late_rows"}, upgraded)
+	is.True(errors.Is(err, ErrTablesAddedAfterCDC))
 }
 
 // Crash between the last snapshot ack and the first CDC ack, through Open:

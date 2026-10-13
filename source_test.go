@@ -134,18 +134,16 @@ func TestTablesAreExplicit(t *testing.T) {
 // Silent loss of pre-existing rows for tables added after CDC began (review of
 // #195). Invariant 3.
 func TestResolveCoverage(t *testing.T) {
-	set := func(s ...string) *[]string { c := append([]string{}, s...); return &c }
-	cdc := func(snapshotted *[]string) startPlan {
-		return startPlan{
-			mode:        startModeCDCResume,
-			cdcPosition: &common.CdcPosition{SnapshottedTables: snapshotted},
-		}
+	cov := common.NewTableCoverage
+	cdc := func(c *common.TableCoverage) startPlan {
+		return startPlan{mode: startModeCDCResume, cdcPosition: &common.CdcPosition{TableCoverage: c}}
 	}
-	derefOrNil := func(p *[]string) any {
-		if p == nil {
-			return nil
+	many := func(n int) []string {
+		out := make([]string, n)
+		for i := range out {
+			out[i] = fmt.Sprintf("t%04d", i)
 		}
-		return *p
+		return out
 	}
 
 	tests := []struct {
@@ -156,20 +154,27 @@ func TestResolveCoverage(t *testing.T) {
 		explicit     bool
 		wantCode     bool
 		wantWarnings int
-		wantCarry    any
+		want         *common.TableCoverage // nil: carry nil (legacy stays unknown)
 	}{
-		{"fresh, snapshot on: records current tables", startPlan{mode: startModeFresh}, true, []string{"b", "a"}, true, false, 0, []string{"a", "b"}},
-		{"fresh, snapshot off: records the empty set", startPlan{mode: startModeFresh}, false, []string{"a"}, true, false, 0, []string{}},
-		{"mid-snapshot resume, snapshot on", startPlan{mode: startModeSnapshotResume}, true, []string{"a"}, true, false, 0, []string{"a"}},
-		{"cdc, same tables", cdc(set("a", "b")), true, []string{"a", "b"}, true, false, 0, []string{"a", "b"}},
-		{"cdc, table removed", cdc(set("a", "b")), true, []string{"a"}, true, false, 0, []string{"a", "b"}},
-		{"cdc, explicit list gained a table: error", cdc(set("a")), true, []string{"a", "b"}, true, true, 0, nil},
-		{"cdc, pattern gained a table: warn, set unchanged", cdc(set("a")), true, []string{"a", "b"}, false, false, 1, []string{"a"}},
-		{"cdc, snapshot flipped on after cdc-only run: error", cdc(set()), true, []string{"a"}, true, true, 0, nil},
-		{"cdc, snapshot flipped on, pattern: warn", cdc(set()), true, []string{"a"}, false, false, 1, []string{}},
-		{"cdc legacy position, snapshot on: warn and start recording", cdc(nil), true, []string{"b", "a"}, true, false, 1, []string{"a", "b"}},
-		{"cdc legacy position, snapshot off: stays unknown", cdc(nil), false, []string{"a"}, true, false, 0, nil},
-		{"cdc known position, snapshot off: set kept", cdc(set("a")), false, []string{"a", "b"}, true, false, 0, []string{"a"}},
+		{"fresh, snapshot on: records current tables", startPlan{mode: startModeFresh}, true, []string{"b", "a"}, true, false, 0, cov([]string{"a", "b"}, nil, nil)},
+		{"fresh, snapshot off: records known-empty", startPlan{mode: startModeFresh}, false, []string{"a"}, true, false, 0, cov(nil, nil, nil)},
+		{"mid-snapshot resume, snapshot on", startPlan{mode: startModeSnapshotResume}, true, []string{"a"}, true, false, 0, cov([]string{"a"}, nil, nil)},
+		{"cdc, same tables", cdc(cov([]string{"a", "b"}, nil, nil)), true, []string{"a", "b"}, true, false, 0, cov([]string{"a", "b"}, nil, nil)},
+		{"cdc, table removed: forgotten", cdc(cov([]string{"a", "b"}, nil, nil)), true, []string{"a"}, true, false, 0, cov([]string{"a"}, nil, nil)},
+		{"cdc, table removed then added back, explicit: error", cdc(cov([]string{"a"}, nil, nil)), true, []string{"a", "b"}, true, true, 0, nil},
+		{"cdc, explicit list gained a table: error", cdc(cov([]string{"a"}, nil, nil)), true, []string{"a", "b"}, true, true, 0, nil},
+		{"cdc, pattern gained a table: warn once and record cdc-only", cdc(cov([]string{"a"}, nil, nil)), true, []string{"a", "b"}, false, false, 1, cov([]string{"a"}, nil, []string{"b"})},
+		{"cdc, same pattern tables on the next restart: silent", cdc(cov([]string{"a"}, nil, []string{"b"})), true, []string{"a", "b"}, false, false, 0, cov([]string{"a"}, nil, []string{"b"})},
+		{"cdc, snapshot flipped on after cdc-only run: error", cdc(cov(nil, nil, nil)), true, []string{"a"}, true, true, 0, nil},
+		{"cdc, snapshot flipped on, pattern: warn once", cdc(cov(nil, nil, nil)), true, []string{"a"}, false, false, 1, cov(nil, nil, []string{"a"})},
+		{"cdc legacy, snapshot on: adopt as UNVERIFIED, warn", cdc(nil), true, []string{"b", "a"}, true, false, 1, cov(nil, []string{"a", "b"}, nil)},
+		{"cdc adopted-unverified restart: keeps warning, never promoted", cdc(cov(nil, []string{"a"}, nil)), true, []string{"a"}, true, false, 1, cov(nil, []string{"a"}, nil)},
+		{"cdc adopted-unverified, new explicit table: error", cdc(cov(nil, []string{"a"}, nil)), true, []string{"a", "b"}, true, true, 0, nil},
+		{"cdc legacy, snapshot off: stays unknown", cdc(nil), false, []string{"a"}, true, false, 0, nil},
+		{"cdc known, snapshot off: restricted, nothing checked", cdc(cov([]string{"a", "b"}, nil, nil)), false, []string{"a", "c"}, true, false, 0, cov([]string{"a"}, nil, nil)},
+		{"hash form, same set", cdc(cov(many(300), nil, nil)), true, many(300), true, false, 0, cov(many(300), nil, nil)},
+		{"hash form, set changed, explicit: error", cdc(cov(many(300), nil, nil)), true, many(301), true, true, 0, nil},
+		{"hash form, set changed, pattern: warn and re-record", cdc(cov(many(300), nil, nil)), true, many(301), false, false, 1, cov(many(301), nil, nil)},
 	}
 
 	for _, tc := range tests {
@@ -182,13 +187,25 @@ func TestResolveCoverage(t *testing.T) {
 				is.True(errors.As(err, &coded))
 				is.Equal(coded.Code, "mysql.snapshot.tables_added_after_cdc")
 				is.Equal(coded.ConfigPath, "tables")
-				is.True(strings.Contains(err.Error(), "[b]") || strings.Contains(err.Error(), "[a]"))
 				is.True(coded.Fix != "")
+				is.True(strings.Contains(coded.Fix, "^name$")) // the real escape for unanchored rules
 				return
 			}
 			is.NoErr(err)
 			is.Equal(len(got.warnings), tc.wantWarnings)
-			is.Equal(derefOrNil(got.carry), tc.wantCarry)
+			if tc.want == nil {
+				is.True(got.carry == nil)
+				return
+			}
+			is.True(got.carry != nil)
+			// The set content, not the form: hashed coverage compares by hash.
+			is.Equal(*got.carry, *tc.want)
 		})
 	}
+
+	t.Run("error names the added tables", func(t *testing.T) {
+		is := is.New(t)
+		_, err := resolveCoverage(cdc(cov([]string{"a"}, nil, nil)), true, []string{"a", "late"}, true)
+		is.True(strings.Contains(err.Error(), "late"))
+	})
 }

@@ -119,14 +119,11 @@ specification:
 
     *   **Operation**: `snapshot`.
     *   **Payload `After`**: `opencdc.StructuredData` with all column values.
-    *   **Key**:
-        *   With Primary Key(s): `opencdc.StructuredData` using primary key columns and values.
-        *   Without Primary Key(s) (using `LIMIT`/`OFFSET`): `opencdc.RawData` string `"<table_name>_<row_offset>"`.
+    *   **Key**: `opencdc.StructuredData` using the primary key columns (or the configured `tableConfig.<table>.sortingColumn`) and their values.
     *   **Position (`snapshot_position` field)**: A JSON object containing:
         *   `snapshots`: (object) Maps table names to their specific snapshot position object.
             *   *(Single Primary Key Table)*: Contains `last_read` (any) and `snapshot_end` (any).
             *   *(Multiple Primary Key Table)*: Contains an array of objects, each with `key_name` (string), `last_read` (any), and `snapshot_end` (any).
-            *   *(No Primary Key Table)*: Table entry might be missing or empty (offset is not persisted).
 
     #### CDC Records
 

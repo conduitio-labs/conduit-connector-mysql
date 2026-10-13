@@ -325,3 +325,71 @@ func TestDestination_DeletesWithMultipleKeys(t *testing.T) {
 	is.Equal(3, remainingUsers[0].ID)
 	is.Equal("user3", remainingUsers[0].Username)
 }
+
+func destinationTestRecord(table string, op opencdc.Operation, id int64) opencdc.Record {
+	metadata := opencdc.Metadata{}
+	metadata.SetCollection(table)
+
+	return opencdc.Record{
+		Operation: op,
+		Metadata:  metadata,
+		Key:       opencdc.StructuredData{"id": id},
+		Payload:   opencdc.Change{After: opencdc.StructuredData{"id": id, "v": "x"}},
+	}
+}
+
+// Regression test for #187. A failure in a later batch rolls the transaction
+// back, so Write must report 0 written; reporting the earlier batches as written
+// makes the SDK acknowledge records that were never stored.
+func TestDestination_Write_FailureReportsNothingWritten(t *testing.T) {
+	ctx := testutils.TestContext(t)
+	is := is.New(t)
+	db := testutils.NewDB(t)
+
+	is.NoErr(db.Exec("DROP TABLE IF EXISTS dest_atomic").Error)
+	is.NoErr(db.Exec("DROP TABLE IF EXISTS dest_atomic_missing").Error)
+	is.NoErr(db.Exec("CREATE TABLE dest_atomic (id BIGINT PRIMARY KEY, v VARCHAR(10))").Error)
+	t.Cleanup(func() { db.Exec("DROP TABLE IF EXISTS dest_atomic") })
+
+	dest, cleanup := testDestination(ctx, is)
+	defer cleanup()
+
+	// The second record targets a table that does not exist, so its batch fails
+	// after the first batch was applied inside the transaction.
+	written, err := dest.Write(ctx, []opencdc.Record{
+		destinationTestRecord("dest_atomic", opencdc.OperationCreate, 1),
+		destinationTestRecord("dest_atomic_missing", opencdc.OperationCreate, 2),
+	})
+	is.True(err != nil)
+	is.Equal(written, 0)
+
+	var count int64
+	is.NoErr(db.Raw("SELECT COUNT(*) FROM dest_atomic").Scan(&count).Error)
+	is.Equal(count, int64(0)) // the rollback must have discarded the first batch
+}
+
+// Regression test for #188. With no primary key the delete predicate used to be
+// empty, which matched (and deleted) every row in the table.
+func TestDestination_Delete_TableWithoutPrimaryKey(t *testing.T) {
+	ctx := testutils.TestContext(t)
+	is := is.New(t)
+	db := testutils.NewDB(t)
+
+	is.NoErr(db.Exec("DROP TABLE IF EXISTS dest_nopk").Error)
+	is.NoErr(db.Exec("CREATE TABLE dest_nopk (id BIGINT, v VARCHAR(10))").Error)
+	t.Cleanup(func() { db.Exec("DROP TABLE IF EXISTS dest_nopk") })
+	is.NoErr(db.Exec("INSERT INTO dest_nopk VALUES (1, 'a'), (2, 'b'), (3, 'c')").Error)
+
+	dest, cleanup := testDestination(ctx, is)
+	defer cleanup()
+
+	written, err := dest.Write(ctx, []opencdc.Record{
+		destinationTestRecord("dest_nopk", opencdc.OperationDelete, 1),
+	})
+	is.True(err != nil)
+	is.Equal(written, 0)
+
+	var count int64
+	is.NoErr(db.Raw("SELECT COUNT(*) FROM dest_nopk").Scan(&count).Error)
+	is.Equal(count, int64(3)) // no row may be deleted
+}

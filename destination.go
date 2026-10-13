@@ -80,7 +80,13 @@ func (d *Destination) Open(_ context.Context) (err error) {
 	return nil
 }
 
-func (d *Destination) Write(ctx context.Context, recs []opencdc.Record) (written int, err error) {
+// Write applies recs in a single transaction.
+//
+// Invariant 1: the returned count is the number of records that are durably
+// committed. The transaction is all-or-nothing, so the result is either
+// len(recs) with a nil error, or 0 with an error. Reporting a partial count after
+// a failure would make the SDK acknowledge records that the rollback discarded.
+func (d *Destination) Write(ctx context.Context, recs []opencdc.Record) (int, error) {
 	tx, err := d.db.BeginTxx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("failed to begin transaction: %w", err)
@@ -95,16 +101,17 @@ func (d *Destination) Write(ctx context.Context, recs []opencdc.Record) (written
 	}
 
 	for _, batch := range batches {
-		var n int
+		var err error
 		switch batch.kind {
 		case upsertBatchKind:
-			n, err = d.upsertRecords(ctx, tx, batch.table, batch.recs)
+			_, err = d.upsertRecords(ctx, tx, batch.table, batch.recs)
 		case deleteBatchKind:
-			n, err = d.deleteRecords(ctx, tx, batch.table, batch.recs)
+			_, err = d.deleteRecords(ctx, tx, batch.table, batch.recs)
 		}
-		written += n
 		if err != nil {
-			return written, fmt.Errorf(`failed to process "%s" batch: %w`, batch.kind, err)
+			// Invariant 1: the deferred Rollback discards every batch applied so
+			// far in this call, so none of the records count as written.
+			return 0, fmt.Errorf(`failed to process "%s" batch: %w`, batch.kind, err)
 		}
 	}
 
@@ -188,6 +195,13 @@ func (d *Destination) deleteRecords(ctx context.Context, tx *sqlx.Tx, table stri
 	primaryKeys, err := d.config.TableKeyFetcher().GetKeys(tx, table)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get keys when deleting record batch: %w", err)
+	}
+	if len(primaryKeys) == 0 {
+		// Without this check the empty key list builds a predicate that matches
+		// every row, and the delete wipes the table.
+		return 0, fmt.Errorf(
+			"cannot delete from table %q: it has no primary key, so a delete record cannot be matched to a row; "+
+				"add a primary key to the table or remove delete records from the pipeline", table)
 	}
 
 	if len(primaryKeys) == 1 {
@@ -281,6 +295,17 @@ func newRecordKind(op opencdc.Operation) recordBatchKind {
 	return ""
 }
 
+// recordKind fails on an operation the destination does not handle. Skipping such
+// a record would still count it as written (invariant 3: never drop a record
+// without delivering it).
+func recordKind(rec opencdc.Record) (recordBatchKind, error) {
+	kind := newRecordKind(rec.Operation)
+	if kind == "" {
+		return "", fmt.Errorf("unsupported operation %q", rec.Operation)
+	}
+	return kind, nil
+}
+
 type recordBatch struct {
 	kind  recordBatchKind
 	table string
@@ -299,8 +324,12 @@ func batchRecords(recs []opencdc.Record) ([]recordBatch, error) {
 	}
 
 	var batches []recordBatch
+	kind, err := recordKind(firstRec)
+	if err != nil {
+		return nil, err
+	}
 	currBatch := recordBatch{
-		kind:  newRecordKind(recs[0].Operation),
+		kind:  kind,
 		table: table,
 		recs:  []opencdc.Record{firstRec},
 	}
@@ -313,7 +342,10 @@ func batchRecords(recs []opencdc.Record) ([]recordBatch, error) {
 			return nil, fmt.Errorf("failed to get collection: %w", err)
 		}
 
-		kind := newRecordKind(rec.Operation)
+		kind, err := recordKind(rec)
+		if err != nil {
+			return nil, err
+		}
 		if currBatch.kind == kind && currBatch.table == table {
 			currBatch.recs = append(currBatch.recs, rec)
 		} else {

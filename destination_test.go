@@ -102,6 +102,20 @@ func TestBatchRecords(t *testing.T) {
 		is.Equal(batches[2].table, "table1")
 	})
 
+	t.Run("error on an operation the destination does not handle", func(t *testing.T) {
+		is := is.New(t)
+
+		// Skipping the record would still count it as written.
+		_, err := batchRecords([]opencdc.Record{
+			testRec("table1", opencdc.OperationCreate),
+			testRec("table1", opencdc.Operation(0)),
+		})
+		is.True(err != nil)
+
+		_, err = batchRecords([]opencdc.Record{testRec("table1", opencdc.Operation(0))})
+		is.True(err != nil)
+	})
+
 	t.Run("error when collection metadata is missing", func(t *testing.T) {
 		is := is.New(t)
 

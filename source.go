@@ -167,55 +167,33 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 		pos = parsed
 	}
 
-	// Invariant 3: restart seeding. The branch taken here determines whether CDC
-	// resumes from a durable P0 or captures a fresh one; see
-	// docs/design-documents/20260724-snapshot-cdc-position-handoff.md.
-	var startSnapshotPosition *common.SnapshotPosition
-	var startCdcPosition *common.CdcPosition
-	switch {
-	case pos.CdcPosition != nil:
-		// Steady-state CDC restart: the snapshot (if any) already completed and
-		// persisted a cdc_position. Resume CDC from it directly.
-		startCdcPosition = pos.CdcPosition
-		sdk.Logger(ctx).Info().Msg("restart: resuming steady-state cdc from persisted position")
-
-	case pos.SnapshotPosition != nil && pos.SnapshotPosition.CDCStart != nil:
-		// Mid-snapshot restart with a known P0: seed CDC from the persisted P0
-		// (not a fresh master position) so the binlog window (P0, restart] is
-		// replayed, and resume the snapshot from its persisted per-table
-		// LastRead. This is the fix for the data-loss bug this design closes.
-		startCdcPosition = pos.SnapshotPosition.CDCStart
-		startSnapshotPosition = pos.SnapshotPosition
+	plan := resolveStartPlan(pos)
+	switch plan.mode {
+	case startModeCDCResume:
+		sdk.Logger(ctx).Info().Msg("restart: resuming steady-state cdc from persisted position, skipping snapshot")
+	case startModeSnapshotResume:
 		sdk.Logger(ctx).Info().
-			Str("cdc_start_binlog_file", startCdcPosition.Name).
-			Uint32("cdc_start_binlog_pos", startCdcPosition.Pos).
+			Str("cdc_start_binlog_file", plan.cdcPosition.Name).
+			Uint32("cdc_start_binlog_pos", plan.cdcPosition.Pos).
 			Msg("restart: resuming mid-snapshot from persisted cdc start position (P0)")
-
 	default:
-		// No persisted P0: either a genuinely fresh start, or a legacy position
-		// written before this fix existed (pos.SnapshotPosition set, CDCStart
-		// nil). Fall back to today's behavior: capture a fresh P0 under the lock
-		// (or, if the snapshot is empty/disabled, a fresh CDC start position - a
-		// known, documented gap for that case; see the design doc's Failure
-		// modes section and Related section (SDK position-only-checkpoint,
-		// ConduitIO/conduit-connector-sdk#378) for why a fresh capture is safe
-		// for the mid-snapshot path this fix closes).
-		startSnapshotPosition = pos.SnapshotPosition
 		sdk.Logger(ctx).Info().Msg("restart: no persisted cdc start position, falling back to a fresh capture")
 	}
 
 	s.iterator, err = newCombinedIterator(ctx, combinedIteratorConfig{
 		db:                    s.db,
 		tableKeys:             tableKeys,
-		startSnapshotPosition: startSnapshotPosition,
-		startCdcPosition:      startCdcPosition,
+		startSnapshotPosition: plan.snapshotPosition,
+		startCdcPosition:      plan.cdcPosition,
 		database:              s.config.MysqlCfg().DBName,
 		canalRegexes:          canalRegexes,
 		serverID:              serverID,
 		mysqlConfig:           s.config.MysqlCfg(),
 		disableCanalLogging:   s.config.DisableLogs,
 		fetchSize:             s.config.FetchSize,
-		snapshotEnabled:       s.config.SnapshotEnabled,
+		// Issue #158: a position that already carries a cdc_position means the
+		// snapshot completed in an earlier run; never run it again.
+		snapshotEnabled: s.config.SnapshotEnabled && plan.mode != startModeCDCResume,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create snapshot iterator: %w", err)
@@ -223,6 +201,65 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 	sdk.Logger(ctx).Info().Msg("opened source connector")
 
 	return nil
+}
+
+type startMode int
+
+const (
+	// startModeFresh: no usable persisted position, or a legacy snapshot
+	// position without a P0. A fresh P0 is captured and the snapshot (if
+	// enabled) starts over from the persisted per-table positions, if any.
+	startModeFresh startMode = iota
+	// startModeSnapshotResume: restart in the middle of (or at the very end of)
+	// a snapshot whose P0 was persisted. Snapshot resumes from per-table
+	// positions; CDC is seeded from P0.
+	startModeSnapshotResume
+	// startModeCDCResume: restart in steady-state CDC. The snapshot already
+	// completed, so it must not run again.
+	startModeCDCResume
+)
+
+// startPlan is what Open derives from the persisted position.
+type startPlan struct {
+	mode             startMode
+	snapshotPosition *common.SnapshotPosition
+	cdcPosition      *common.CdcPosition
+}
+
+// resolveStartPlan decides how a restart is seeded from the persisted position.
+//
+// Invariant 3: the branch taken here determines whether CDC resumes from a
+// durable P0 or captures a fresh one; see
+// docs/design-documents/20260724-snapshot-cdc-position-handoff.md.
+//
+// A cdc_position is only ever written by the CDC iterator, which starts after
+// the snapshot has completed and every snapshot ack has been received. It is
+// therefore proof the snapshot is done (issue #158). A snapshot_position, in
+// contrast, means the snapshot may be incomplete and must be resumed, never
+// skipped. Positions written before cdc_start or the version envelope existed
+// decode into these same shapes (absent fields are nil/0).
+func resolveStartPlan(pos common.Position) startPlan {
+	switch {
+	case pos.CdcPosition != nil:
+		return startPlan{mode: startModeCDCResume, cdcPosition: pos.CdcPosition}
+
+	case pos.SnapshotPosition != nil && pos.SnapshotPosition.CDCStart != nil:
+		// Seed CDC from the persisted P0 (not a fresh master position) so the
+		// binlog window (P0, restart] is replayed, and resume the snapshot from
+		// its persisted per-table LastRead.
+		return startPlan{
+			mode:             startModeSnapshotResume,
+			snapshotPosition: pos.SnapshotPosition,
+			cdcPosition:      pos.SnapshotPosition.CDCStart,
+		}
+
+	default:
+		// Fresh start, or a legacy position written before this fix existed
+		// (pos.SnapshotPosition set, CDCStart nil). Capture a fresh P0 under the
+		// lock; see the design doc's Failure modes section and Related section
+		// (ConduitIO/conduit-connector-sdk#378).
+		return startPlan{mode: startModeFresh, snapshotPosition: pos.SnapshotPosition}
+	}
 }
 
 func (s *Source) ReadN(ctx context.Context, n int) ([]opencdc.Record, error) {

@@ -152,14 +152,28 @@ specification:
       position and expect to re-read the data. GTID-based positions are not supported in this
       release.
     - **Tables added after the pipeline entered CDC are not snapshotted.** A snapshot runs only
-      on a fresh start. The position records which tables were snapshotted. If you add a table to
-      an explicit `tables` list afterwards, or switch `snapshot.enabled` from `false` to `true`,
-      the connector refuses to start with `mysql.snapshot.tables_added_after_cdc`, naming the
-      tables. With a pattern (`*` or a regex) it logs a warning with the same code and delivers
-      only changes made from then on. Either start a new pipeline for those tables or reset the
-      pipeline's position to snapshot everything again (expect duplicates). A position written by
-      an older build cannot be checked: the connector warns once and starts recording. Removing a
-      table and adding it back later is not detected, and changes made while it was excluded are lost.
+      on a fresh start. The position records which tables were snapshotted, and a restart checks
+      the configuration against it:
+      - If you add a table to an explicit `tables` list (plain table names), or switch
+        `snapshot.enabled` from `false` to `true`, the connector refuses to start with
+        `mysql.snapshot.tables_added_after_cdc`, naming the tables. Start a new pipeline for them,
+        or reset this pipeline's position to snapshot everything again (expect duplicates).
+      - If `tables` uses a pattern (`*`, a regex, an exclude, or an anchored name such as
+        `^orders$`), the connector logs one warning with the same code and then delivers the new
+        tables **from CDC only**: their existing rows are not snapshotted and are never delivered.
+      - A plain name is a regex that is not anchored, so `orders` also matches `orders_archive`.
+        It is still treated as an explicit list, which is the safe side. Anchor it as `^orders$`
+        to make it a pattern.
+      - A table removed from `tables` and added back later counts as added: changes made while it
+        was excluded were never captured. For an explicit list this means a table that is absent
+        at one restart and present at the next errors.
+      - A position written by an older version cannot be checked. The connector adopts the
+        configured tables as **unverified**, never as snapshotted, and logs
+        `mysql.snapshot.tables_unverified` on every start until the position is reset. Tables added
+        afterwards are detected.
+      - With more than 200 tables the position stores a hash of the table set instead of the
+        names, so the error cannot name the new tables and a table that was only removed also
+        triggers it.
     - **Binlog retention is your responsibility.** If the persisted position has been purged
       from the server, the connector cannot resume. Keep `binlog_expire_logs_seconds` longer than
       the longest outage you want to survive.

@@ -149,7 +149,8 @@ specification:
     1. Set `binlog_row_image = 'FULL'` for the writing session (and `SET GLOBAL binlog_row_image = 'FULL'` for
        the server) so the problem does not recur.
     2. The event is already in the binlog, so every restart halts on it. Find its transaction with
-       `SHOW BINLOG EVENTS IN '<file>' FROM <start position>`; the preceding `Gtid` event names the GTID.
+       `SHOW BINLOG EVENTS IN '<file>'` (the error gives the start position of the event); with GTIDs enabled,
+       the `Gtid` event just before it names the GTID.
     3. Reconcile the affected rows downstream, then clear the connector's position to re-snapshot.
 
     ### MySQL User Privileges:

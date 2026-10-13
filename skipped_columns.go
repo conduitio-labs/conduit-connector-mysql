@@ -56,9 +56,9 @@ func (e *SkippedColumnsError) Error() string {
 			"(config: binlog_row_image=MINIMAL or NOBLOB in the writing session or on the server). "+
 			"Fix: set binlog_row_image=FULL for the writing session (SET SESSION binlog_row_image = 'FULL') and "+
 			"for the server (SET GLOBAL binlog_row_image = 'FULL'). This event is already in the binlog and "+
-			"will halt every restart: to find its transaction and GTID run "+
-			"SHOW BINLOG EVENTS IN '%s' FROM %d LIMIT 5, reconcile the affected rows downstream, then clear the "+
-			"connector's position to re-snapshot",
+			"will halt every restart: to find its transaction (and its GTID, if GTIDs are on) run "+
+			"SHOW BINLOG EVENTS IN '%s' and read the events that precede position %d, "+
+			"reconcile the affected rows downstream, then clear the connector's position to re-snapshot",
 		CodeSkippedColumns, e.Action, e.Table, e.BinlogFile, e.StartPos, e.EndPos,
 		strings.Join(e.Columns, ", "), e.BinlogFile, e.StartPos)
 }

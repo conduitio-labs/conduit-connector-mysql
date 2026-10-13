@@ -30,6 +30,58 @@ import (
 	"github.com/matryer/is"
 )
 
+// Positions written by this build record each key column's type, so a composite
+// key with text columns resumes exactly, with no restart, from every cut point.
+func TestSnapshotResume_CompositeTextKey_RecordedPositionsResumeExactly(t *testing.T) {
+	ctx := testutils.TestContext(t)
+	is := is.New(t)
+	db := testutils.NewDB(t)
+
+	const table = "klg_composite_rec"
+	is.NoErr(db.Exec("DROP TABLE IF EXISTS " + table).Error)
+	is.NoErr(db.Exec("CREATE TABLE " + table + " (a VARCHAR(20) NOT NULL, b INT NOT NULL, c VARCHAR(20) NOT NULL, v INT NOT NULL, PRIMARY KEY (a, b, c))").Error)
+	n := 0
+	for _, a := range []string{"x", "y"} {
+		for b := 1; b <= 2; b++ {
+			for _, c := range []string{"p", "q"} {
+				n++
+				is.NoErr(db.Exec(fmt.Sprintf("INSERT INTO %s (a, b, c, v) VALUES ('%s', %d, '%s', %d)", table, a, b, c, n)).Error)
+			}
+		}
+	}
+	cfg := func() map[string]string {
+		return map[string]string{"tables": "^" + table + "$", "snapshot.fetchSize": "3"}
+	}
+
+	for k := 1; k < n; k++ {
+		t.Run(fmt.Sprintf("resume_after_%d", k), func(t *testing.T) {
+			is := is.New(t)
+
+			runCtx, cancel := context.WithCancel(ctx)
+			source := testSourceOpen(runCtx, is, cfg(), nil)
+			var pos opencdc.Position
+			for i := 1; i <= k; i++ {
+				recs := readOne(ctx, is, source)
+				is.Equal(payloadInt(recs[0]), int64(i))
+				is.NoErr(source.Ack(ctx, recs[0].Position))
+				pos = recs[0].Position
+			}
+			killSource(cancel, source)
+
+			restartCtx, restartCancel := context.WithCancel(ctx)
+			defer restartCancel()
+			source2 := testSourceOpen(restartCtx, is, cfg(), pos)
+			t.Cleanup(func() { teardownForCleanup(source2) })
+
+			for want := k + 1; want <= n; want++ {
+				recs := readOne(ctx, is, source2)
+				is.Equal(payloadInt(recs[0]), int64(want)) // exactly the remaining rows
+				is.NoErr(source2.Ack(ctx, recs[0].Position))
+			}
+		})
+	}
+}
+
 func TestSnapshotResume_FromPreviousBuildPosition_CompositeTextKey(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
@@ -88,9 +140,12 @@ func TestSnapshotResume_FromPreviousBuildPosition_CompositeTextKey(t *testing.T)
 			source := testSourceOpen(restartCtx, is, cfg(), opencdc.Position(legacy))
 			t.Cleanup(func() { teardownForCleanup(source) })
 
-			for want := k + 1; want <= len(rows); want++ {
+			// Decision after review round 4: a legacy position has no recorded key
+			// types, so its text columns cannot be checked for a retype and the
+			// table restarts from its first row. Duplicates, never a skip.
+			for want := 1; want <= len(rows); want++ {
 				recs := readOne(ctx, is, source)
-				is.Equal(payloadInt(recs[0]), int64(want)) // no row skipped or repeated
+				is.Equal(payloadInt(recs[0]), int64(want)) // no row skipped
 				is.NoErr(source.Ack(ctx, recs[0].Position))
 			}
 		})

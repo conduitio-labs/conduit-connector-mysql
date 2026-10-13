@@ -71,6 +71,11 @@ linters:
       default-signifies-exhaustive: true
     gocyclo:
       min-complexity: 20
+    gomoddirectives:
+      replace-allow-list:
+        # Temporary ConduitIO/go-mysql fork (canal.RowsEvent.SkippedColumns),
+        # see the comment above the replace in go.mod. Delete this entry with it.
+        - github.com/go-mysql-org/go-mysql
     goheader:
       values:
         regexp:

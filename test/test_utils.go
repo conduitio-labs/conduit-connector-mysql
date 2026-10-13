@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -38,7 +39,15 @@ import (
 	gormschema "gorm.io/gorm/schema"
 )
 
-const DSN = "root:meroxaadmin@tcp(127.0.0.1:3306)/meroxadb"
+// DSN is the test database. It defaults to the docker-compose service in
+// test/docker-compose.yml; set MYSQL_TEST_DSN to point the tests at another
+// server (for example a container on an ephemeral port).
+var DSN = func() string {
+	if v := os.Getenv("MYSQL_TEST_DSN"); v != "" {
+		return v
+	}
+	return "root:meroxaadmin@tcp(127.0.0.1:3306)/meroxadb"
+}()
 
 var ServerID = "1"
 
@@ -57,7 +66,11 @@ func NewDB(t *testing.T) DB {
 	// We might want in the future to run many more tests using the Source itself, so that
 	// we don't have to do this dance.
 
-	dsnWithParseTime := DSN + "?parseTime=true"
+	sep := "?"
+	if strings.Contains(DSN, "?") {
+		sep = "&"
+	}
+	dsnWithParseTime := DSN + sep + "parseTime=true"
 
 	db, err := gorm.Open(gormmysql.Open(dsnWithParseTime), &gorm.Config{
 		Logger: logger.Discard,

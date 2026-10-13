@@ -247,7 +247,9 @@ pipelines:
           # Type: bool
           # Required: no
           snapshot.unsafe: "false"
-          # Allows to force using a custom column to sort the snapshot.
+          # Allows to force using a custom column to sort the snapshot. The
+          # column must be NOT NULL and the only column of a primary key or
+          # unique index.
           # Type: string
           # Required: no
           tableConfig.*.sortingColumn: ""

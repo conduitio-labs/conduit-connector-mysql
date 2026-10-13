@@ -91,7 +91,8 @@ func (s *SourceConfig) Validate(context.Context) error {
 }
 
 type TableConfig struct {
-	// Allows to force using a custom column to sort the snapshot.
+	// Allows to force using a custom column to sort the snapshot. The column must be
+	// NOT NULL and the only column of a primary key or unique index.
 	SortingColumn string `json:"sortingColumn"`
 }
 
@@ -174,6 +175,14 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 			return fmt.Errorf("bad source position given: %w", err)
 		}
 		pos = parsed
+	}
+
+	// A sorting column only matters when a snapshot will run. Pipelines already in
+	// steady-state CDC must keep starting whatever their snapshot config says.
+	if s.config.SnapshotEnabled && pos.CdcPosition == nil {
+		if err := s.validateSortingColumns(); err != nil {
+			return err
+		}
 	}
 
 	plan := resolveStartPlan(pos)

@@ -38,7 +38,15 @@ import (
 	gormschema "gorm.io/gorm/schema"
 )
 
-const DSN = "root:meroxaadmin@tcp(127.0.0.1:3306)/meroxadb"
+// DSN is the test database. It defaults to the docker-compose service in
+// test/docker-compose.yml; set MYSQL_TEST_DSN to point the tests at another
+// server (for example a container on an ephemeral port).
+var DSN = func() string {
+	if v := os.Getenv("MYSQL_TEST_DSN"); v != "" {
+		return v
+	}
+	return "root:meroxaadmin@tcp(127.0.0.1:3306)/meroxadb"
+}()
 
 var ServerID = "1"
 

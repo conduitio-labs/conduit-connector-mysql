@@ -253,3 +253,11 @@ require (
 	mvdan.cc/gofumpt v0.7.0 // indirect
 	mvdan.cc/unparam v0.0.0-20240528143540-8a5130ca722f // indirect
 )
+
+// Temporary fork of go-mysql v1.14.0 that adds canal.RowsEvent.SkippedColumns, so the CDC handler can
+// tell a NULL from a column that a partial row image (binlog_row_image=MINIMAL or NOBLOB) left out.
+// Upstream: https://github.com/go-mysql-org/go-mysql/issues/1205, PR
+// https://github.com/go-mysql-org/go-mysql/pull/1206.
+// Remove this replace (and the ConduitIO/go-mysql fork) once a go-mysql release contains the field:
+// bump the require above to that release and delete these lines.
+replace github.com/go-mysql-org/go-mysql => github.com/ConduitIO/go-mysql v1.14.0-conduit.1

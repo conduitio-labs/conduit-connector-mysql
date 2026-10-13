@@ -232,6 +232,12 @@ func (c *cdcIterator) wrapCanalRunErr() error {
 		return fmt.Errorf("canal is closed: %w", err)
 	}
 
+	// A handler halt is not a missing binlog; report it as itself.
+	var skipped *SkippedColumnsError
+	if errors.As(err, &skipped) {
+		return skipped
+	}
+
 	var name string
 	var pos uint32
 	if c.position != nil {
@@ -503,6 +509,13 @@ func (h *cdcEventHandler) handleSingleRowChange(
 }
 
 func (h *cdcEventHandler) OnRow(e *canal.RowsEvent) error {
+	// Invariant 6: halt before building any record if the row image left a
+	// column out; see checkSkippedColumns.
+	if err := checkSkippedColumns(e); err != nil {
+		err.BinlogFile = h.canal.SyncedPosition().Name
+		return err
+	}
+
 	rowEvent := rowEvent{
 		RowsEvent: e,
 		Rows:      make([]replicationEventRow, 0, len(e.Rows)),

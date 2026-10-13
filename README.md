@@ -130,6 +130,26 @@ The connector is tested against MySQL v8.0. Compatibility with older versions is
 - Binlog row image must be set to FULL.
 - Tables must have **sortable** primary keys.
 
+### Partial row images
+
+`binlog_row_image` is also a session variable. A writing session that sets it to `MINIMAL` or `NOBLOB` logs
+only part of the row for updates and deletes (`MINIMAL`: the primary key and the changed columns; `NOBLOB`:
+everything except unchanged `BLOB` and `TEXT` columns), even when the server value is `FULL`. The columns
+left out are unknown, not NULL.
+
+The CDC source halts on the first such event instead of emitting the unknown columns as NULL. The error has
+the code `MYSQL_ROW_IMAGE_SKIPPED_COLUMNS` and names the table, the action, the binlog file and position,
+and the columns that were left out. Inserts are always logged in full and never halt. Snapshot rows are not
+affected.
+
+To recover:
+
+1. Set `binlog_row_image = 'FULL'` for the writing session (and `SET GLOBAL binlog_row_image = 'FULL'` for
+   the server) so the problem does not recur.
+2. The event is already in the binlog, so every restart halts on it. Find its transaction with
+   `SHOW BINLOG EVENTS IN '<file>' FROM <start position>`; the preceding `Gtid` event names the GTID.
+3. Reconcile the affected rows downstream, then clear the connector's position to re-snapshot.
+
 ### MySQL User Privileges:
 
 For Snapshot and CDC modes, the following privileges are required:

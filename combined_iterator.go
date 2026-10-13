@@ -102,8 +102,14 @@ func newCombinedIterator(
 	}
 	// Every error return below must release the lock: a returned error leaves no
 	// iterator to do it later, and writers stay blocked on the locked tables.
-	// unlockTables is idempotent; the explicit call further down reports its error.
+	// unlockTables is idempotent. The explicit call further down returns its own
+	// error to the caller; unlockReported stops this deferred call from logging
+	// the same failure a second time.
+	unlockReported := false
 	defer func() {
+		if unlockReported {
+			return
+		}
 		if err := unlockTables(); err != nil {
 			sdk.Logger(ctx).Warn().Err(err).Msg("failed to release table lock")
 		}
@@ -143,6 +149,7 @@ func newCombinedIterator(
 	}
 	snapshotIterator.setCDCStart(p0)
 
+	unlockReported = true
 	if err := unlockTables(); err != nil {
 		return nil, err
 	}

@@ -16,6 +16,8 @@ package mysql
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -98,4 +100,45 @@ func TestLockTables_UnlockIsIdempotent(t *testing.T) {
 	is.NoErr(err)
 	is.NoErr(unlock())
 	is.NoErr(unlock())
+}
+
+// The UNLOCK-failure branch: the lock session is killed, so UNLOCK TABLES fails.
+// The error is reported (once, and the same on repeat calls), the killed
+// connection is not returned to the pool, and the lock is gone with the session.
+func TestLockTables_UnlockFailureIsReportedAndRecovered(t *testing.T) {
+	ctx := testutils.TestContext(t)
+	is := is.New(t)
+	setup := testutils.NewDB(t)
+	testutils.CreateUserTable(is, setup)
+
+	// A pool with exactly one connection, so lockTables must use the one whose
+	// id we read first.
+	pool := testutils.NewDB(t).SqlxDB
+	pool.SetMaxOpenConns(1)
+	var connID int64
+	is.NoErr(pool.GetContext(ctx, &connID, "SELECT CONNECTION_ID()"))
+
+	unlock, err := lockTables(ctx, pool, []string{"users"})
+	is.NoErr(err)
+
+	// Kill the lock session from another connection.
+	_, err = setup.SqlxDB.ExecContext(ctx, fmt.Sprintf("KILL CONNECTION %d", connID))
+	is.NoErr(err)
+
+	err = unlock()
+	is.True(err != nil)
+	is.True(strings.Contains(err.Error(), "failed to unlock tables"))
+	is.Equal(unlock().Error(), err.Error()) // idempotent: reports the same failure, does not re-run
+
+	// The lock died with the session.
+	writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	_, err = setup.SqlxDB.ExecContext(writeCtx,
+		"INSERT INTO users (username, email, created_at) VALUES ('u', 'u@example.com', NOW())")
+	is.NoErr(err)
+
+	// And the pool is usable: the dead connection was discarded, not reused.
+	var one int
+	is.NoErr(pool.GetContext(ctx, &one, "SELECT 1"))
+	is.Equal(one, 1)
 }

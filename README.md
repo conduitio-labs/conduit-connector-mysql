@@ -149,6 +149,15 @@ The source connector is in beta. This section states what it guarantees and what
   matching point. After a failover, treat the pipeline as needing a new snapshot: clear its
   position and expect to re-read the data. GTID-based positions are not supported in this
   release.
+- **Tables added after the pipeline entered CDC are not snapshotted.** A snapshot runs only
+  on a fresh start. The position records which tables were snapshotted. If you add a table to
+  an explicit `tables` list afterwards, or switch `snapshot.enabled` from `false` to `true`,
+  the connector refuses to start with `mysql.snapshot.tables_added_after_cdc`, naming the
+  tables. With a pattern (`*` or a regex) it logs a warning with the same code and delivers
+  only changes made from then on. Either start a new pipeline for those tables or reset the
+  pipeline's position to snapshot everything again (expect duplicates). A position written by
+  an older build cannot be checked: the connector warns once and starts recording. Removing a
+  table and adding it back later is not detected, and changes made while it was excluded are lost.
 - **Binlog retention is your responsibility.** If the persisted position has been purged
   from the server, the connector cannot resume. Keep `binlog_expire_logs_seconds` longer than
   the longest outage you want to survive.

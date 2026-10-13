@@ -106,9 +106,9 @@ jobs:
           # separate jobs (a step output can't cross a job boundary).
           artifacts-json: ${{ needs.build.outputs.artifacts }}
           # min-protocol-version is the protocol this connector resolves in go.mod
-          # (conduit-connector-protocol v0.9.4). min-conduit-version is kept at the
-          # reference value: the first Conduit release in the v0.15 series that
-          # speaks that protocol line.
+          # (conduit-connector-protocol v0.9.4). min-conduit-version stays at
+          # 0.15.0, the value the kafka and postgres publish workflows declare; it
+          # was not checked against Conduit's protocol history.
           min-conduit-version: '0.15.0'
           min-protocol-version: '0.9.4'
           repository: https://github.com/ConduitIO/conduit-connector-mysql

@@ -116,18 +116,25 @@ type Source struct {
 	iterator common.Iterator
 }
 
-var (
+const (
 	defaultBatchDelay = time.Second
 	defaultBatchSize  = 10000
 )
 
 func NewSource() sdk.Source {
+	// The SDK decodes the configured sdk.batch.* values through these pointers,
+	// so every Source needs its own copies. Pointing them at shared package
+	// variables made one source's configuration overwrite another's (and raced
+	// with the previous source's read loop).
+	batchDelay := defaultBatchDelay
+	batchSize := defaultBatchSize
+
 	return sdk.SourceWithMiddleware(&Source{
 		config: SourceConfig{
 			DefaultSourceMiddleware: sdk.DefaultSourceMiddleware{
 				SourceWithBatch: sdk.SourceWithBatch{
-					BatchSize:  &defaultBatchSize,
-					BatchDelay: &defaultBatchDelay,
+					BatchSize:  &batchSize,
+					BatchDelay: &batchDelay,
 				},
 			},
 		},

@@ -22,27 +22,59 @@ import (
 	"github.com/matryer/is"
 )
 
-func TestResolveTablePosition(t *testing.T) {
-	types := map[string]string{"a": "varchar", "b": "int", "c": "varchar", "d": "decimal", "e": "datetime", "f": "blob"}
+func TestResolveLegacyValue(t *testing.T) {
+	types := map[string]string{"a": "varchar", "b": "int", "d": "decimal", "e": "datetime", "f": "blob"}
 
-	t.Run("legacy composite VARCHAR/INT/VARCHAR with empty key names", func(t *testing.T) {
+	tests := []struct {
+		column string
+		in     string
+		want   any
+		ok     bool
+	}{
+		{"a", b64("tenant-1"), []byte("tenant-1"), true},
+		{"d", b64("-200.00"), []byte("-200.00"), true},
+		{"f", b64("\x00\xff"), []byte{0x00, 0xff}, true},
+		{"e", "2020-01-01T00:00:00Z", "2020-01-01T00:00:00Z", true},
+		{"b", b64("x"), nil, false}, // text for an INT column
+		{"a", "***", nil, false},    // not base64
+		{"gone", b64("x"), nil, false},
+	}
+	for _, tc := range tests {
 		is := is.New(t)
-		// What the previous build persisted: key_name never filled in, text as base64,
-		// numbers as numbers.
+		got, reason := resolveLegacyValue(common.LegacyKey(tc.in), tc.column, types)
+		is.Equal(reason == "", tc.ok)
+		if tc.ok {
+			is.Equal(got, tc.want)
+		}
+	}
+}
+
+func TestResolveTablePosition(t *testing.T) {
+	types := map[string]string{"a": "varchar", "b": "int", "c": "varchar", "d": "decimal", "e": "datetime"}
+
+	t.Run("legacy composite VARCHAR/INT/VARCHAR restarts: byte-valued keys without a recorded type", func(t *testing.T) {
+		is := is.New(t)
 		legacy := common.TablePosition{MultipleKey: &common.TablePositionMultipleKey{
 			{LastRead: common.LegacyKey(b64("tenant-1")), SnapshotEnd: common.LegacyKey(b64("tenant-9"))},
 			{LastRead: int64(7), SnapshotEnd: int64(70)},
 			{LastRead: common.LegacyKey(b64("x")), SnapshotEnd: common.LegacyKey(b64("z"))},
 		}}
+		_, reason := resolveTablePosition(legacy, common.PrimaryKeys{"a", "b", "c"}, types)
+		is.True(reason != "")
+	})
 
-		got, reason := resolveTablePosition(legacy, common.PrimaryKeys{"a", "b", "c"}, types)
+	t.Run("the same composite position with recorded types resolves exactly", func(t *testing.T) {
+		is := is.New(t)
+		pos := common.TablePosition{MultipleKey: &common.TablePositionMultipleKey{
+			{KeyName: "a", LastRead: []byte("tenant-1"), KeyType: "varchar"},
+			{KeyName: "b", LastRead: int64(7), KeyType: "int"},
+			{KeyName: "c", LastRead: []byte("x"), KeyType: "varchar"},
+		}}
+		got, reason := resolveTablePosition(pos, common.PrimaryKeys{"a", "b", "c"}, types)
 		is.Equal(reason, "")
 		items := *got.MultipleKey
-		is.Equal(items[0].KeyName, "a")
 		is.Equal(items[0].LastRead, []byte("tenant-1"))
-		is.Equal(items[1].LastRead, int64(7))
-		is.Equal(items[2].KeyName, "c")
-		is.Equal(items[2].LastRead, []byte("x"))
+		is.Equal(items[2].KeyType, "varchar")
 	})
 
 	t.Run("composite key columns changed: restart", func(t *testing.T) {
@@ -61,28 +93,31 @@ func TestResolveTablePosition(t *testing.T) {
 		is.True(reason != "")
 	})
 
-	t.Run("single keys by type", func(t *testing.T) {
+	t.Run("legacy single keys by type", func(t *testing.T) {
 		tests := []struct {
 			column string
 			in     string
-			want   any
 			ok     bool
 		}{
-			{"d", b64("-200.00"), []byte("-200.00"), true},
-			{"f", b64("\x00\xff"), []byte{0x00, 0xff}, true},
-			{"e", "2020-01-01T00:00:00Z", "2020-01-01T00:00:00Z", true},
-			{"b", b64("x"), nil, false}, // text for an INT column
-			{"a", "***", nil, false},    // not base64
+			{"a", b64("x"), false}, // text, unrecorded: restart
+			{"d", b64("-200.00"), false},
+			{"e", "2020-01-01T00:00:00Z", true}, // temporal: still resumes
+			{"b", b64("x"), false},
 		}
 		for _, tc := range tests {
 			is := is.New(t)
 			legacy := common.TablePosition{SingleKey: &common.TablePositionSingleKey{LastRead: common.LegacyKey(tc.in)}}
-			got, reason := resolveTablePosition(legacy, common.PrimaryKeys{tc.column}, types)
+			_, reason := resolveTablePosition(legacy, common.PrimaryKeys{tc.column}, types)
 			is.Equal(reason == "", tc.ok)
-			if tc.ok {
-				is.Equal(got.SingleKey.LastRead, tc.want)
-			}
 		}
+	})
+
+	t.Run("recorded single keys resume", func(t *testing.T) {
+		is := is.New(t)
+		pos := common.TablePosition{SingleKey: &common.TablePositionSingleKey{LastRead: []byte("-200.00"), KeyType: "decimal"}}
+		got, reason := resolveTablePosition(pos, common.PrimaryKeys{"d"}, types)
+		is.Equal(reason, "")
+		is.Equal(got.SingleKey.LastRead, []byte("-200.00"))
 	})
 
 	t.Run("non-legacy values pass through", func(t *testing.T) {
@@ -115,17 +150,19 @@ func TestCheckKeyClass(t *testing.T) {
 		{"unsigned bigint digits, recorded", "bi", big, "bigint", true},
 		{"non-numeric bytes on INT", "i", []byte("abc"), "", false},
 		{"time on int", "i", time.Now(), "", false},
-		{"bytes on varchar", "u", []byte("a"), "", true},
-		{"string on varchar", "u", "a", "varchar", true},
+		{"bytes on varchar, unrecorded: restart", "u", []byte("a"), "", false},
+		{"bytes on varchar, recorded", "u", []byte("a"), "varchar", true},
+		{"string on varchar, recorded", "u", "a", "varchar", true},
 		{"int on varchar", "u", int64(3), "", false},
 		{"time on varchar", "u", time.Now(), "", false},
 		{"decimal bytes saved from varchar: retype", "d", []byte("10"), "varchar", false},
 		{"varchar bytes saved from decimal: retype", "u", []byte("10"), "decimal", false},
 		{"decimal bytes on decimal", "d", []byte("1.00"), "decimal", true},
-		{"decimal bytes on decimal, unrecorded", "d", []byte("1.00"), "", true},
+		{"decimal bytes on decimal, unrecorded: restart", "d", []byte("1.00"), "", false},
 		{"int on decimal", "d", int64(1), "", true},
 		{"text saved, binary now: different ordering", "b", []byte("a"), "varchar", false},
 		{"binary saved, binary now", "b", []byte("a"), "varbinary", true},
+		{"binary bytes unrecorded: restart", "b", []byte("a"), "", false},
 		{"char saved, enum-or-set tolerated", "u", []byte("a"), "char", true},
 		{"datetime on datetime", "t", time.Now(), "datetime", true},
 		{"datetime text on datetime", "t", "2020-01-01T00:00:00Z", "", true},

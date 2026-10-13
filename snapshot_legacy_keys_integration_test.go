@@ -97,6 +97,12 @@ func resumeFromSavedKey(t *testing.T, tc savedKeyCase) {
 	}
 }
 
+// Decision after review round 4: a legacy position carries no key_type, so a
+// byte-valued key (text, decimal, binary) cannot be checked for a retype between
+// those types, whose orderings differ. Such a table restarts from its first row:
+// duplicates, never a skip. Integer and temporal keys still resume exactly.
+// (Earlier rounds resolved these keys by decoding the base64; that remains
+// covered by TestResolveLegacyValue, but the table no longer resumes from them.)
 func TestSnapshotResume_FromPreviousBuildPosition_ByKeyType(t *testing.T) {
 	letters := make([]string, 0, 26)
 	for c := 'a'; c <= 'z'; c++ {
@@ -104,9 +110,9 @@ func TestSnapshotResume_FromPreviousBuildPosition_ByKeyType(t *testing.T) {
 	}
 
 	tests := []savedKeyCase{
-		{"varchar", "VARCHAR(20)", letters, `"` + b64("d") + `"`, `"` + b64("z") + `"`, 5, ""},
-		{"decimal", "DECIMAL(10,2)", []string{"-300.00", "-200.00", "-100.00", "-50.00", "-1.00", "5.00"}, `"` + b64("-200.00") + `"`, `"` + b64("5.00") + `"`, 3, ""},
-		{"varbinary", "VARBINARY(8)", []string{"X'01'", "X'0102'", "X'02'", "X'80'", "X'FF00'", "X'FFFF'"}, `"` + base64.StdEncoding.EncodeToString([]byte{0x01, 0x02}) + `"`, `"//8="`, 3, ""},
+		{"varchar", "VARCHAR(20)", letters, `"` + b64("d") + `"`, `"` + b64("z") + `"`, 1, ""},
+		{"decimal", "DECIMAL(10,2)", []string{"-300.00", "-200.00", "-100.00", "-50.00", "-1.00", "5.00"}, `"` + b64("-200.00") + `"`, `"` + b64("5.00") + `"`, 1, ""},
+		{"varbinary", "VARBINARY(8)", []string{"X'01'", "X'0102'", "X'02'", "X'80'", "X'FF00'", "X'FFFF'"}, `"` + base64.StdEncoding.EncodeToString([]byte{0x01, 0x02}) + `"`, `"//8="`, 1, ""},
 		{"date", "DATE", []string{"'2020-01-01'", "'2020-01-02'", "'2020-02-01'", "'2021-01-01'", "'2022-01-01'", "'2030-12-31'"}, `"2020-01-02T00:00:00Z"`, `"2030-12-31T00:00:00Z"`, 3, ""},
 		{"int_numbers_unchanged", "BIGINT", []string{"1", "2", "3", "4", "5", "6"}, `3`, `6`, 4, ""},
 		// Cannot be interpreted: a text value for an INT column. The table must

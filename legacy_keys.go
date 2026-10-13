@@ -225,6 +225,19 @@ func orderClass(mysqlType string) string {
 	}
 }
 
+// byteValuedColumn reports whether the driver returns the column's values as
+// bytes, which is what makes retypes among them undetectable from the value.
+func byteValuedColumn(dataType, class string) bool {
+	switch class {
+	case classText, classBinary, classTime, classEnum, classSet, classBit:
+		return true
+	case classNumber:
+		return dataType == "decimal" || dataType == "numeric"
+	default:
+		return false
+	}
+}
+
 // maxInt64 is the largest value the driver returns as an integer; a BIGINT
 // UNSIGNED above it comes back as its decimal digits.
 const maxInt64 = uint64(1<<63 - 1)
@@ -247,8 +260,8 @@ const maxInt64 = uint64(1<<63 - 1)
 // int64 range, the only numeric key the driver returns as bytes.
 //
 // A position without a recorded type (written by an older build) cannot be
-// checked for a retype between byte-valued types, such as VARCHAR to DECIMAL;
-// that case is not detected.
+// checked for a retype between byte-valued types, such as VARCHAR to DECIMAL,
+// so a byte-valued key without one restarts the table (see byteValuedColumn).
 func checkKeyClass(v any, column, keyType string, types map[string]string) string {
 	if v == nil {
 		return ""
@@ -269,6 +282,19 @@ func checkKeyClass(v any, column, keyType string, types map[string]string) strin
 		}
 		if saved := orderClass(keyType); saved != "" && lenient(saved) != lenient(columnClass) {
 			return fmt.Sprintf("the saved key was a %s key but column %q is now %s: the column was retyped", keyType, column, dataType)
+		}
+	}
+
+	// A byte-valued key (text, decimal, binary, time, enum, set, bit) with no
+	// recorded type cannot be checked for a retype between those types, and
+	// their orderings differ ("10" sorts before "9" as text, after it as a
+	// number). Restart the table: duplicates, never a skip. Only positions
+	// written without key_type reach this: v0/v1 positions from released builds,
+	// that is, pipelines that were mid-snapshot at upgrade time.
+	if keyType == "" && byteValuedColumn(dataType, columnClass) {
+		switch v.(type) {
+		case []byte, string:
+			return fmt.Sprintf("the saved key for column %q (%s) has no recorded type, so a retype of the column cannot be ruled out", column, dataType)
 		}
 	}
 

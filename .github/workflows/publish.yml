@@ -105,8 +105,12 @@ jobs:
           # build artifacts from job 1 — required because build and publish are
           # separate jobs (a step output can't cross a job boundary).
           artifacts-json: ${{ needs.build.outputs.artifacts }}
+          # min-protocol-version is the protocol this connector resolves in go.mod
+          # (conduit-connector-protocol v0.9.4). min-conduit-version is kept at the
+          # reference value: the first Conduit release in the v0.15 series that
+          # speaks that protocol line.
           min-conduit-version: '0.15.0'
-          min-protocol-version: '0.9.0'
+          min-protocol-version: '0.9.4'
           repository: https://github.com/ConduitIO/conduit-connector-mysql
           # First-registration only — a human-authored, tag-scoped identity
           # fragment. Omit on subsequent version bumps (routing.Decide ignores

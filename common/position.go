@@ -157,6 +157,19 @@ type CdcPosition struct {
 	// PrevPosition represents position of the mysql replication
 	// event just before the current one.
 	PrevPosition *ReplicationEventPosition `json:"prev,omitempty"`
+
+	// SnapshottedTables is the set of tables whose existing rows this pipeline
+	// has covered with a snapshot (sorted). It is carried forward on every CDC
+	// record so that a restart can tell which tables in the configuration were
+	// never snapshotted and would silently lose their pre-existing rows.
+	//
+	// nil (field absent) means a position written before this field existed:
+	// the set is unknown. A non-nil empty set means "known: nothing was
+	// snapshotted" (snapshot disabled). The field is additive; builds that do
+	// not know it ignore it and drop it on their next write, which returns the
+	// position to the unknown state. Version is intentionally not bumped for
+	// that reason. See docs/design-documents/20261012-cdc-snapshotted-tables.md.
+	SnapshottedTables *[]string `json:"snapshotted_tables,omitempty"`
 }
 
 func (p ReplicationEventPosition) ToMysqlPos() mysql.Position {

@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -63,6 +64,10 @@ type SourceConfig struct {
 
 	// Controls whether the snapshot is done.
 	SnapshotEnabled bool `json:"snapshot.enabled" default:"true"`
+
+	// rawTables holds the table rules as configured, before Open resolves
+	// Tables to concrete table names.
+	rawTables []string
 
 	mysqlCfg *mysql.Config
 }
@@ -132,6 +137,10 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 		return fmt.Errorf("failed to connect to mysql: %w", err)
 	}
 
+	// getAndFilterTables replaces Tables with the resolved names; keep the
+	// configured rules to tell explicit lists from patterns.
+	s.config.rawTables = slices.Clone(s.config.Tables)
+
 	sdk.Logger(ctx).Info().Msg("Parsing table regexes...")
 	s.config.Tables, err = s.getAndFilterTables(ctx, s.db, s.config.MysqlCfg().DBName)
 	if err != nil {
@@ -168,6 +177,14 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 	}
 
 	plan := resolveStartPlan(pos)
+
+	coverage, err := resolveCoverage(plan, s.config.SnapshotEnabled, s.config.Tables, tablesAreExplicit(s.config.rawTables))
+	if err != nil {
+		return err
+	}
+	for _, w := range coverage.warnings {
+		sdk.Logger(ctx).Warn().Msg(w)
+	}
 	switch plan.mode {
 	case startModeCDCResume:
 		sdk.Logger(ctx).Info().Msg("restart: resuming steady-state cdc from persisted position, skipping snapshot")
@@ -193,7 +210,8 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 		fetchSize:             s.config.FetchSize,
 		// Issue #158: a position that already carries a cdc_position means the
 		// snapshot completed in an earlier run; never run it again.
-		snapshotEnabled: s.config.SnapshotEnabled && plan.mode != startModeCDCResume,
+		snapshotEnabled:   s.config.SnapshotEnabled && plan.mode != startModeCDCResume,
+		snapshottedTables: coverage.carry,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create snapshot iterator: %w", err)
@@ -436,4 +454,116 @@ func (s *Source) getTableKeys(ctx context.Context, dbName string) (common.TableK
 	}
 
 	return tableKeys, nil
+}
+
+// coverageDecision is the outcome of checking which tables a restart can
+// trust to be covered by a snapshot.
+type coverageDecision struct {
+	// carry is stamped on every CDC position written by this run.
+	carry *[]string
+	// warnings are logged at WARN by Open.
+	warnings []string
+}
+
+// tablesAreExplicit reports whether every table rule is a plain table name
+// (an include with no regex metacharacters). Anything else, including "*",
+// is a pattern that can match tables created later.
+func tablesAreExplicit(rules []string) bool {
+	if len(rules) == 0 {
+		return false
+	}
+	for _, rule := range rules {
+		rule = strings.TrimSpace(rule)
+		if rule == AllTablesWildcard {
+			return false
+		}
+		if strings.HasPrefix(rule, "-") {
+			return false
+		}
+		rule = strings.TrimPrefix(rule, "+")
+		if rule == "" || regexp.QuoteMeta(rule) != rule {
+			return false
+		}
+	}
+	return true
+}
+
+// resolveCoverage decides what Open does about tables that were never
+// snapshotted. A snapshot only runs on a fresh start, so a table added to the
+// configuration after the pipeline entered CDC (or a snapshot switched on for
+// a pipeline that ran CDC-only) would otherwise have its pre-existing rows
+// silently never delivered. Invariant 3: that is a loss path, so for an
+// explicit table list it is an error, and for patterns it is a warning
+// (patterns match tables we cannot reasonably refuse to start over).
+//
+// tables are the resolved table names; explicit says the configured rules are
+// plain names. See docs/design-documents/20261012-cdc-snapshotted-tables.md.
+func resolveCoverage(plan startPlan, snapshotEnabled bool, tables []string, explicit bool) (coverageDecision, error) {
+	current := sortedUnique(tables)
+
+	if plan.mode != startModeCDCResume {
+		// A snapshot is about to run (or was disabled from the start). When it
+		// runs, every current table is covered by the time CDC starts; when
+		// disabled, nothing is.
+		if snapshotEnabled {
+			return coverageDecision{carry: &current}, nil
+		}
+		none := []string{}
+		return coverageDecision{carry: &none}, nil
+	}
+
+	persisted := plan.cdcPosition.SnapshottedTables
+	if !snapshotEnabled {
+		// Nothing is checked and nothing is claimed: keep whatever the
+		// position said (including "unknown") so a later switch to
+		// snapshot.enabled=true still sees the truth.
+		return coverageDecision{carry: persisted}, nil
+	}
+
+	if persisted == nil {
+		return coverageDecision{
+			carry: &current,
+			warnings: []string{
+				"restart from a cdc position written before snapshotted_tables existed: " +
+					"cannot verify that every table in `tables` was snapshotted; assuming they were and " +
+					"recording the table set from now on",
+			},
+		}, nil
+	}
+
+	var added []string
+	for _, t := range current {
+		if !slices.Contains(*persisted, t) {
+			added = append(added, t)
+		}
+	}
+	if len(added) == 0 {
+		return coverageDecision{carry: persisted}, nil
+	}
+
+	if explicit {
+		return coverageDecision{}, newError(ErrTablesAddedAfterCDC, CodeTablesAddedAfterCDC, "tables",
+			"start a new pipeline for these tables, or reset this pipeline's position to snapshot everything again "+
+				"(expect duplicates), or remove them from `tables`",
+			"tables %v were added after this pipeline entered CDC, so their existing rows were never snapshotted "+
+				"and would be silently skipped", added)
+	}
+
+	return coverageDecision{
+		carry: persisted,
+		warnings: []string{fmt.Sprintf(
+			"%s: tables %v match `tables` but were added after this pipeline entered CDC; their existing rows are NOT "+
+				"snapshotted (only changes from now on are delivered). Start a new pipeline or reset the position to "+
+				"snapshot them", CodeTablesAddedAfterCDC, added)},
+	}, nil
+}
+
+func sortedUnique(in []string) []string {
+	out := slices.Clone(in)
+	slices.Sort(out)
+	out = slices.Compact(out)
+	if out == nil {
+		out = []string{}
+	}
+	return out
 }

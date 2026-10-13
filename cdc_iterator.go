@@ -63,6 +63,10 @@ type cdcIteratorConfig struct {
 	tableKeys           common.TableKeys
 	disableCanalLogging bool
 	startPosition       *common.CdcPosition
+
+	// snapshottedTables is stamped on every CDC record's position; see
+	// common.CdcPosition.SnapshottedTables.
+	snapshottedTables *[]string
 }
 
 func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (*cdcIterator, error) {
@@ -116,6 +120,7 @@ func (c *cdcIterator) start(ctx context.Context) error {
 		c.parsedRecordsC,
 		c.config.tableKeys,
 		startPosition,
+		c.config.snapshottedTables,
 	)
 
 	go func() {
@@ -307,6 +312,7 @@ type cdcEventHandler struct {
 	parsedRecordsC chan opencdc.Record
 
 	tablePrimaryKeys common.TableKeys
+	snapshotted      *[]string
 
 	onRowsChange onRowChangeFn
 }
@@ -318,8 +324,10 @@ func newCdcEventHandler(
 	parsedRecordsC chan opencdc.Record,
 	tablesPrimaryKeys common.TableKeys,
 	startPosition common.CdcPosition,
+	snapshotted *[]string,
 ) *cdcEventHandler {
 	h := &cdcEventHandler{
+		snapshotted:      snapshotted,
 		canal:            canal,
 		canalDoneC:       canalDoneC,
 		parsedRecordsC:   parsedRecordsC,
@@ -434,8 +442,9 @@ func (h *cdcEventHandler) buildRecords(
 				Name: h.canal.SyncedPosition().Name,
 				Pos:  e.Header.LogPos,
 			},
-			PrevPosition: &prevPos,
-			Index:        i,
+			PrevPosition:      &prevPos,
+			Index:             i,
+			SnapshottedTables: h.snapshotted,
 		}.ToSDKPosition()
 
 		var rec opencdc.Record

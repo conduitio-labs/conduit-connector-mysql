@@ -114,7 +114,7 @@ func resolveTablePosition(
 		}
 		lastRead, reason := resolveLegacyValue(tp.SingleKey.LastRead, keys[0], types)
 		if reason == "" {
-			reason = checkKeyClass(lastRead, keys[0], types)
+			reason = checkKeyClass(lastRead, keys[0], tp.SingleKey.KeyType, types)
 		}
 		if reason != "" {
 			return tp, reason
@@ -122,12 +122,12 @@ func resolveTablePosition(
 		// SnapshotEnd is informational (the end is recomputed on resume).
 		snapshotEnd, endReason := resolveLegacyValue(tp.SingleKey.SnapshotEnd, keys[0], types)
 		if endReason == "" {
-			endReason = checkKeyClass(snapshotEnd, keys[0], types)
+			endReason = checkKeyClass(snapshotEnd, keys[0], tp.SingleKey.KeyType, types)
 		}
 		if endReason != "" {
 			snapshotEnd = nil
 		}
-		return common.TablePosition{SingleKey: &common.TablePositionSingleKey{LastRead: lastRead, SnapshotEnd: snapshotEnd}}, ""
+		return common.TablePosition{SingleKey: &common.TablePositionSingleKey{LastRead: lastRead, SnapshotEnd: snapshotEnd, KeyType: tp.SingleKey.KeyType}}, ""
 
 	case tp.MultipleKey != nil:
 		items := *tp.MultipleKey
@@ -142,19 +142,19 @@ func resolveTablePosition(
 			}
 			lastRead, reason := resolveLegacyValue(item.LastRead, column, types)
 			if reason == "" {
-				reason = checkKeyClass(lastRead, column, types)
+				reason = checkKeyClass(lastRead, column, item.KeyType, types)
 			}
 			if reason != "" {
 				return tp, reason
 			}
 			snapshotEnd, endReason := resolveLegacyValue(item.SnapshotEnd, column, types)
 			if endReason == "" {
-				endReason = checkKeyClass(snapshotEnd, column, types)
+				endReason = checkKeyClass(snapshotEnd, column, item.KeyType, types)
 			}
 			if endReason != "" {
 				snapshotEnd = nil
 			}
-			out[i] = common.TablePositionMultipleKeyItem{KeyName: column, LastRead: lastRead, SnapshotEnd: snapshotEnd}
+			out[i] = common.TablePositionMultipleKeyItem{KeyName: column, LastRead: lastRead, SnapshotEnd: snapshotEnd, KeyType: item.KeyType}
 		}
 		return common.TablePosition{MultipleKey: &out}, ""
 	}
@@ -186,25 +186,70 @@ func resolveLegacyValue(v any, column string, types map[string]string) (any, str
 	}
 }
 
-var (
-	numericKeyTypes = map[string]bool{
-		"tinyint": true, "smallint": true, "mediumint": true, "int": true, "integer": true, "bigint": true,
-		"float": true, "double": true, "real": true, "year": true,
-	}
-	// byteKeyTypes are the types whose driver value is []byte.
-	byteKeyTypes = legacyBase64Types
+const (
+	classNumber   = "number"
+	classText     = "text"
+	classBinary   = "binary"
+	classTemporal = "temporal"
+	classTime     = "time"
+	classEnum     = "enum"
+	classSet      = "set"
+	classBit      = "bit"
 )
+
+// orderClass groups MySQL types by how their values are ordered and compared.
+// A key saved under one class cannot seek correctly in a column of another: the
+// bytes "10" are a VARCHAR key that sorts before "9" and a DECIMAL key that
+// sorts after it. "" means the type is not one we classify.
+func orderClass(mysqlType string) string {
+	switch strings.TrimPrefix(strings.ToLower(mysqlType), "unsigned ") {
+	case "tinyint", "smallint", "mediumint", "int", "integer", "bigint", "year",
+		"float", "double", "real", "decimal", "numeric":
+		return classNumber
+	case "char", "varchar", "tinytext", "text", "mediumtext", "longtext":
+		return classText
+	case "binary", "varbinary", "tinyblob", "blob", "mediumblob", "longblob":
+		return classBinary
+	case "date", "datetime", "timestamp":
+		return classTemporal
+	case "time":
+		return classTime
+	case "enum":
+		return classEnum
+	case "set":
+		return classSet
+	case "bit":
+		return classBit
+	default:
+		return ""
+	}
+}
+
+// maxInt64 is the largest value the driver returns as an integer; a BIGINT
+// UNSIGNED above it comes back as its decimal digits.
+const maxInt64 = uint64(1<<63 - 1)
 
 // checkKeyClass reports why v cannot be a key of the column's current type, or
 // "" when it can. The saved position says what the key was when it was written;
-// if the column has since been retyped (INT to VARCHAR, say), seeking from that
-// value compares across classes and MySQL's implicit conversion can skip rows
-// (last_read 3 on a VARCHAR column holding a..f resumed with none of them).
-// Invariant 3: restart the table instead; duplicates, never loss.
+// if the column has since been retyped, seeking from that value compares across
+// types and can skip rows: last_read 3 on a VARCHAR column holding a..f resumed
+// with none of them, and the bytes "10" saved from a VARCHAR key resumed on an
+// INT column holding 1,2,9,10,11,100 at 11, skipping 2 and 9. Invariant 3:
+// restart the table instead; duplicates, never loss.
 //
-// The classes are numeric, byte/text (including DECIMAL, TIME, ENUM) and
-// temporal. A column type outside the known lists is not checked.
-func checkKeyClass(v any, column string, types map[string]string) string {
+// Two checks. First, when the position recorded the key column's type
+// (keyType), it must be in the same order class as the column now; this is the
+// only way to tell a VARCHAR "10" from a DECIMAL "10". Second, the kind of the
+// value must fit the column: numbers for a numeric column, bytes or text for a
+// text/binary column, time for a temporal column. A byte value on a numeric
+// column is accepted only when the recorded type proves it came from a numeric
+// column, or, without a recorded type, when it is a BIGINT UNSIGNED above the
+// int64 range, the only numeric key the driver returns as bytes.
+//
+// A position without a recorded type (written by an older build) cannot be
+// checked for a retype between byte-valued types, such as VARCHAR to DECIMAL;
+// that case is not detected.
+func checkKeyClass(v any, column, keyType string, types map[string]string) string {
 	if v == nil {
 		return ""
 	}
@@ -212,25 +257,49 @@ func checkKeyClass(v any, column string, types map[string]string) string {
 	if !known {
 		return fmt.Sprintf("key column %q not found", column)
 	}
+	columnClass := orderClass(dataType)
+
+	if keyType != "" && columnClass != "" {
+		// The driver may report ENUM and SET columns as CHAR, so compare them as text.
+		lenient := func(c string) string {
+			if c == classEnum || c == classSet {
+				return classText
+			}
+			return c
+		}
+		if saved := orderClass(keyType); saved != "" && lenient(saved) != lenient(columnClass) {
+			return fmt.Sprintf("the saved key was a %s key but column %q is now %s: the column was retyped", keyType, column, dataType)
+		}
+	}
 
 	var ok bool
-	switch {
-	case numericKeyTypes[dataType]:
+	switch columnClass {
+	case classNumber:
 		switch x := v.(type) {
 		case int64, uint64, float32, float64:
 			ok = true
 		case []byte:
-			// The driver returns a BIGINT UNSIGNED above the int64 range as its
-			// decimal digits. Only a numeric string is a numeric key.
-			_, err := strconv.ParseFloat(string(x), 64)
-			ok = err == nil
+			switch {
+			case dataType == "decimal" || dataType == "numeric":
+				// The driver returns DECIMAL as bytes. Whether the bytes came
+				// from a DECIMAL or from a text key that merely looks numeric
+				// is only known when keyType was recorded.
+				_, err := strconv.ParseFloat(string(x), 64)
+				ok = err == nil
+			case keyType != "":
+				_, err := strconv.ParseFloat(string(x), 64)
+				ok = err == nil
+			default:
+				u, err := strconv.ParseUint(string(x), 10, 64)
+				ok = err == nil && u > maxInt64
+			}
 		}
-	case byteKeyTypes[dataType]:
+	case classText, classBinary, classTime, classEnum, classSet, classBit:
 		switch v.(type) {
 		case []byte, string:
 			ok = true
 		}
-	case legacyTimeTypes[dataType]:
+	case classTemporal:
 		switch v.(type) {
 		case time.Time, string:
 			ok = true

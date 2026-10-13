@@ -235,9 +235,10 @@ func decodeTagged(t taggedKeyValue) (any, error) {
 type keyPair struct {
 	LastRead    json.RawMessage `json:"last_read"`
 	SnapshotEnd json.RawMessage `json:"snapshot_end"`
+	KeyType     string          `json:"key_type,omitempty"`
 }
 
-func encodeKeyPair(lastRead, snapshotEnd any) (keyPair, error) {
+func encodeKeyPair(lastRead, snapshotEnd any, keyType string) (keyPair, error) {
 	lr, err := encodeKeyValue(lastRead)
 	if err != nil {
 		return keyPair{}, err
@@ -246,7 +247,7 @@ func encodeKeyPair(lastRead, snapshotEnd any) (keyPair, error) {
 	if err != nil {
 		return keyPair{}, err
 	}
-	return keyPair{LastRead: lr, SnapshotEnd: se}, nil
+	return keyPair{LastRead: lr, SnapshotEnd: se, KeyType: keyType}, nil
 }
 
 func decodeKeyPair(p keyPair) (lastRead, snapshotEnd any, err error) {
@@ -261,7 +262,7 @@ func decodeKeyPair(p keyPair) (lastRead, snapshotEnd any, err error) {
 
 // MarshalJSON writes the keys type-exactly.
 func (p TablePositionSingleKey) MarshalJSON() ([]byte, error) {
-	pair, err := encodeKeyPair(p.LastRead, p.SnapshotEnd)
+	pair, err := encodeKeyPair(p.LastRead, p.SnapshotEnd, p.KeyType)
 	if err != nil {
 		return nil, err
 	}
@@ -278,13 +279,13 @@ func (p *TablePositionSingleKey) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	p.LastRead, p.SnapshotEnd = lr, se
+	p.LastRead, p.SnapshotEnd, p.KeyType = lr, se, pair.KeyType
 	return nil
 }
 
 // MarshalJSON writes the keys type-exactly.
 func (p TablePositionMultipleKeyItem) MarshalJSON() ([]byte, error) {
-	pair, err := encodeKeyPair(p.LastRead, p.SnapshotEnd)
+	pair, err := encodeKeyPair(p.LastRead, p.SnapshotEnd, p.KeyType)
 	if err != nil {
 		return nil, err
 	}
@@ -307,6 +308,6 @@ func (p *TablePositionMultipleKeyItem) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	p.KeyName, p.LastRead, p.SnapshotEnd = aux.KeyName, lr, se
+	p.KeyName, p.LastRead, p.SnapshotEnd, p.KeyType = aux.KeyName, lr, se, aux.KeyType
 	return nil
 }

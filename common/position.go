@@ -147,6 +147,14 @@ type TablePosition struct {
 type TablePositionSingleKey struct {
 	LastRead    any `json:"last_read"`
 	SnapshotEnd any `json:"snapshot_end"`
+
+	// KeyType is the MySQL type of the key column when the position was
+	// written, lowercase and without "unsigned" (for example "varchar",
+	// "decimal"). It lets a resume tell that the column has since been retyped
+	// to a type with a different ordering, which the key value alone cannot show
+	// (the bytes "10" are both a VARCHAR and a DECIMAL key). Empty in positions
+	// written without it; additive, ignored by readers that do not know it.
+	KeyType string `json:"key_type,omitempty"`
 }
 
 type TablePositionMultipleKey []TablePositionMultipleKeyItem
@@ -155,6 +163,9 @@ type TablePositionMultipleKeyItem struct {
 	KeyName     string `json:"key_name"`
 	LastRead    any    `json:"last_read"`
 	SnapshotEnd any    `json:"snapshot_end"`
+
+	// KeyType: see TablePositionSingleKey.KeyType.
+	KeyType string `json:"key_type,omitempty"`
 }
 
 type ReplicationEventPosition struct {

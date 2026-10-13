@@ -407,3 +407,23 @@ func TestPosition_DowngradeBehaviour(t *testing.T) {
 	is.NoErr(json.Unmarshal(CdcPosition{}.ToSDKPosition(), &env))
 	is.True(env.Version <= previousMaxPositionVersion) // and still reads cdc positions
 }
+
+func TestSnapshotPosition_KeyTypeRoundTripAndOldReaders(t *testing.T) {
+	is := is.New(t)
+	in := SnapshotPosition{Snapshots: SnapshotPositions{
+		"t": {SingleKey: &TablePositionSingleKey{LastRead: []byte("10"), SnapshotEnd: []byte("100"), KeyType: "decimal"}},
+		"c": {MultipleKey: &TablePositionMultipleKey{{KeyName: "a", LastRead: int64(1), KeyType: "int"}}},
+	}}
+	raw, err := in.ToSDKPosition()
+	is.NoErr(err)
+
+	parsed, err := ParseSDKPosition(raw)
+	is.NoErr(err)
+	is.Equal(parsed.SnapshotPosition.Snapshots["t"].SingleKey.KeyType, "decimal")
+	is.Equal((*parsed.SnapshotPosition.Snapshots["c"].MultipleKey)[0].KeyType, "int")
+
+	// A position without the field (older build) decodes with an empty KeyType.
+	legacy, err := ParseSDKPosition([]byte(`{"version":1,"snapshot_position":{"snapshots":{"t":{"SingleKey":{"last_read":1,"snapshot_end":2}}}}}`))
+	is.NoErr(err)
+	is.Equal(legacy.SnapshotPosition.Snapshots["t"].SingleKey.KeyType, "")
+}

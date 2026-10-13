@@ -95,33 +95,49 @@ func TestResolveTablePosition(t *testing.T) {
 }
 
 func TestCheckKeyClass(t *testing.T) {
-	types := map[string]string{"i": "bigint", "u": "varchar", "d": "decimal", "t": "datetime", "j": "json"}
+	types := map[string]string{"i": "int", "bi": "bigint", "u": "varchar", "d": "decimal", "t": "datetime", "j": "json", "b": "varbinary"}
+	big := []byte("18446744073709551615") // BIGINT UNSIGNED above int64: the driver returns digits
 	tests := []struct {
-		column string
-		v      any
-		fits   bool
+		name    string
+		column  string
+		v       any
+		keyType string
+		fits    bool
 	}{
-		{"i", int64(1), true},
-		{"i", uint64(1), true},
-		{"i", float64(1), true},
-		{"i", []byte("18446744073709551615"), true},
-		{"i", []byte("abc"), false},
-		{"i", time.Now(), false},
-		{"u", []byte("a"), true},
-		{"u", "a", true},
-		{"u", int64(3), false},
-		{"u", time.Now(), false},
-		{"d", []byte("1.00"), true},
-		{"d", int64(1), false},
-		{"t", time.Now(), true},
-		{"t", "2020-01-01T00:00:00Z", true},
-		{"t", int64(1), false},
-		{"t", []byte("x"), false},
-		{"j", int64(1), true}, // unknown class: not checked
-		{"i", nil, true},      // no saved key yet
+		{"int on int", "i", int64(1), "", true},
+		{"uint on bigint", "bi", uint64(1), "", true},
+		{"float on int", "i", float64(1), "", true},
+		{"bigint unsigned above int64, unrecorded", "bi", big, "", true},
+		{"bytes 10 on INT, unrecorded: the round 4 blocker", "i", []byte("10"), "", false},
+		{"bytes 10 on BIGINT, unrecorded", "bi", []byte("10"), "", false},
+		{"bytes 10 on INT, saved from a varchar key", "i", []byte("10"), "varchar", false},
+		{"bytes 10 on INT, saved from a decimal key", "i", []byte("10"), "decimal", true},
+		{"unsigned bigint digits, recorded", "bi", big, "bigint", true},
+		{"non-numeric bytes on INT", "i", []byte("abc"), "", false},
+		{"time on int", "i", time.Now(), "", false},
+		{"bytes on varchar", "u", []byte("a"), "", true},
+		{"string on varchar", "u", "a", "varchar", true},
+		{"int on varchar", "u", int64(3), "", false},
+		{"time on varchar", "u", time.Now(), "", false},
+		{"decimal bytes saved from varchar: retype", "d", []byte("10"), "varchar", false},
+		{"varchar bytes saved from decimal: retype", "u", []byte("10"), "decimal", false},
+		{"decimal bytes on decimal", "d", []byte("1.00"), "decimal", true},
+		{"decimal bytes on decimal, unrecorded", "d", []byte("1.00"), "", true},
+		{"int on decimal", "d", int64(1), "", true},
+		{"text saved, binary now: different ordering", "b", []byte("a"), "varchar", false},
+		{"binary saved, binary now", "b", []byte("a"), "varbinary", true},
+		{"char saved, enum-or-set tolerated", "u", []byte("a"), "char", true},
+		{"datetime on datetime", "t", time.Now(), "datetime", true},
+		{"datetime text on datetime", "t", "2020-01-01T00:00:00Z", "", true},
+		{"int on datetime", "t", int64(1), "", false},
+		{"bytes on datetime", "t", []byte("x"), "", false},
+		{"unknown class is not checked", "j", int64(1), "", true},
+		{"no saved key yet", "i", nil, "", true},
 	}
 	for _, tc := range tests {
-		is := is.New(t)
-		is.Equal(checkKeyClass(tc.v, tc.column, types) == "", tc.fits)
+		t.Run(tc.name, func(t *testing.T) {
+			is := is.New(t)
+			is.Equal(checkKeyClass(tc.v, tc.column, tc.keyType, types) == "", tc.fits)
+		})
 	}
 }

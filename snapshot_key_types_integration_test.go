@@ -185,3 +185,42 @@ func cdcStartJSON(is *is.I, pos opencdc.Position) string {
 	is.NoErr(err)
 	return string(raw)
 }
+
+// Positions written by this build record the key column's type, which is the
+// only way a resume can tell a VARCHAR key "10" from a DECIMAL key "10" after
+// the column has been retyped.
+func TestSnapshotPosition_RecordsKeyColumnType(t *testing.T) {
+	tests := []struct {
+		sqlTyp  string
+		literal string
+		want    string
+	}{
+		{"VARCHAR(20)", "'a'", "varchar"},
+		{"DECIMAL(10,2)", "1.50", "decimal"},
+		{"BIGINT UNSIGNED", "18446744073709551615", "bigint"},
+		{"VARBINARY(8)", "X'01'", "varbinary"},
+		{"DATETIME(6)", "'2020-01-01 00:00:00'", "datetime"},
+		{"INT", "7", "int"},
+	}
+	for i, tc := range tests {
+		t.Run(tc.want, func(t *testing.T) {
+			ctx := testutils.TestContext(t)
+			is := is.New(t)
+			db := testutils.NewDB(t)
+
+			table := fmt.Sprintf("kt_type_%d", i)
+			is.NoErr(db.Exec("DROP TABLE IF EXISTS " + table).Error)
+			is.NoErr(db.Exec(fmt.Sprintf("CREATE TABLE %s (k %s NOT NULL PRIMARY KEY, v INT NOT NULL)", table, tc.sqlTyp)).Error)
+			is.NoErr(db.Exec(fmt.Sprintf("INSERT INTO %s (k, v) VALUES (%s, 1)", table, tc.literal)).Error)
+
+			runCtx, cancel := context.WithCancel(ctx)
+			source := testSourceOpen(runCtx, is, map[string]string{"tables": "^" + table + "$"}, nil)
+			t.Cleanup(func() { killSource(cancel, source) })
+
+			recs := readOne(ctx, is, source)
+			pos := parseTestPosition(is, recs[0].Position).SnapshotPosition.Snapshots[table]
+			is.True(pos.SingleKey != nil)
+			is.Equal(pos.SingleKey.KeyType, tc.want)
+		})
+	}
+}

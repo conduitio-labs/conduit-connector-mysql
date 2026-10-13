@@ -174,10 +174,17 @@ The source connector is in beta. This section states what it guarantees and what
     removed also triggers it). The error says that "the configured table set changed", and
     the way out is to restore the previous `tables` list or reset the position; removing tables
     from the list does not clear it.
-- **A key column that was retyped restarts its table's snapshot.** If the saved snapshot
-  position holds a key of another kind than the column now has (an `INT` key column that became
-  `VARCHAR`, say), the table's snapshot restarts from its first row with a warning. Rows
-  already delivered are delivered again; nothing is skipped.
+- **A key column that was retyped restarts its table's snapshot.** The position records the
+  type of each key column. If the saved key does not fit the column's type now (an `INT` key
+  column that became `VARCHAR`, or `VARCHAR` that became `DECIMAL`, whose values order
+  differently), the table's snapshot restarts from its first row with a warning. Rows already
+  delivered are delivered again; nothing is skipped.
+- **Upgrading in the middle of a snapshot re-reads text, decimal and binary key tables.**
+  A snapshot position written by an older version does not record the key type, so a table
+  whose key is text, binary, `DECIMAL`, `TIME`, `ENUM`, `SET` or `BIT` cannot be checked for a
+  retype and restarts from its first row after the upgrade; its partial progress is re-read.
+  Integer, date and time keys resume where they stopped. Pipelines already in CDC are not
+  affected.
 - **Binlog retention is your responsibility.** If the persisted position has been purged
   from the server, the connector cannot resume. Keep `binlog_expire_logs_seconds` longer than
   the longest outage you want to survive.

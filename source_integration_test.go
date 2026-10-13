@@ -191,7 +191,7 @@ func TestSource_TableWithoutPK_FailsFast(t *testing.T) {
 	db := testutils.NewDB(t)
 
 	testutils.CreateTables(is, db, &tableWithoutPK{})
-	is.NoErr(db.Create([]tableWithoutPK{{Data: "record A"}}).Error)
+	is.NoErr(db.Create([]tableWithoutPK{{Code: "a", Data: "record A"}}).Error)
 
 	source := &Source{}
 	cfg := map[string]string{"dsn": testutils.DSN, "tables": "table_without_pks", "cdc.disableLogs": "true"}
@@ -219,11 +219,11 @@ func TestSource_TableWithoutPK_SortingColumn(t *testing.T) {
 	db := testutils.NewDB(t)
 
 	testutils.CreateTables(is, db, &tableWithoutPK{})
-	is.NoErr(db.Create([]tableWithoutPK{{Data: "record A"}, {Data: "record B"}}).Error)
+	is.NoErr(db.Create([]tableWithoutPK{{Code: "a", Data: "record A"}, {Code: "b", Data: "record B"}}).Error)
 
 	source, teardown := testSource(ctx, is, map[string]string{
 		"tables": "table_without_pks",
-		"tableConfig.table_without_pks.sortingColumn": "data",
+		"tableConfig.table_without_pks.sortingColumn": "code",
 	})
 	defer teardown()
 
@@ -253,7 +253,7 @@ func TestSource_TableWithoutPK_CDCOnly(t *testing.T) {
 	})
 	defer teardown()
 
-	is.NoErr(db.Create([]tableWithoutPK{{Data: "record A"}}).Error)
+	is.NoErr(db.Create([]tableWithoutPK{{Code: "a", Data: "record A"}}).Error)
 
 	recs, err := source.ReadN(ctx, 1)
 	is.NoErr(err)
@@ -291,7 +291,9 @@ type keyedTable struct {
 }
 
 type tableWithoutPK struct {
-	// No id field, forcing gorm to not create a primary key
+	// No id field, forcing gorm to not create a primary key. Code is a
+	// valid sorting column: NOT NULL with a unique index.
+	Code string `gorm:"size:20;not null;uniqueIndex"`
 	Data string `gorm:"size:100"`
 }
 

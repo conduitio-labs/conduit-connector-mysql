@@ -138,8 +138,7 @@ For Snapshot and CDC modes, the following privileges are required:
 - LOCK TABLES
 - RELOAD
 - REPLICATION CLIENT
-- REPLICATION SLAVE
-<!-- /readmegen:description -->
+- REPLICATION SLAVE<!-- /readmegen:description -->
 
 ## Source Configuration Parameters
 

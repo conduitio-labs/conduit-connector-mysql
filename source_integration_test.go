@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -180,48 +181,118 @@ func TestSource_EmptyChunkRead(t *testing.T) {
 	}
 }
 
-func TestSource_UnsafeSnapshot(t *testing.T) {
+// Tables without a primary key cannot be snapshotted in a resumable, consistent
+// order. The former snapshot.unsafe escape hatch is gone (see ErrTableWithoutKey);
+// Open must fail fast and say what to do. This also failed on main, where a
+// keyless table was silently snapshotted with LIMIT/OFFSET.
+func TestSource_TableWithoutPK_FailsFast(t *testing.T) {
 	is := is.New(t)
+	ctx := testutils.TestContext(t)
 	db := testutils.NewDB(t)
 
-	type TableWithoutPK struct {
-		// No id field, forcing gorm to not create a primary key
+	testutils.CreateTables(is, db, &tableWithoutPK{})
+	is.NoErr(db.Create([]tableWithoutPK{{Data: "record A"}}).Error)
 
-		Data string `gorm:"size:100"`
-	}
+	source := &Source{}
+	cfg := map[string]string{"dsn": testutils.DSN, "tables": "table_without_pks", "cdc.disableLogs": "true"}
+	is.NoErr(sdk.Util.ParseConfig(ctx, cfg, source.Config(), Connector.NewSpecification().SourceParams))
 
-	testutils.CreateTables(is, db, &TableWithoutPK{})
+	err := source.Open(ctx, nil)
+	is.True(err != nil)
+	is.True(errors.Is(err, ErrTableWithoutKey))
+	var coded *Error
+	is.True(errors.As(err, &coded))
+	is.Equal(coded.Code, "mysql.snapshot.table_without_key")
+	is.Equal(coded.ConfigPath, "tableConfig.table_without_pks.sortingColumn")
+	is.True(strings.Contains(coded.Fix, `tables: "*,-^table_without_pks$"`))
+	is.True(strings.Contains(err.Error(), `"table_without_pks"`))
+	is.True(strings.Contains(err.Error(), "tableConfig.table_without_pks.sortingColumn"))
+	is.True(strings.Contains(err.Error(), "snapshot.enabled=false"))
+	is.NoErr(source.Teardown(ctx))
+}
 
-	db.Create([]TableWithoutPK{
-		{Data: "record A"},
-		{Data: "record B"},
-	})
-	is.NoErr(db.Error)
-
-	expectedData := []string{"record A", "record B"}
-
+// A configured sorting column makes a keyless table snapshottable with a
+// recorded, resumable position.
+func TestSource_TableWithoutPK_SortingColumn(t *testing.T) {
+	is := is.New(t)
 	ctx := testutils.TestContext(t)
+	db := testutils.NewDB(t)
+
+	testutils.CreateTables(is, db, &tableWithoutPK{})
+	is.NoErr(db.Create([]tableWithoutPK{{Data: "record A"}, {Data: "record B"}}).Error)
+
 	source, teardown := testSource(ctx, is, map[string]string{
-		"tables":          "table_without_pk",
-		"snapshot.unsafe": "true",
+		"tables": "table_without_pks",
+		"tableConfig.table_without_pks.sortingColumn": "data",
 	})
 	defer teardown()
 
-	var recs []opencdc.Record
-	for range expectedData {
-		rec, err := source.ReadN(ctx, 1)
+	for _, want := range []string{"record A", "record B"} {
+		recs, err := source.ReadN(ctx, 1)
 		is.NoErr(err)
-		is.True(len(rec) == 1)
-		is.NoErr(source.Ack(ctx, rec[0].Position))
-
-		recs = append(recs, rec[0])
+		is.Equal(len(recs), 1)
+		is.NoErr(source.Ack(ctx, recs[0].Position))
+		is.Equal(recs[0].Operation, opencdc.OperationSnapshot)
+		is.Equal(recs[0].Payload.After.(opencdc.StructuredData)["data"].(string), want)
+		is.True(parseTestPosition(is, recs[0].Position).SnapshotPosition.Snapshots["table_without_pks"].SingleKey != nil)
 	}
+}
 
-	for i, expectedData := range expectedData {
-		actual := recs[i]
-		is.Equal(actual.Operation, opencdc.OperationSnapshot)
-		is.Equal(actual.Payload.After.(opencdc.StructuredData)["data"].(string), expectedData)
-	}
+// With the snapshot disabled a keyless table is fine: CDC derives its keys from
+// the binlog position.
+func TestSource_TableWithoutPK_CDCOnly(t *testing.T) {
+	is := is.New(t)
+	ctx := testutils.TestContext(t)
+	db := testutils.NewDB(t)
+
+	testutils.CreateTables(is, db, &tableWithoutPK{})
+
+	source, teardown := testSource(ctx, is, map[string]string{
+		"tables":           "table_without_pks",
+		"snapshot.enabled": "false",
+	})
+	defer teardown()
+
+	is.NoErr(db.Create([]tableWithoutPK{{Data: "record A"}}).Error)
+
+	recs, err := source.ReadN(ctx, 1)
+	is.NoErr(err)
+	is.Equal(len(recs), 1)
+	is.Equal(recs[0].Operation, opencdc.OperationCreate)
+	is.Equal(recs[0].Payload.After.(opencdc.StructuredData)["data"].(string), "record A")
+}
+
+// The exclusion syntax shown in the error and the docs works: a later "-" rule
+// removes the keyless table from an earlier match, and Open then succeeds.
+func TestSource_TableWithoutPK_ExcludedByPattern(t *testing.T) {
+	is := is.New(t)
+	ctx := testutils.TestContext(t)
+	db := testutils.NewDB(t)
+
+	testutils.CreateTables(is, db, &tableWithoutPK{}, &keyedTable{})
+	is.NoErr(db.Create(&keyedTable{ID: 1, Data: "a"}).Error)
+
+	source, teardown := testSource(ctx, is, map[string]string{
+		"tables": "^(table_without_pks|keyed_tables)$,-^table_without_pks$",
+	})
+	defer teardown()
+
+	recs, err := source.ReadN(ctx, 1)
+	is.NoErr(err)
+	is.Equal(len(recs), 1)
+	collection, err := recs[0].Metadata.GetCollection()
+	is.NoErr(err)
+	is.Equal(collection, "keyed_tables")
+}
+
+type keyedTable struct {
+	ID   int64  `gorm:"primaryKey;autoIncrement:false"`
+	Data string `gorm:"size:100"`
+}
+
+type tableWithoutPK struct {
+	// No id field, forcing gorm to not create a primary key
+	Data string `gorm:"size:100"`
 }
 
 func TestSource_CompositeKey(t *testing.T) {

@@ -19,7 +19,6 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
-	"regexp"
 	"testing"
 	"time"
 
@@ -443,90 +442,46 @@ func TestSnapshotIterator_StringSorting(t *testing.T) {
 	is.NoErr(iterator.Teardown(ctx))
 }
 
-func TestSnapshotIterator_FetchByLimit(t *testing.T) {
+// Issue #190: Teardown hung while a fetch worker was blocked sending a row to a
+// consumer that had stopped reading. The LIMIT/OFFSET worker that had the
+// unguarded send is gone; this guards the remaining workers. Invariant 7.
+func TestSnapshotIterator_TeardownWhileWorkerBlockedOnSend(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 	db := testutils.NewDB(t)
 
-	type Table1 struct {
-		ID   int    `gorm:"primaryKey;autoIncrement"`
-		Data string `gorm:"size:100"`
+	testutils.CreateUserTable(is, db)
+	for i := 1; i <= 5; i++ {
+		testutils.InsertUser(is, db, i)
 	}
-	type Table2 struct {
-		ID   int    `gorm:"primaryKey;autoIncrement"`
-		Data string `gorm:"size:100"`
-	}
-
-	table1name := testutils.TableName(is, db, &Table1{})
-	table2name := testutils.TableName(is, db, &Table2{})
-
-	testutils.CreateTables(is, db, &Table1{}, &Table2{})
-
-	var table1Data []Table1
-	var table2Data []Table2
-	for i := 1; i <= 50; i++ {
-		table1Data = append(table1Data, Table1{Data: fmt.Sprintf("table 1 record %d", i)})
-		table2Data = append(table2Data, Table2{Data: fmt.Sprintf("table 2 record %d", i)})
-	}
-
-	is.NoErr(db.Create(&table1Data).Error)
-	is.NoErr(db.Create(&table2Data).Error)
 
 	serverID, err := common.GetServerID(ctx, db.SqlxDB)
 	is.NoErr(err)
 
 	iterator, err := newSnapshotIterator(snapshotIteratorConfig{
-		tablePrimaryKeys: common.TableKeys{table1name: {}, table2name: {}},
+		tablePrimaryKeys: testutils.TablePrimaryKeys,
 		db:               db.SqlxDB,
 		database:         "meroxadb",
 		serverID:         serverID,
-		fetchSize:        10, // small fetch size to test pagination
+		fetchSize:        2,
 	})
 	is.NoErr(err)
-
 	is.NoErr(iterator.setupWorkers(ctx))
 	iterator.start(ctx)
 
-	var recs []opencdc.Record
-	for {
-		batch, err := iterator.ReadN(ctx, 10)
-		if errors.Is(err, ErrSnapshotIteratorDone) {
-			break
-		}
+	// Read and ack one row, then stop reading: the worker blocks on the next send.
+	recs, err := iterator.ReadN(ctx, 1)
+	is.NoErr(err)
+	is.Equal(len(recs), 1)
+	is.NoErr(iterator.Ack(ctx, recs[0].Position))
+
+	done := make(chan error, 1)
+	go func() { done <- iterator.Teardown(context.Background()) }()
+
+	select {
+	case err := <-done:
 		is.NoErr(err)
-
-		for _, rec := range batch {
-			is.NoErr(iterator.Ack(ctx, rec.Position))
-			recs = append(recs, rec)
-		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Teardown did not return while a fetch worker was blocked on send (issue #190)")
 	}
-
-	is.Equal(len(recs), len(table1Data)+len(table2Data))
-
-	var table1Recs, table2Recs int
-	expectedRecordPattern := regexp.MustCompile(`table (1|2) record \d+`)
-
-	for _, rec := range recs {
-		is.Equal(rec.Operation, opencdc.OperationSnapshot)
-
-		collection, err := rec.Metadata.GetCollection()
-		is.NoErr(err)
-		data := rec.Payload.After.(opencdc.StructuredData)["data"].(string)
-
-		is.True(expectedRecordPattern.MatchString(data))
-
-		switch collection {
-		case table1name:
-			table1Recs++
-		case table2name:
-			table2Recs++
-		default:
-			is.Fail() // unexpected table name
-		}
-	}
-
-	is.Equal(table1Recs, len(table1Data))
-	is.Equal(table2Recs, len(table2Data))
-
-	is.NoErr(iterator.Teardown(ctx))
 }

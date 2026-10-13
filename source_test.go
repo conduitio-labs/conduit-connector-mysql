@@ -23,6 +23,7 @@ import (
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	"github.com/conduitio/conduit-commons/opencdc"
+	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/matryer/is"
 )
 
@@ -229,4 +230,47 @@ func TestResolveCoverage(t *testing.T) {
 		_, err := resolveCoverage(cdc(cov([]string{"a"}, nil, nil)), true, []string{"a", "late"}, true)
 		is.True(strings.Contains(err.Error(), "late"))
 	})
+}
+
+// snapshot.unsafe was removed. true must fail validation, even for a pipeline
+// that is already in CDC (validation cannot see the position), with a stable,
+// actionable error; false is accepted so existing configs keep loading.
+func TestSourceConfig_UnsafeSnapshotRemoved(t *testing.T) {
+	validate := func(cfg map[string]string) error {
+		cfg["dsn"] = "root:pw@tcp(127.0.0.1:3306)/db"
+		cfg["tables"] = "*"
+		source := &Source{}
+		return sdk.Util.ParseConfig(context.Background(), cfg, source.Config(), Connector.NewSpecification().SourceParams)
+	}
+
+	t.Run("true is rejected with code, path and fix", func(t *testing.T) {
+		is := is.New(t)
+		err := validate(map[string]string{"snapshot.unsafe": "true"})
+		is.True(errors.Is(err, ErrUnsafeSnapshotRemoved))
+		var coded *Error
+		is.True(errors.As(err, &coded))
+		is.Equal(coded.Code, "mysql.config.unsafe_snapshot_removed")
+		is.Equal(coded.ConfigPath, "snapshot.unsafe")
+		is.True(strings.Contains(coded.Fix, "tableConfig.<table>.sortingColumn"))
+		is.True(strings.Contains(coded.Fix, "already in CDC"))
+	})
+
+	t.Run("false is ignored", func(t *testing.T) {
+		is := is.New(t)
+		is.NoErr(validate(map[string]string{"snapshot.unsafe": "false"}))
+	})
+
+	t.Run("absent is fine", func(t *testing.T) {
+		is := is.New(t)
+		is.NoErr(validate(map[string]string{}))
+	})
+}
+
+func TestNewSnapshotIterator_RejectsTableWithoutKey(t *testing.T) {
+	is := is.New(t)
+	_, err := newSnapshotIterator(snapshotIteratorConfig{
+		database:         "db",
+		tablePrimaryKeys: common.TableKeys{"ok": {"id"}, "keyless": {}},
+	})
+	is.True(errors.Is(err, ErrTableWithoutKey))
 }

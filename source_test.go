@@ -203,6 +203,27 @@ func TestResolveCoverage(t *testing.T) {
 		})
 	}
 
+	t.Run("hashed explicit list: no direction claimed, no impossible fix", func(t *testing.T) {
+		is := is.New(t)
+		_, err := resolveCoverage(cdc(cov(many(300), nil, nil)), true, many(299), true) // a table was REMOVED
+		var coded *Error
+		is.True(errors.As(err, &coded))
+		is.True(strings.Contains(coded.Message, "configured table set changed"))
+		is.True(!strings.Contains(coded.Message, "were added after"))
+		is.True(strings.Contains(coded.Fix, "reset the pipeline's position"))
+		is.True(strings.Contains(coded.Fix, "restore the `tables` list"))
+		is.True(!strings.Contains(coded.Fix, "remove them from"))
+	})
+
+	t.Run("hashed pattern mode: warning claims no direction", func(t *testing.T) {
+		is := is.New(t)
+		got, err := resolveCoverage(cdc(cov(many(300), nil, nil)), true, many(299), false)
+		is.NoErr(err)
+		is.Equal(len(got.warnings), 1)
+		is.True(strings.Contains(got.warnings[0], "configured table set changed"))
+		is.True(!strings.Contains(got.warnings[0], "were added after"))
+	})
+
 	t.Run("error names the added tables", func(t *testing.T) {
 		is := is.New(t)
 		_, err := resolveCoverage(cdc(cov([]string{"a"}, nil, nil)), true, []string{"a", "late"}, true)

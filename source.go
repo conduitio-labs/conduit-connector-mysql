@@ -561,6 +561,29 @@ func resolveCoverage(plan startPlan, snapshotEnabled bool, tables []string, expl
 		return decision, nil
 	}
 
+	if persisted.Hashed() {
+		// The position stores only a hash, so the direction of the change is
+		// unknown: a table may have been added or removed, and "remove them from
+		// tables" cannot be offered as a fix.
+		if explicit {
+			return coverageDecision{}, newError(ErrTablesAddedAfterCDC, CodeTablesAddedAfterCDC, "tables",
+				"restore the `tables` list this pipeline had when it entered CDC, or reset the pipeline's position "+
+					"(this snapshots every table again; expect duplicates). If a plain name in `tables` matches more tables "+
+					"than intended, anchor it as ^name$ (a pattern); patterns only warn",
+				"the configured table set changed since this pipeline entered CDC (the position recorded %d tables as a "+
+					"hash, the configuration now matches %d), and the difference cannot be named. A table that was added "+
+					"would have its existing rows silently skipped", persisted.Count, len(current))
+		}
+		decision.carry = persisted.WithCDCOnly(nil, current)
+		decision.warnings = append(decision.warnings, fmt.Sprintf(
+			"%s: the configured table set changed since this pipeline entered CDC (the position recorded %d tables as a "+
+				"hash, the configuration now matches %d), and the difference cannot be named. Any table that was added has "+
+				"its existing rows NOT snapshotted and never delivered, only changes from now on are (CDC-only). This is "+
+				"logged once. Reset the position to snapshot everything again",
+			CodeTablesAddedAfterCDC, persisted.Count, len(current)))
+		return decision, nil
+	}
+
 	if explicit {
 		return coverageDecision{}, newError(ErrTablesAddedAfterCDC, CodeTablesAddedAfterCDC, "tables",
 			"start a new pipeline for these tables, or reset this pipeline's position to snapshot everything again "+
@@ -568,7 +591,7 @@ func resolveCoverage(plan startPlan, snapshotEnabled bool, tables []string, expl
 				"intended, anchor it as ^name$ (a pattern); patterns only warn and the new tables are then delivered "+
 				"from CDC only",
 			"%s were added after this pipeline entered CDC, so their existing rows were never snapshotted "+
-				"and would be silently skipped", describeAdded(added, persisted, current))
+				"and would be silently skipped", fmt.Sprintf("tables %v", added))
 	}
 
 	// Patterns: warn once, then record the tables so the warning does not repeat.
@@ -577,16 +600,8 @@ func resolveCoverage(plan startPlan, snapshotEnabled bool, tables []string, expl
 		"%s: %s match `tables` but were added after this pipeline entered CDC; their existing rows are NOT "+
 			"snapshotted and will not be delivered, only changes from now on are (CDC-only). This is logged once. "+
 			"Start a new pipeline or reset the position to snapshot them",
-		CodeTablesAddedAfterCDC, describeAdded(added, persisted, current)))
+		CodeTablesAddedAfterCDC, fmt.Sprintf("tables %v", added)))
 	return decision, nil
-}
-
-func describeAdded(added []string, persisted *common.TableCoverage, current []string) string {
-	if persisted.Hashed() {
-		return fmt.Sprintf("tables (the position stores %d tables as a hash, so the new ones cannot be named; "+
-			"the configuration now matches %d)", persisted.Count, len(current))
-	}
-	return fmt.Sprintf("tables %v", added)
 }
 
 func sortedUnique(in []string) []string {

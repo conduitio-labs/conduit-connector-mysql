@@ -233,7 +233,7 @@ func TestPosition_GoldenFile_RoundTrip(t *testing.T) {
 }
 
 // oldCdcPosition is CdcPosition as the previous build defined it (no
-// snapshotted_tables). A build that does not know the field must read, and
+// table_coverage). A build that does not know the field must read, and
 // preserve the meaning of, a position that carries it.
 type oldPosition struct {
 	Version     int `json:"version,omitempty"`

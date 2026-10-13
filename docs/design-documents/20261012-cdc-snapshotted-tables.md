@@ -45,7 +45,7 @@ configured (a table that left is forgotten). Then, with the snapshot enabled:
 | known | some, `tables` is an explicit list of plain names | fail `mysql.snapshot.tables_added_after_cdc`, config path `tables`, naming the tables and the fix |
 | known | some, `tables` has `*`, a regex, an anchored name or an exclude | WARN once with the same code and record them as `cdc_only`; existing rows are not snapshotted |
 | unknown (legacy) | n/a | WARN `mysql.snapshot.tables_unverified`; adopt the current tables as `unverified`; tables added later are detected |
-| hashed | set differs from the hash | same as the two rows above, but the tables cannot be named (a removal looks like an addition) |
+| hashed | set differs from the hash | explicit list: fail with the same code, but the message says only that "the configured table set changed" (a removal looks like an addition, so no direction is claimed) and the fix is to restore the previous list or reset the position, never "remove them". Pattern: one WARN with the same wording, then the new set is recorded |
 
 With the snapshot disabled nothing is checked; the restricted coverage is carried so a later
 `snapshot.enabled=true` still sees the truth, and a legacy position stays legacy.

@@ -156,3 +156,22 @@ func TestSnapshotIterator_CompositeKey_ResumeFromLegacyPosition(t *testing.T) {
 	tail, _ := readSnapshot(ctx, t, table, common.PrimaryKeys{"a", "b"}, 2, pos.SnapshotPosition, 0)
 	is.Equal(tail, want[5:]) // rows after (2,2)
 }
+
+// Composite positions record each key column's type (see
+// common.TablePositionSingleKey.KeyType), so a retype can be detected on resume.
+func TestSnapshotIterator_CompositeKey_PositionRecordsColumnTypes(t *testing.T) {
+	ctx := testutils.TestContext(t)
+	is := is.New(t)
+	table, _ := compositeSetup(t)
+
+	_, pos := readSnapshot(ctx, t, table, common.PrimaryKeys{"a", "b"}, 2, nil, 3)
+	parsed, err := common.ParseSDKPosition(pos)
+	is.NoErr(err)
+
+	items := *parsed.SnapshotPosition.Snapshots[table].MultipleKey
+	is.Equal(len(items), 2)
+	is.Equal(items[0].KeyName, "a")
+	is.Equal(items[0].KeyType, "bigint")
+	is.Equal(items[1].KeyName, "b")
+	is.Equal(items[1].KeyType, "bigint")
+}

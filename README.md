@@ -170,8 +170,14 @@ The source connector is in beta. This section states what it guarantees and what
     `mysql.snapshot.tables_unverified` on every start until the position is reset. Tables added
     afterwards are detected.
   - With more than 200 tables the position stores a hash of the table set instead of the
-    names, so the error cannot name the new tables and a table that was only removed also
-    triggers it.
+    names. A change to the set then cannot be named or given a direction (a table that was only
+    removed also triggers it). The error says that "the configured table set changed", and
+    the way out is to restore the previous `tables` list or reset the position; removing tables
+    from the list does not clear it.
+- **A key column that was retyped restarts its table's snapshot.** If the saved snapshot
+  position holds a key of another kind than the column now has (an `INT` key column that became
+  `VARCHAR`, say), the table's snapshot restarts from its first row with a warning. Rows
+  already delivered are delivered again; nothing is skipped.
 - **Binlog retention is your responsibility.** If the persisted position has been purged
   from the server, the connector cannot resume. Keep `binlog_expire_logs_seconds` longer than
   the longest outage you want to survive.

@@ -27,3 +27,24 @@ func TestSource_Teardown(t *testing.T) {
 	err := con.Teardown(context.Background())
 	is.NoErr(err)
 }
+
+// Regression test: the batch defaults used to be pointers to package-level
+// variables, so configuring one Source's sdk.batch.* rewrote every other
+// Source's batch settings and raced with its read loop.
+func TestNewSource_BatchSettingsNotShared(t *testing.T) {
+	is := is.New(t)
+
+	a, ok := NewSource().Config().(*SourceConfig)
+	is.True(ok)
+	b, ok := NewSource().Config().(*SourceConfig)
+	is.True(ok)
+
+	is.True(a.BatchSize != b.BatchSize)   // distinct allocations
+	is.True(a.BatchDelay != b.BatchDelay) // distinct allocations
+
+	*a.BatchSize = 1
+	*a.BatchDelay = 0
+
+	is.Equal(*b.BatchSize, defaultBatchSize)
+	is.Equal(*b.BatchDelay, defaultBatchDelay)
+}

@@ -28,6 +28,10 @@ import (
 // message names the table, the config path and the fix.
 var ErrSortingColumnNotUnique = errors.New("sorting column must be unique and not null")
 
+func sortingColumnPath(table string) string {
+	return "tableConfig." + table + ".sortingColumn"
+}
+
 // validateSortingColumn checks that column can order table's snapshot.
 //
 // Invariant 3: the snapshot reads chunks with "col > last_read ORDER BY col
@@ -45,16 +49,17 @@ func validateSortingColumn(db *sqlx.DB, database, table, column string) error {
 		WHERE table_schema = ? AND table_name = ? AND column_name = ?
 	`, database, table, column)
 	if errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf("%w: table %q has no column %q (tableConfig.%s.sortingColumn)",
-			ErrSortingColumnNotUnique, table, column, table)
+		return newError(ErrSortingColumnNotUnique, CodeSortingColumnInvalid, sortingColumnPath(table),
+			"set it to a NOT NULL, unique column of the table, or add a primary key, or exclude the table in tables",
+			"table %q has no column %q", table, column)
 	} else if err != nil {
 		return fmt.Errorf("failed to inspect sorting column %q of table %q: %w", column, table, err)
 	}
 
 	if !strings.EqualFold(nullable, "NO") {
-		return fmt.Errorf("%w: tableConfig.%s.sortingColumn=%q is nullable, and rows with NULL would be skipped; "+
+		return newError(ErrSortingColumnNotUnique, CodeSortingColumnInvalid, sortingColumnPath(table),
 			"declare the column NOT NULL or choose another column, add a primary key, or exclude the table in tables",
-			ErrSortingColumnNotUnique, table, column)
+			"sorting column %q of table %q is nullable, and rows with NULL would be skipped", column, table)
 	}
 
 	var indexed []struct {
@@ -80,10 +85,10 @@ func validateSortingColumn(db *sqlx.DB, database, table, column string) error {
 		}
 	}
 
-	return fmt.Errorf("%w: tableConfig.%s.sortingColumn=%q is not the only column of a primary key or unique index, "+
-		"and rows sharing a value at a chunk boundary would be skipped; add a unique index on the column, "+
-		"choose another column, add a primary key, or exclude the table in tables",
-		ErrSortingColumnNotUnique, table, column)
+	return newError(ErrSortingColumnNotUnique, CodeSortingColumnInvalid, sortingColumnPath(table),
+		"add a unique index on the column, choose another column, add a primary key, or exclude the table in tables",
+		"sorting column %q of table %q is not the only column of a primary key or unique index, "+
+			"and rows sharing a value at a chunk boundary would be skipped", column, table)
 }
 
 // validateSortingColumns validates every configured sorting column of the

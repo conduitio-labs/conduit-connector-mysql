@@ -29,6 +29,10 @@ const (
 	// CodeTablesAddedAfterCDC: tables were added to the connector's table list
 	// after it entered CDC, and a snapshot would be needed to cover them.
 	CodeTablesAddedAfterCDC = "mysql.snapshot.tables_added_after_cdc"
+
+	// CodeSortingColumnInvalid: a tableConfig sortingColumn is nullable or not
+	// unique, so a snapshot ordered by it could skip rows.
+	CodeSortingColumnInvalid = "mysql.snapshot.sorting_column_invalid"
 )
 
 // Error is a user-facing configuration or state error with a stable code, the

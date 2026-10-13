@@ -85,6 +85,10 @@ func TestSource_SortingColumn_RejectsNonUnique(t *testing.T) {
 	_, err := openWithSortingColumn(t, "sort_dup_rows", "grp", nil)
 	is.True(errors.Is(err, ErrSortingColumnNotUnique))
 	is.True(strings.Contains(err.Error(), "tableConfig.sort_dup_rows.sortingColumn"))
+	is.True(strings.Contains(err.Error(), "mysql.snapshot.sorting_column_invalid"))
+	var coded *Error
+	is.True(errors.As(err, &coded))
+	is.True(coded.Fix != "")
 }
 
 // MIN/MAX and "col > ?" ignore NULL, and a unique index allows many NULLs, so a

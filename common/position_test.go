@@ -282,6 +282,7 @@ func TestCdcPosition_TableCoverage_AdditiveCompat(t *testing.T) {
 		is.True(!parsed.CdcPosition.TableCoverage.Hashed())
 	})
 }
+
 // previousMaxPositionVersion is CurrentPositionVersion of the build before keys
 // were written type-exactly.
 const previousMaxPositionVersion = 1

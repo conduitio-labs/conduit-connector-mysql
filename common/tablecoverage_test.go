@@ -93,7 +93,7 @@ func TestTableCoverage_JSONRoundTripAndAdditiveCompat(t *testing.T) {
 			parsed, err := ParseSDKPosition(raw)
 			is.NoErr(err)
 			is.Equal(*parsed.CdcPosition.TableCoverage, *in)
-			is.Equal(parsed.Version, CurrentPositionVersion)
+			is.Equal(parsed.Version, CDCPositionVersion)
 
 			// A build that does not know the field still reads the position.
 			var old oldPosition

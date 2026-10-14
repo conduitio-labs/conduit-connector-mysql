@@ -138,6 +138,12 @@ func newSnapshotIterator(config snapshotIteratorConfig) (*snapshotIterator, erro
 // from the start method so that we can lock and unlock the given tables without
 // starting up the workers.
 func (s *snapshotIterator) setupWorkers(ctx context.Context) error {
+	// Keys from positions written by older builds are ambiguous text until
+	// resolved against the key column type; see legacy_keys.go.
+	if err := resolveLegacyKeys(ctx, s.config.db, s.config.database, &s.lastPosition, s.config.tablePrimaryKeys); err != nil {
+		return err
+	}
+
 	for table, primaryKeys := range s.config.tablePrimaryKeys {
 		worker := newFetchWorker(ctx, fetchWorkerConfig{
 			// the snapshot worker will update the last position, so we need to
@@ -213,16 +219,29 @@ func (s *snapshotIterator) ReadN(ctx context.Context, n int) ([]opencdc.Record, 
 		}
 		return nil, ErrSnapshotIteratorDone
 	case data := <-s.data:
+		rec, err := s.buildRecord(data)
+		if err != nil {
+			return nil, err
+		}
 		s.acks.Add(1)
-		recs = append(recs, s.buildRecord(data))
+		recs = append(recs, rec)
 	}
 
 	// get the remaining n-1 records is available
 	for len(recs) < n {
 		select {
 		case data := <-s.data:
+			rec, err := s.buildRecord(data)
+			if err != nil {
+				// The records already built are dropped with the error, so
+				// their acks will never arrive: release them.
+				for range recs {
+					s.acks.Done()
+				}
+				return nil, err
+			}
 			s.acks.Add(1)
-			recs = append(recs, s.buildRecord(data))
+			recs = append(recs, rec)
 		case <-ctx.Done():
 			//nolint:wrapcheck // no need to wrap canceled error
 			return nil, ctx.Err()
@@ -290,10 +309,13 @@ func (s *snapshotIterator) Teardown(ctx context.Context) error {
 // is set once by setCDCStart, before start(ctx) runs and therefore before this method
 // is ever called (see newCombinedIterator), so every record built here - including
 // the very first one - carries it via ToSDKPosition.
-func (s *snapshotIterator) buildRecord(d fetchData) opencdc.Record {
+func (s *snapshotIterator) buildRecord(d fetchData) (opencdc.Record, error) {
 	s.lastPosition.Snapshots[d.table] = d.position
 
-	pos := s.lastPosition.ToSDKPosition()
+	pos, err := s.lastPosition.ToSDKPosition()
+	if err != nil {
+		return opencdc.Record{}, fmt.Errorf("failed to build position for table %q: %w", d.table, err)
+	}
 	metadata := make(opencdc.Metadata)
 	metadata.SetCollection(d.table)
 	metadata[common.ServerIDKey] = s.config.serverID
@@ -308,5 +330,5 @@ func (s *snapshotIterator) buildRecord(d fetchData) opencdc.Record {
 		rec.Metadata.SetKeySchemaVersion(d.keySchema.version)
 	}
 
-	return rec
+	return rec, nil
 }

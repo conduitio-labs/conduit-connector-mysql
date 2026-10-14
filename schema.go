@@ -21,6 +21,7 @@ import (
 	"math"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	sdk "github.com/conduitio/conduit-connector-sdk"
@@ -101,6 +102,10 @@ var sqlColtypeToAvroTypeMap = map[string]avroType{
 type avroNamedType struct {
 	avroType
 	Name string
+
+	// dbType is the driver's type name for the column, lowercase and without
+	// "unsigned". Empty when the column did not come from a query.
+	dbType string
 }
 
 func sqlxRowsToAvroCol(rows *sqlx.Rows) ([]*avroNamedType, error) {
@@ -118,7 +123,11 @@ func sqlxRowsToAvroCol(rows *sqlx.Rows) ([]*avroNamedType, error) {
 				colType.DatabaseTypeName(), colType.Name())
 		}
 
-		avroCol := &avroNamedType{avroType: avroType, Name: colType.Name()}
+		avroCol := &avroNamedType{
+			avroType: avroType,
+			Name:     colType.Name(),
+			dbType:   strings.TrimPrefix(strings.ToLower(colType.DatabaseTypeName()), "unsigned "),
+		}
 		if colType.DatabaseTypeName() == "BIT" {
 			avroCol.isBit = true
 		}

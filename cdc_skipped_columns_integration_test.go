@@ -83,7 +83,7 @@ func execOn(ctx context.Context, is *is.I, conn *sql.Conn, q string) {
 	is.NoErr(err)
 }
 
-func readOne(ctx context.Context, is *is.I, it *cdcIterator) opencdc.Record {
+func readOneCDC(ctx context.Context, is *is.I, it *cdcIterator) opencdc.Record {
 	is.Helper()
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
@@ -154,7 +154,7 @@ func TestCDCIterator_SkippedColumns_RecordsBeforeTheHaltAreDelivered(t *testing.
 	w := writerSession(ctx, t, is, "MINIMAL")
 	execOn(ctx, is, w, "UPDATE "+skippedTable+" SET name = 'b2' WHERE id = 2")
 
-	rec := readOne(ctx, is, it)
+	rec := readOneCDC(ctx, is, it)
 	is.Equal(rec.Operation, opencdc.OperationCreate)
 	is.NoErr(it.Ack(ctx, rec.Position))
 	readHalt(ctx, t, is, it)
@@ -174,7 +174,7 @@ func TestCDCIterator_SkippedColumns_FullImagePasses(t *testing.T) {
 	w := writerSession(ctx, t, is, "FULL")
 	execOn(ctx, is, w, "UPDATE "+skippedTable+" SET name = 'a2' WHERE id = 1")
 
-	rec := readOne(ctx, is, it)
+	rec := readOneCDC(ctx, is, it)
 	is.Equal(rec.Operation, opencdc.OperationUpdate)
 	after := rec.Payload.After.(opencdc.StructuredData)
 	is.Equal(after["name"], "a2")
@@ -198,7 +198,7 @@ func TestCDCIterator_SkippedColumns_RealNullPasses(t *testing.T) {
 	w := writerSession(ctx, t, is, "FULL")
 	execOn(ctx, is, w, "UPDATE "+skippedTable+" SET note = NULL WHERE id = 1")
 
-	rec := readOne(ctx, is, it)
+	rec := readOneCDC(ctx, is, it)
 	is.Equal(rec.Operation, opencdc.OperationUpdate)
 	before := rec.Payload.Before.(opencdc.StructuredData)
 	after := rec.Payload.After.(opencdc.StructuredData)
@@ -302,7 +302,7 @@ func TestCDCIterator_SkippedColumns_PartialImageInsert(t *testing.T) {
 			}
 
 			defer func() { is.NoErr(teardown()) }()
-			rec := readOne(ctx, is, it)
+			rec := readOneCDC(ctx, is, it)
 			is.Equal(rec.Operation, opencdc.OperationCreate)
 			after := rec.Payload.After.(opencdc.StructuredData)
 			is.Equal(after["note"], "n3")
@@ -390,12 +390,12 @@ func TestCDCIterator_SkippedColumns_FullImageGeneratedAndInvisibleColumnsPass(t 
 	is.NoErr(db.Exec("UPDATE " + skippedTable + " SET name = 'z' WHERE id = 1").Error)
 	is.NoErr(db.Exec("DELETE FROM " + skippedTable + " WHERE id = 1").Error)
 
-	rec := readOne(ctx, is, it)
+	rec := readOneCDC(ctx, is, it)
 	is.Equal(rec.Operation, opencdc.OperationUpdate)
 	after := rec.Payload.After.(opencdc.StructuredData)
 	is.Equal(after["name"], "z")
 	is.Equal(after["sg"], int32(3))
 
-	rec = readOne(ctx, is, it)
+	rec = readOneCDC(ctx, is, it)
 	is.Equal(rec.Operation, opencdc.OperationDelete)
 }

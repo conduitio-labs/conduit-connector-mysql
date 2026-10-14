@@ -16,8 +16,11 @@ package mysql
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -147,6 +150,14 @@ func TestResolveCoverage(t *testing.T) {
 		return out
 	}
 
+	// legacy is what a build from before hash_version wrote for a hashed set.
+	legacy := func(names []string) *common.TableCoverage {
+		sorted := slices.Clone(names)
+		slices.Sort(sorted)
+		sum := sha256.Sum256([]byte(strings.Join(sorted, "\n")))
+		return &common.TableCoverage{Hash: hex.EncodeToString(sum[:]), Count: len(sorted)}
+	}
+
 	tests := []struct {
 		name         string
 		plan         startPlan
@@ -175,6 +186,10 @@ func TestResolveCoverage(t *testing.T) {
 		{"cdc known, snapshot off: restricted, nothing checked", cdc(cov([]string{"a", "b"}, nil, nil)), false, []string{"a", "c"}, true, false, 0, cov([]string{"a"}, nil, nil)},
 		{"hash form, same set", cdc(cov(many(300), nil, nil)), true, many(300), true, false, 0, cov(many(300), nil, nil)},
 		{"hash form, set changed, explicit: error", cdc(cov(many(300), nil, nil)), true, many(301), true, true, 0, nil},
+		{"hash form, v0 hash that matches, explicit: accepted and re-baselined to v1", cdc(legacy(many(300))), true, many(300), true, false, 0, cov(many(300), nil, nil)},
+		{"hash form, v0 hash that does not match, explicit: error", cdc(legacy(many(300))), true, many(301), true, true, 0, nil},
+		{"hash form, v0 hash, pattern, set changed: warn once and carry v1", cdc(legacy(many(300))), true, many(301), false, false, 1, cov(many(301), nil, nil)},
+		{"hash form, v0 hash, snapshot off: carried forward untouched", cdc(legacy(many(300))), false, many(300), true, false, 0, legacy(many(300))},
 		{"hash form, set changed, pattern: warn and re-record", cdc(cov(many(300), nil, nil)), true, many(301), false, false, 1, cov(many(301), nil, nil)},
 	}
 
@@ -203,6 +218,26 @@ func TestResolveCoverage(t *testing.T) {
 			is.Equal(*got.carry, *tc.want)
 		})
 	}
+
+	t.Run("v0 hash, pattern: the next start is silent", func(t *testing.T) {
+		is := is.New(t)
+		first, err := resolveCoverage(cdc(legacy(many(300))), true, many(301), false)
+		is.NoErr(err)
+		is.Equal(len(first.warnings), 1)
+		second, err := resolveCoverage(cdc(first.carry), true, many(301), false)
+		is.NoErr(err)
+		is.Equal(len(second.warnings), 0)
+	})
+
+	t.Run("v0 hash, explicit, no match: the message does not claim the set changed", func(t *testing.T) {
+		is := is.New(t)
+		_, err := resolveCoverage(cdc(legacy(many(300))), true, many(301), true)
+		var coded *Error
+		is.True(errors.As(err, &coded))
+		is.True(!strings.Contains(coded.Message, "table set changed"))
+		is.True(strings.Contains(coded.Message, "different version"))
+		is.True(!strings.Contains(coded.Fix, "restore the `tables` list"))
+	})
 
 	t.Run("hashed explicit list: no direction claimed, no impossible fix", func(t *testing.T) {
 		is := is.New(t)

@@ -16,6 +16,7 @@ package common
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"slices"
 	"strings"
@@ -46,15 +47,33 @@ const MaxListedTables = 200
 //     existing rows were NOT snapshotted. Warned about once, then recorded.
 //
 // Above MaxListedTables the sets are replaced by Hash (over the sorted union)
-// and Count, with HasUnverified keeping the warning alive.
+// and Count, with HasUnverified keeping the warning alive. HashVersion names
+// the encoding Hash was computed with (see hashTables); a hash of a version this
+// build does not compute is never trusted to say "unchanged".
 type TableCoverage struct {
 	Snapshotted []string `json:"snapshotted,omitempty"`
 	Unverified  []string `json:"unverified,omitempty"`
 	CDCOnly     []string `json:"cdc_only,omitempty"`
 
 	Hash          string `json:"hash,omitempty"`
+	HashVersion   int    `json:"hash_version,omitempty"`
 	Count         int    `json:"count,omitempty"`
 	HasUnverified bool   `json:"has_unverified,omitempty"`
+}
+
+// hashVersion is the encoding hashTables produces. Version 1 is the
+// length-prefixed encoding. Positions written before the field existed carry no
+// version (0) and a hash over names joined with "\n", which is ambiguous; such a
+// hash is accepted only when legacyHashMatches proves the sets equal, and
+// otherwise reads as changed.
+const hashVersion = 1
+
+// TableCoverageHashVersion is the hash encoding this build writes.
+const TableCoverageHashVersion = hashVersion
+
+// newHashed builds the hash form for the sorted, de-duplicated table set.
+func newHashed(sorted []string, hasUnverified bool) *TableCoverage {
+	return &TableCoverage{Hash: hashTables(sorted), HashVersion: hashVersion, Count: len(sorted), HasUnverified: hasUnverified}
 }
 
 // NewTableCoverage builds a coverage from the three sets, choosing list or hash
@@ -64,7 +83,7 @@ func NewTableCoverage(snapshotted, unverified, cdcOnly []string) *TableCoverage 
 	union := sortedSet(slices.Concat(snapshotted, unverified, cdcOnly))
 
 	if len(union) > MaxListedTables {
-		return &TableCoverage{Hash: hashTables(union), Count: len(union), HasUnverified: len(unverified) > 0}
+		return newHashed(union, len(unverified) > 0)
 	}
 	return &TableCoverage{Snapshotted: snapshotted, Unverified: unverified, CDCOnly: cdcOnly}
 }
@@ -88,11 +107,18 @@ func (c *TableCoverage) HasUnverifiedTables() bool {
 // Added returns the tables in current that the coverage does not know. In hash
 // form the names are not available: changed reports that current differs from
 // the recorded set (a table was added, or removed; the two cannot be told
-// apart), and added is nil.
+// apart), and added is nil. A hash of a version this build does not compute
+// cannot be compared, so it also reports changed: the safe answer, since
+// "unchanged" would skip the snapshot of any table that is new.
 func (c *TableCoverage) Added(current []string) (added []string, changed bool) {
 	current = sortedSet(current)
 	if c.Hashed() {
-		return nil, hashTables(current) != c.Hash
+		if c.HashVersion == hashVersion {
+			return nil, hashTables(current) != c.Hash
+		}
+		// Invariant 3: a hash we cannot verify is not evidence that no table
+		// was added. Only the unversioned (legacy) hash can be proven equal.
+		return nil, !c.legacyHashMatches(current)
 	}
 	known := c.Known()
 	for _, t := range current {
@@ -101,6 +127,29 @@ func (c *TableCoverage) Added(current []string) (added []string, changed bool) {
 		}
 	}
 	return added, len(added) > 0
+}
+
+// HashStale reports whether the coverage is in hash form under an encoding this
+// build does not compute (an unversioned legacy hash, or a newer version).
+func (c *TableCoverage) HashStale() bool { return c.Hashed() && c.HashVersion != hashVersion }
+
+// legacyHashMatches reports whether an unversioned hash proves the recorded set
+// equals current. The legacy hash joined names with "\n", which is ambiguous in
+// general, but it is sound here when all of: the hash matches, the counts agree,
+// and no current name contains "\n". Then current joins to Count-1 newlines; any
+// recorded set of Count names joins to at least Count-1, with equality only if
+// no recorded name has one, so both sets split the same way and are equal.
+func (c *TableCoverage) legacyHashMatches(current []string) bool {
+	if c.HashVersion != 0 || c.Count != len(current) {
+		return false
+	}
+	for _, t := range current {
+		if strings.Contains(t, "\n") {
+			return false
+		}
+	}
+	sum := sha256.Sum256([]byte(strings.Join(current, "\n")))
+	return hex.EncodeToString(sum[:]) == c.Hash
 }
 
 // Restrict returns the coverage limited to the tables in current: a table that
@@ -128,7 +177,7 @@ func (c *TableCoverage) Restrict(current []string) *TableCoverage {
 // the set the restart is now continuing with.
 func (c *TableCoverage) WithCDCOnly(added, current []string) *TableCoverage {
 	if c.Hashed() {
-		return &TableCoverage{Hash: hashTables(sortedSet(current)), Count: len(sortedSet(current)), HasUnverified: c.HasUnverified}
+		return newHashed(sortedSet(current), c.HasUnverified)
 	}
 	return NewTableCoverage(c.Snapshotted, c.Unverified, slices.Concat(c.CDCOnly, added))
 }
@@ -142,7 +191,20 @@ func sortedSet(in []string) []string {
 	return slices.Compact(out)
 }
 
+// hashTables hashes a sorted, de-duplicated table set (hashVersion 1).
+//
+// The input must be injective: two different sets never produce the same bytes.
+// A MySQL table name may contain any character but NUL, newline included, so no
+// separator is safe; the previous encoding joined names with "\n" and the
+// tables "x" and "y" collided with the one table "x\ny". Each name is written as
+// a uvarint length followed by its bytes, which parses back to exactly one
+// sequence of names.
 func hashTables(sorted []string) string {
-	sum := sha256.Sum256([]byte(strings.Join(sorted, "\n")))
-	return hex.EncodeToString(sum[:])
+	h := sha256.New()
+	var n [binary.MaxVarintLen64]byte
+	for _, t := range sorted {
+		h.Write(n[:binary.PutUvarint(n[:], uint64(len(t)))])
+		h.Write([]byte(t))
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }

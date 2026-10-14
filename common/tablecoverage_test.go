@@ -15,12 +15,18 @@
 package common
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/matryer/is"
 )
+
+const goldenTablesHash = "1ebfea91daeea763f8201c152c25bac2051fef4690988c97eb0b342a33c32e8a"
 
 func tableNames(n int) []string {
 	out := make([]string, n)
@@ -133,4 +139,109 @@ func BenchmarkCdcPosition_RoundTrip(b *testing.B) {
 			b.ReportMetric(float64(size), "bytes/position")
 		})
 	}
+}
+
+// The hash is persisted in every CDC position and compared by a later build, so
+// its encoding is a position format. This pins one value; if it changes, bump
+// hashVersion and keep reading the old version rather than editing the value.
+func TestTableCoverage_HashGolden(t *testing.T) {
+	is := is.New(t)
+	is.Equal(hashTables([]string{"a", "bc", "x\ny"}), goldenTablesHash)
+}
+
+// A hash written under a different version cannot be compared, so it must read
+// as changed (never as covered): treating an unreadable hash as "unchanged"
+// would be the same silent skip as the collision.
+func TestTableCoverage_UnknownHashVersionReadsAsChanged(t *testing.T) {
+	is := is.New(t)
+	names := tableNames(MaxListedTables + 1)
+	cov := NewTableCoverage(names, nil, nil)
+	is.Equal(cov.HashVersion, hashVersion)
+
+	_, changed := cov.Added(names)
+	is.True(!changed)
+
+	for _, v := range []int{0, hashVersion + 1} {
+		stale := *cov
+		stale.HashVersion = v
+		_, changed := stale.Added(names)
+		is.True(changed) // same table set, hash from another encoding
+	}
+
+	// A position written before the version tag existed has none.
+	var legacy TableCoverage
+	is.NoErr(json.Unmarshal([]byte(`{"hash":"`+cov.Hash+`","count":201}`), &legacy))
+	_, changed = legacy.Added(names)
+	is.True(changed)
+}
+
+// Re-baselining after a detected change must leave a readable coverage, so the
+// warning is logged once and not on every start.
+func TestTableCoverage_WithCDCOnlyRebaselinesHash(t *testing.T) {
+	is := is.New(t)
+	names := tableNames(MaxListedTables + 1)
+
+	stale := NewTableCoverage(names, nil, nil)
+	stale.HashVersion = 0
+	_, changed := stale.Added(names)
+	is.True(changed)
+
+	re := stale.WithCDCOnly(nil, names)
+	is.Equal(re.HashVersion, hashVersion)
+	_, changed = re.Added(names)
+	is.True(!changed)
+}
+
+// legacyCoverage builds what a build from before hash_version wrote: a hash of
+// the names joined with a newline, and no version.
+func legacyCoverage(names []string) *TableCoverage {
+	sorted := sortedSet(names)
+	sum := sha256.Sum256([]byte(strings.Join(sorted, "\n")))
+	return &TableCoverage{Hash: hex.EncodeToString(sum[:]), Count: len(sorted)}
+}
+
+// An unversioned hash is accepted only when it proves the sets equal: the hash
+// matches, the counts agree and no current name contains a newline. Anything
+// else reads as changed.
+func TestTableCoverage_LegacyHashIsVerified(t *testing.T) {
+	names := tableNames(MaxListedTables + 50)
+	legacy := legacyCoverage(names)
+
+	t.Run("same set is accepted", func(t *testing.T) {
+		is := is.New(t)
+		is.True(legacy.HashStale())
+		_, changed := legacy.Added(names)
+		is.True(!changed)
+	})
+	t.Run("added table", func(t *testing.T) {
+		is := is.New(t)
+		_, changed := legacy.Added(append(slices.Clone(names), "zz_new"))
+		is.True(changed)
+	})
+	t.Run("removed table", func(t *testing.T) {
+		is := is.New(t)
+		_, changed := legacy.Added(names[1:])
+		is.True(changed)
+	})
+	t.Run("newline in a current name is never accepted, even on a hash match", func(t *testing.T) {
+		is := is.New(t)
+		// Two different sets of two names that join to the same bytes and have the
+		// same count: only the newline guard tells them apart.
+		pad := make([]string, MaxListedTables)
+		for i := range pad {
+			pad[i] = fmt.Sprintf("0_%04d", i)
+		}
+		recorded := legacyCoverage(append(slices.Clone(pad), "a\nb", "c"))
+		current := append(slices.Clone(pad), "a", "b\nc")
+		is.Equal(recorded.Count, len(sortedSet(current)))
+		_, changed := recorded.Added(current)
+		is.True(changed)
+	})
+	t.Run("a newer version is never accepted", func(t *testing.T) {
+		is := is.New(t)
+		future := *legacy
+		future.HashVersion = hashVersion + 1
+		_, changed := future.Added(names)
+		is.True(changed)
+	})
 }

@@ -248,7 +248,9 @@ specification:
         default: ""
         validations: []
       - name: tableConfig.*.sortingColumn
-        description: Allows to force using a custom column to sort the snapshot.
+        description: |-
+          Allows to force using a custom column to sort the snapshot. The column must be
+          NOT NULL and the only column of a primary key or unique index.
         type: string
         default: ""
         validations: []

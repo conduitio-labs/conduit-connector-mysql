@@ -326,6 +326,7 @@ pipelines:
     connectors:
       - id: example
         plugin: "mysql"
+        type: source
         settings:
           # The connection string for the MySQL database.
           # Type: string
@@ -427,6 +428,7 @@ pipelines:
     connectors:
       - id: example
         plugin: "mysql"
+        type: destination
         settings:
           # The connection string for the MySQL database.
           # Type: string

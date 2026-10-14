@@ -1,0 +1,962 @@
+{
+  "schemas": [
+    {
+      "name": "every mapping",
+      "cols": [
+        "canal:bigint20",
+        "canal:bigint20_unsigned",
+        "canal:bit8",
+        "canal:blob",
+        "canal:date",
+        "canal:datetime",
+        "canal:decimal102",
+        "canal:double",
+        "canal:enumab",
+        "canal:float",
+        "canal:int10_unsigned",
+        "canal:int11",
+        "canal:json",
+        "canal:longblob",
+        "canal:mediumblob",
+        "canal:mediumint",
+        "canal:point",
+        "canal:setab",
+        "canal:time",
+        "canal:timestamp",
+        "canal:tinyblob",
+        "canal:tinyint4",
+        "canal:varbinary8",
+        "canal:varchar20",
+        "sql:BIGINT",
+        "sql:BINARY",
+        "sql:BIT",
+        "sql:BLOB",
+        "sql:CHAR",
+        "sql:DATE",
+        "sql:DATETIME",
+        "sql:DECIMAL",
+        "sql:DOUBLE",
+        "sql:ENUM",
+        "sql:FLOAT",
+        "sql:INT",
+        "sql:JSON",
+        "sql:LONGBLOB",
+        "sql:LONGTEXT",
+        "sql:MEDIUMBLOB",
+        "sql:MEDIUMINT",
+        "sql:MEDIUMTEXT",
+        "sql:NUMERIC",
+        "sql:SET",
+        "sql:SMALLINT",
+        "sql:TEXT",
+        "sql:TIME",
+        "sql:TIMESTAMP",
+        "sql:TINYBLOB",
+        "sql:TINYINT",
+        "sql:TINYTEXT",
+        "sql:UNSIGNED BIGINT",
+        "sql:UNSIGNED INT",
+        "sql:UNSIGNED MEDIUMINT",
+        "sql:UNSIGNED SMALLINT",
+        "sql:UNSIGNED TINYINT",
+        "sql:VARBINARY",
+        "sql:VARCHAR",
+        "sql:YEAR"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_bigint20\",\"type\":\"long\"},{\"name\":\"c_bigint20_unsigned\",\"type\":\"long\"},{\"name\":\"c_bit8\",\"type\":{\"name\":\"c_bit8_fixed\",\"type\":\"fixed\",\"size\":8}},{\"name\":\"c_blob\",\"type\":\"bytes\"},{\"name\":\"c_date\",\"type\":\"string\"},{\"name\":\"c_datetime\",\"type\":\"string\"},{\"name\":\"c_decimal102\",\"type\":\"double\"},{\"name\":\"c_double\",\"type\":\"double\"},{\"name\":\"c_enumab\",\"type\":\"string\"},{\"name\":\"c_float\",\"type\":\"float\"},{\"name\":\"c_int10_unsigned\",\"type\":\"long\"},{\"name\":\"c_int11\",\"type\":\"int\"},{\"name\":\"c_json\",\"type\":\"string\"},{\"name\":\"c_longblob\",\"type\":\"bytes\"},{\"name\":\"c_mediumblob\",\"type\":\"bytes\"},{\"name\":\"c_mediumint\",\"type\":\"int\"},{\"name\":\"c_point\",\"type\":\"string\"},{\"name\":\"c_setab\",\"type\":\"string\"},{\"name\":\"c_time\",\"type\":\"string\"},{\"name\":\"c_timestamp\",\"type\":\"string\"},{\"name\":\"c_tinyblob\",\"type\":\"bytes\"},{\"name\":\"c_tinyint4\",\"type\":\"int\"},{\"name\":\"c_varbinary8\",\"type\":\"bytes\"},{\"name\":\"c_varchar20\",\"type\":\"string\"},{\"name\":\"c_BIGINT\",\"type\":\"long\"},{\"name\":\"c_BINARY\",\"type\":\"bytes\"},{\"name\":\"c_BIT\",\"type\":{\"name\":\"c_BIT_fixed\",\"type\":\"fixed\",\"size\":8}},{\"name\":\"c_BLOB\",\"type\":\"bytes\"},{\"name\":\"c_CHAR\",\"type\":\"string\"},{\"name\":\"c_DATE\",\"type\":\"string\"},{\"name\":\"c_DATETIME\",\"type\":\"string\"},{\"name\":\"c_DECIMAL\",\"type\":\"double\"},{\"name\":\"c_DOUBLE\",\"type\":\"double\"},{\"name\":\"c_ENUM\",\"type\":\"string\"},{\"name\":\"c_FLOAT\",\"type\":\"float\"},{\"name\":\"c_INT\",\"type\":\"int\"},{\"name\":\"c_JSON\",\"type\":\"string\"},{\"name\":\"c_LONGBLOB\",\"type\":\"bytes\"},{\"name\":\"c_LONGTEXT\",\"type\":\"string\"},{\"name\":\"c_MEDIUMBLOB\",\"type\":\"bytes\"},{\"name\":\"c_MEDIUMINT\",\"type\":\"int\"},{\"name\":\"c_MEDIUMTEXT\",\"type\":\"string\"},{\"name\":\"c_NUMERIC\",\"type\":\"double\"},{\"name\":\"c_SET\",\"type\":\"string\"},{\"name\":\"c_SMALLINT\",\"type\":\"int\"},{\"name\":\"c_TEXT\",\"type\":\"string\"},{\"name\":\"c_TIME\",\"type\":\"string\"},{\"name\":\"c_TIMESTAMP\",\"type\":\"string\"},{\"name\":\"c_TINYBLOB\",\"type\":\"bytes\"},{\"name\":\"c_TINYINT\",\"type\":\"int\"},{\"name\":\"c_TINYTEXT\",\"type\":\"string\"},{\"name\":\"c_UNSIGNED_BIGINT\",\"type\":\"long\"},{\"name\":\"c_UNSIGNED_INT\",\"type\":\"long\"},{\"name\":\"c_UNSIGNED_MEDIUMINT\",\"type\":\"int\"},{\"name\":\"c_UNSIGNED_SMALLINT\",\"type\":\"int\"},{\"name\":\"c_UNSIGNED_TINYINT\",\"type\":\"int\"},{\"name\":\"c_VARBINARY\",\"type\":\"bytes\"},{\"name\":\"c_VARCHAR\",\"type\":\"string\"},{\"name\":\"c_YEAR\",\"type\":\"int\"}]}",
+      "rows": {
+        "cdc": "feffffffffffffffff01feffffffffffffffff010000000000000005020628323032342d30312d30325430303a30303a30305a26323032342d30312d30322030333a30343a303500000000000029406e861bf0f921094002610000c03ffeffffff1fffffffff0f167b2261223a5b312c325d7d02080207e0c50814504f494e54283120322906612c621030333a30343a303526323032342d30312d30322030333a30343a303502050d0403040e666f6f20626172feffffffffffffffff0106000102000000000000000502060c68c3a96c6c6f28323032342d30312d30325430303a30303a30305a26323032342d30312d30322030333a30343a303500000000000029406e861bf0f921094002610000c03fffffffff0f167b2261223a5b312c325d7d0208046c740207e0c508046d74000000000000c0bf06612c62d70408746578741030333a30343a303526323032342d30312d30322030333a30343a303502050d0274feffffffffffffffff01feffffff1ffeffff0ffeff07fe030403040e666f6f20626172d01f",
+        "snapshot": "feffffffffffffffff01feffffffffffffffff010000000000000005020628323032342d30312d30325430303a30303a30305a26323032342d30312d30322030333a30343a303500000000000029406e861bf0f921094002610000c03ffeffffff1fffffffff0f167b2261223a5b312c325d7d02080207e0c50814504f494e54283120322906612c621030333a30343a303526323032342d30312d30322030333a30343a303502050d0403040e666f6f20626172feffffffffffffffff0106000102000000000000000502060c68c3a96c6c6f28323032342d30312d30325430303a30303a30305a26323032342d30312d30322030333a30343a303500000000000029406e861bf0f921094002610000c03fffffffff0f167b2261223a5b312c325d7d0208046c740207e0c508046d74000000000000c0bf06612c62d70408746578741030333a30343a303526323032342d30312d30322030333a30343a303502050d0274feffffffffffffffff01feffffff1ffeffff0ffeff07fe030403040e666f6f20626172d01f"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_BIGINT\":9223372036854775807, \"c_BINARY\":[]uint8{0x0, 0x1, 0x2}, \"c_BIT\":[8]uint8{0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x5}, \"c_BLOB\":[]uint8{0x6}, \"c_CHAR\":\"héllo\", \"c_DATE\":\"2024-01-02T00:00:00Z\", \"c_DATETIME\":\"2024-01-02 03:04:05\", \"c_DECIMAL\":12.5, \"c_DOUBLE\":3.14159, \"c_ENUM\":\"a\", \"c_FLOAT\":1.5, \"c_INT\":-2147483648, \"c_JSON\":\"{\\\"a\\\":[1,2]}\", \"c_LONGBLOB\":[]uint8{0x8}, \"c_LONGTEXT\":\"lt\", \"c_MEDIUMBLOB\":[]uint8{0x7}, \"c_MEDIUMINT\":70000, \"c_MEDIUMTEXT\":\"mt\", \"c_NUMERIC\":-0.125, \"c_SET\":\"a,b\", \"c_SMALLINT\":-300, \"c_TEXT\":\"text\", \"c_TIME\":\"03:04:05\", \"c_TIMESTAMP\":\"2024-01-02 03:04:05\", \"c_TINYBLOB\":[]uint8{0x5}, \"c_TINYINT\":-7, \"c_TINYTEXT\":\"t\", \"c_UNSIGNED_BIGINT\":9223372036854775807, \"c_UNSIGNED_INT\":4294967295, \"c_UNSIGNED_MEDIUMINT\":16777215, \"c_UNSIGNED_SMALLINT\":65535, \"c_UNSIGNED_TINYINT\":255, \"c_VARBINARY\":[]uint8{0x3, 0x4}, \"c_VARCHAR\":\"foo bar\", \"c_YEAR\":2024, \"c_bigint20\":9223372036854775807, \"c_bigint20_unsigned\":9223372036854775807, \"c_bit8\":[8]uint8{0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x5}, \"c_blob\":[]uint8{0x6}, \"c_date\":\"2024-01-02T00:00:00Z\", \"c_datetime\":\"2024-01-02 03:04:05\", \"c_decimal102\":12.5, \"c_double\":3.14159, \"c_enumab\":\"a\", \"c_float\":1.5, \"c_int10_unsigned\":4294967295, \"c_int11\":-2147483648, \"c_json\":\"{\\\"a\\\":[1,2]}\", \"c_longblob\":[]uint8{0x8}, \"c_mediumblob\":[]uint8{0x7}, \"c_mediumint\":70000, \"c_point\":\"POINT(1 2)\", \"c_setab\":\"a,b\", \"c_time\":\"03:04:05\", \"c_timestamp\":\"2024-01-02 03:04:05\", \"c_tinyblob\":[]uint8{0x5}, \"c_tinyint4\":-7, \"c_varbinary8\":[]uint8{0x3, 0x4}, \"c_varchar20\":\"foo bar\"}",
+        "snapshot": "map[string]interface {}{\"c_BIGINT\":9223372036854775807, \"c_BINARY\":[]uint8{0x0, 0x1, 0x2}, \"c_BIT\":[8]uint8{0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x5}, \"c_BLOB\":[]uint8{0x6}, \"c_CHAR\":\"héllo\", \"c_DATE\":\"2024-01-02T00:00:00Z\", \"c_DATETIME\":\"2024-01-02 03:04:05\", \"c_DECIMAL\":12.5, \"c_DOUBLE\":3.14159, \"c_ENUM\":\"a\", \"c_FLOAT\":1.5, \"c_INT\":-2147483648, \"c_JSON\":\"{\\\"a\\\":[1,2]}\", \"c_LONGBLOB\":[]uint8{0x8}, \"c_LONGTEXT\":\"lt\", \"c_MEDIUMBLOB\":[]uint8{0x7}, \"c_MEDIUMINT\":70000, \"c_MEDIUMTEXT\":\"mt\", \"c_NUMERIC\":-0.125, \"c_SET\":\"a,b\", \"c_SMALLINT\":-300, \"c_TEXT\":\"text\", \"c_TIME\":\"03:04:05\", \"c_TIMESTAMP\":\"2024-01-02 03:04:05\", \"c_TINYBLOB\":[]uint8{0x5}, \"c_TINYINT\":-7, \"c_TINYTEXT\":\"t\", \"c_UNSIGNED_BIGINT\":9223372036854775807, \"c_UNSIGNED_INT\":4294967295, \"c_UNSIGNED_MEDIUMINT\":16777215, \"c_UNSIGNED_SMALLINT\":65535, \"c_UNSIGNED_TINYINT\":255, \"c_VARBINARY\":[]uint8{0x3, 0x4}, \"c_VARCHAR\":\"foo bar\", \"c_YEAR\":2024, \"c_bigint20\":9223372036854775807, \"c_bigint20_unsigned\":9223372036854775807, \"c_bit8\":[8]uint8{0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x5}, \"c_blob\":[]uint8{0x6}, \"c_date\":\"2024-01-02T00:00:00Z\", \"c_datetime\":\"2024-01-02 03:04:05\", \"c_decimal102\":12.5, \"c_double\":3.14159, \"c_enumab\":\"a\", \"c_float\":1.5, \"c_int10_unsigned\":4294967295, \"c_int11\":-2147483648, \"c_json\":\"{\\\"a\\\":[1,2]}\", \"c_longblob\":[]uint8{0x8}, \"c_mediumblob\":[]uint8{0x7}, \"c_mediumint\":70000, \"c_point\":\"POINT(1 2)\", \"c_setab\":\"a,b\", \"c_time\":\"03:04:05\", \"c_timestamp\":\"2024-01-02 03:04:05\", \"c_tinyblob\":[]uint8{0x5}, \"c_tinyint4\":-7, \"c_varbinary8\":[]uint8{0x3, 0x4}, \"c_varchar20\":\"foo bar\"}"
+      }
+    },
+    {
+      "name": "canal:bigint20",
+      "cols": [
+        "canal:bigint20"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_bigint20\",\"type\":\"long\"}]}",
+      "rows": {
+        "cdc": "feffffffffffffffff01",
+        "snapshot": "feffffffffffffffff01"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_bigint20\":9223372036854775807}",
+        "snapshot": "map[string]interface {}{\"c_bigint20\":9223372036854775807}"
+      }
+    },
+    {
+      "name": "canal:bigint20_unsigned",
+      "cols": [
+        "canal:bigint20_unsigned"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_bigint20_unsigned\",\"type\":\"long\"}]}",
+      "rows": {
+        "cdc": "feffffffffffffffff01",
+        "snapshot": "feffffffffffffffff01"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_bigint20_unsigned\":9223372036854775807}",
+        "snapshot": "map[string]interface {}{\"c_bigint20_unsigned\":9223372036854775807}"
+      }
+    },
+    {
+      "name": "canal:bit8",
+      "cols": [
+        "canal:bit8"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_bit8\",\"type\":{\"name\":\"c_bit8_fixed\",\"type\":\"fixed\",\"size\":8}}]}",
+      "rows": {
+        "cdc": "0000000000000005",
+        "snapshot": "0000000000000005"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_bit8\":[8]uint8{0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x5}}",
+        "snapshot": "map[string]interface {}{\"c_bit8\":[8]uint8{0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x5}}"
+      }
+    },
+    {
+      "name": "canal:blob",
+      "cols": [
+        "canal:blob"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_blob\",\"type\":\"bytes\"}]}",
+      "rows": {
+        "cdc": "0206",
+        "snapshot": "0206"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_blob\":[]uint8{0x6}}",
+        "snapshot": "map[string]interface {}{\"c_blob\":[]uint8{0x6}}"
+      }
+    },
+    {
+      "name": "canal:date",
+      "cols": [
+        "canal:date"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_date\",\"type\":\"string\"}]}",
+      "rows": {
+        "cdc": "28323032342d30312d30325430303a30303a30305a",
+        "snapshot": "28323032342d30312d30325430303a30303a30305a"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_date\":\"2024-01-02T00:00:00Z\"}",
+        "snapshot": "map[string]interface {}{\"c_date\":\"2024-01-02T00:00:00Z\"}"
+      }
+    },
+    {
+      "name": "canal:datetime",
+      "cols": [
+        "canal:datetime"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_datetime\",\"type\":\"string\"}]}",
+      "rows": {
+        "cdc": "26323032342d30312d30322030333a30343a3035",
+        "snapshot": "26323032342d30312d30322030333a30343a3035"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_datetime\":\"2024-01-02 03:04:05\"}",
+        "snapshot": "map[string]interface {}{\"c_datetime\":\"2024-01-02 03:04:05\"}"
+      }
+    },
+    {
+      "name": "canal:decimal102",
+      "cols": [
+        "canal:decimal102"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_decimal102\",\"type\":\"double\"}]}",
+      "rows": {
+        "cdc": "0000000000002940",
+        "snapshot": "0000000000002940"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_decimal102\":12.5}",
+        "snapshot": "map[string]interface {}{\"c_decimal102\":12.5}"
+      }
+    },
+    {
+      "name": "canal:double",
+      "cols": [
+        "canal:double"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_double\",\"type\":\"double\"}]}",
+      "rows": {
+        "cdc": "6e861bf0f9210940",
+        "snapshot": "6e861bf0f9210940"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_double\":3.14159}",
+        "snapshot": "map[string]interface {}{\"c_double\":3.14159}"
+      }
+    },
+    {
+      "name": "canal:enumab",
+      "cols": [
+        "canal:enumab"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_enumab\",\"type\":\"string\"}]}",
+      "rows": {
+        "cdc": "0261",
+        "snapshot": "0261"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_enumab\":\"a\"}",
+        "snapshot": "map[string]interface {}{\"c_enumab\":\"a\"}"
+      }
+    },
+    {
+      "name": "canal:float",
+      "cols": [
+        "canal:float"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_float\",\"type\":\"float\"}]}",
+      "rows": {
+        "cdc": "0000c03f",
+        "snapshot": "0000c03f"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_float\":1.5}",
+        "snapshot": "map[string]interface {}{\"c_float\":1.5}"
+      }
+    },
+    {
+      "name": "canal:int10_unsigned",
+      "cols": [
+        "canal:int10_unsigned"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_int10_unsigned\",\"type\":\"long\"}]}",
+      "rows": {
+        "cdc": "feffffff1f",
+        "snapshot": "feffffff1f"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_int10_unsigned\":4294967295}",
+        "snapshot": "map[string]interface {}{\"c_int10_unsigned\":4294967295}"
+      }
+    },
+    {
+      "name": "canal:int11",
+      "cols": [
+        "canal:int11"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_int11\",\"type\":\"int\"}]}",
+      "rows": {
+        "cdc": "ffffffff0f",
+        "snapshot": "ffffffff0f"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_int11\":-2147483648}",
+        "snapshot": "map[string]interface {}{\"c_int11\":-2147483648}"
+      }
+    },
+    {
+      "name": "canal:json",
+      "cols": [
+        "canal:json"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_json\",\"type\":\"string\"}]}",
+      "rows": {
+        "cdc": "167b2261223a5b312c325d7d",
+        "snapshot": "167b2261223a5b312c325d7d"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_json\":\"{\\\"a\\\":[1,2]}\"}",
+        "snapshot": "map[string]interface {}{\"c_json\":\"{\\\"a\\\":[1,2]}\"}"
+      }
+    },
+    {
+      "name": "canal:longblob",
+      "cols": [
+        "canal:longblob"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_longblob\",\"type\":\"bytes\"}]}",
+      "rows": {
+        "cdc": "0208",
+        "snapshot": "0208"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_longblob\":[]uint8{0x8}}",
+        "snapshot": "map[string]interface {}{\"c_longblob\":[]uint8{0x8}}"
+      }
+    },
+    {
+      "name": "canal:mediumblob",
+      "cols": [
+        "canal:mediumblob"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_mediumblob\",\"type\":\"bytes\"}]}",
+      "rows": {
+        "cdc": "0207",
+        "snapshot": "0207"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_mediumblob\":[]uint8{0x7}}",
+        "snapshot": "map[string]interface {}{\"c_mediumblob\":[]uint8{0x7}}"
+      }
+    },
+    {
+      "name": "canal:mediumint",
+      "cols": [
+        "canal:mediumint"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_mediumint\",\"type\":\"int\"}]}",
+      "rows": {
+        "cdc": "e0c508",
+        "snapshot": "e0c508"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_mediumint\":70000}",
+        "snapshot": "map[string]interface {}{\"c_mediumint\":70000}"
+      }
+    },
+    {
+      "name": "canal:point",
+      "cols": [
+        "canal:point"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_point\",\"type\":\"string\"}]}",
+      "rows": {
+        "cdc": "14504f494e542831203229",
+        "snapshot": "14504f494e542831203229"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_point\":\"POINT(1 2)\"}",
+        "snapshot": "map[string]interface {}{\"c_point\":\"POINT(1 2)\"}"
+      }
+    },
+    {
+      "name": "canal:setab",
+      "cols": [
+        "canal:setab"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_setab\",\"type\":\"string\"}]}",
+      "rows": {
+        "cdc": "06612c62",
+        "snapshot": "06612c62"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_setab\":\"a,b\"}",
+        "snapshot": "map[string]interface {}{\"c_setab\":\"a,b\"}"
+      }
+    },
+    {
+      "name": "canal:time",
+      "cols": [
+        "canal:time"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_time\",\"type\":\"string\"}]}",
+      "rows": {
+        "cdc": "1030333a30343a3035",
+        "snapshot": "1030333a30343a3035"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_time\":\"03:04:05\"}",
+        "snapshot": "map[string]interface {}{\"c_time\":\"03:04:05\"}"
+      }
+    },
+    {
+      "name": "canal:timestamp",
+      "cols": [
+        "canal:timestamp"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_timestamp\",\"type\":\"string\"}]}",
+      "rows": {
+        "cdc": "26323032342d30312d30322030333a30343a3035",
+        "snapshot": "26323032342d30312d30322030333a30343a3035"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_timestamp\":\"2024-01-02 03:04:05\"}",
+        "snapshot": "map[string]interface {}{\"c_timestamp\":\"2024-01-02 03:04:05\"}"
+      }
+    },
+    {
+      "name": "canal:tinyblob",
+      "cols": [
+        "canal:tinyblob"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_tinyblob\",\"type\":\"bytes\"}]}",
+      "rows": {
+        "cdc": "0205",
+        "snapshot": "0205"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_tinyblob\":[]uint8{0x5}}",
+        "snapshot": "map[string]interface {}{\"c_tinyblob\":[]uint8{0x5}}"
+      }
+    },
+    {
+      "name": "canal:tinyint4",
+      "cols": [
+        "canal:tinyint4"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_tinyint4\",\"type\":\"int\"}]}",
+      "rows": {
+        "cdc": "0d",
+        "snapshot": "0d"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_tinyint4\":-7}",
+        "snapshot": "map[string]interface {}{\"c_tinyint4\":-7}"
+      }
+    },
+    {
+      "name": "canal:varbinary8",
+      "cols": [
+        "canal:varbinary8"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_varbinary8\",\"type\":\"bytes\"}]}",
+      "rows": {
+        "cdc": "040304",
+        "snapshot": "040304"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_varbinary8\":[]uint8{0x3, 0x4}}",
+        "snapshot": "map[string]interface {}{\"c_varbinary8\":[]uint8{0x3, 0x4}}"
+      }
+    },
+    {
+      "name": "canal:varchar20",
+      "cols": [
+        "canal:varchar20"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_varchar20\",\"type\":\"string\"}]}",
+      "rows": {
+        "cdc": "0e666f6f20626172",
+        "snapshot": "0e666f6f20626172"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_varchar20\":\"foo bar\"}",
+        "snapshot": "map[string]interface {}{\"c_varchar20\":\"foo bar\"}"
+      }
+    },
+    {
+      "name": "sql:BIGINT",
+      "cols": [
+        "sql:BIGINT"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_BIGINT\",\"type\":\"long\"}]}",
+      "rows": {
+        "cdc": "feffffffffffffffff01",
+        "snapshot": "feffffffffffffffff01"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_BIGINT\":9223372036854775807}",
+        "snapshot": "map[string]interface {}{\"c_BIGINT\":9223372036854775807}"
+      }
+    },
+    {
+      "name": "sql:BINARY",
+      "cols": [
+        "sql:BINARY"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_BINARY\",\"type\":\"bytes\"}]}",
+      "rows": {
+        "cdc": "06000102",
+        "snapshot": "06000102"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_BINARY\":[]uint8{0x0, 0x1, 0x2}}",
+        "snapshot": "map[string]interface {}{\"c_BINARY\":[]uint8{0x0, 0x1, 0x2}}"
+      }
+    },
+    {
+      "name": "sql:BIT",
+      "cols": [
+        "sql:BIT"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_BIT\",\"type\":{\"name\":\"c_BIT_fixed\",\"type\":\"fixed\",\"size\":8}}]}",
+      "rows": {
+        "cdc": "0000000000000005",
+        "snapshot": "0000000000000005"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_BIT\":[8]uint8{0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x5}}",
+        "snapshot": "map[string]interface {}{\"c_BIT\":[8]uint8{0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x5}}"
+      }
+    },
+    {
+      "name": "sql:BLOB",
+      "cols": [
+        "sql:BLOB"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_BLOB\",\"type\":\"bytes\"}]}",
+      "rows": {
+        "cdc": "0206",
+        "snapshot": "0206"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_BLOB\":[]uint8{0x6}}",
+        "snapshot": "map[string]interface {}{\"c_BLOB\":[]uint8{0x6}}"
+      }
+    },
+    {
+      "name": "sql:CHAR",
+      "cols": [
+        "sql:CHAR"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_CHAR\",\"type\":\"string\"}]}",
+      "rows": {
+        "cdc": "0c68c3a96c6c6f",
+        "snapshot": "0c68c3a96c6c6f"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_CHAR\":\"héllo\"}",
+        "snapshot": "map[string]interface {}{\"c_CHAR\":\"héllo\"}"
+      }
+    },
+    {
+      "name": "sql:DATE",
+      "cols": [
+        "sql:DATE"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_DATE\",\"type\":\"string\"}]}",
+      "rows": {
+        "cdc": "28323032342d30312d30325430303a30303a30305a",
+        "snapshot": "28323032342d30312d30325430303a30303a30305a"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_DATE\":\"2024-01-02T00:00:00Z\"}",
+        "snapshot": "map[string]interface {}{\"c_DATE\":\"2024-01-02T00:00:00Z\"}"
+      }
+    },
+    {
+      "name": "sql:DATETIME",
+      "cols": [
+        "sql:DATETIME"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_DATETIME\",\"type\":\"string\"}]}",
+      "rows": {
+        "cdc": "26323032342d30312d30322030333a30343a3035",
+        "snapshot": "26323032342d30312d30322030333a30343a3035"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_DATETIME\":\"2024-01-02 03:04:05\"}",
+        "snapshot": "map[string]interface {}{\"c_DATETIME\":\"2024-01-02 03:04:05\"}"
+      }
+    },
+    {
+      "name": "sql:DECIMAL",
+      "cols": [
+        "sql:DECIMAL"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_DECIMAL\",\"type\":\"double\"}]}",
+      "rows": {
+        "cdc": "0000000000002940",
+        "snapshot": "0000000000002940"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_DECIMAL\":12.5}",
+        "snapshot": "map[string]interface {}{\"c_DECIMAL\":12.5}"
+      }
+    },
+    {
+      "name": "sql:DOUBLE",
+      "cols": [
+        "sql:DOUBLE"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_DOUBLE\",\"type\":\"double\"}]}",
+      "rows": {
+        "cdc": "6e861bf0f9210940",
+        "snapshot": "6e861bf0f9210940"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_DOUBLE\":3.14159}",
+        "snapshot": "map[string]interface {}{\"c_DOUBLE\":3.14159}"
+      }
+    },
+    {
+      "name": "sql:ENUM",
+      "cols": [
+        "sql:ENUM"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_ENUM\",\"type\":\"string\"}]}",
+      "rows": {
+        "cdc": "0261",
+        "snapshot": "0261"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_ENUM\":\"a\"}",
+        "snapshot": "map[string]interface {}{\"c_ENUM\":\"a\"}"
+      }
+    },
+    {
+      "name": "sql:FLOAT",
+      "cols": [
+        "sql:FLOAT"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_FLOAT\",\"type\":\"float\"}]}",
+      "rows": {
+        "cdc": "0000c03f",
+        "snapshot": "0000c03f"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_FLOAT\":1.5}",
+        "snapshot": "map[string]interface {}{\"c_FLOAT\":1.5}"
+      }
+    },
+    {
+      "name": "sql:INT",
+      "cols": [
+        "sql:INT"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_INT\",\"type\":\"int\"}]}",
+      "rows": {
+        "cdc": "ffffffff0f",
+        "snapshot": "ffffffff0f"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_INT\":-2147483648}",
+        "snapshot": "map[string]interface {}{\"c_INT\":-2147483648}"
+      }
+    },
+    {
+      "name": "sql:JSON",
+      "cols": [
+        "sql:JSON"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_JSON\",\"type\":\"string\"}]}",
+      "rows": {
+        "cdc": "167b2261223a5b312c325d7d",
+        "snapshot": "167b2261223a5b312c325d7d"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_JSON\":\"{\\\"a\\\":[1,2]}\"}",
+        "snapshot": "map[string]interface {}{\"c_JSON\":\"{\\\"a\\\":[1,2]}\"}"
+      }
+    },
+    {
+      "name": "sql:LONGBLOB",
+      "cols": [
+        "sql:LONGBLOB"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_LONGBLOB\",\"type\":\"bytes\"}]}",
+      "rows": {
+        "cdc": "0208",
+        "snapshot": "0208"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_LONGBLOB\":[]uint8{0x8}}",
+        "snapshot": "map[string]interface {}{\"c_LONGBLOB\":[]uint8{0x8}}"
+      }
+    },
+    {
+      "name": "sql:LONGTEXT",
+      "cols": [
+        "sql:LONGTEXT"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_LONGTEXT\",\"type\":\"string\"}]}",
+      "rows": {
+        "cdc": "046c74",
+        "snapshot": "046c74"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_LONGTEXT\":\"lt\"}",
+        "snapshot": "map[string]interface {}{\"c_LONGTEXT\":\"lt\"}"
+      }
+    },
+    {
+      "name": "sql:MEDIUMBLOB",
+      "cols": [
+        "sql:MEDIUMBLOB"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_MEDIUMBLOB\",\"type\":\"bytes\"}]}",
+      "rows": {
+        "cdc": "0207",
+        "snapshot": "0207"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_MEDIUMBLOB\":[]uint8{0x7}}",
+        "snapshot": "map[string]interface {}{\"c_MEDIUMBLOB\":[]uint8{0x7}}"
+      }
+    },
+    {
+      "name": "sql:MEDIUMINT",
+      "cols": [
+        "sql:MEDIUMINT"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_MEDIUMINT\",\"type\":\"int\"}]}",
+      "rows": {
+        "cdc": "e0c508",
+        "snapshot": "e0c508"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_MEDIUMINT\":70000}",
+        "snapshot": "map[string]interface {}{\"c_MEDIUMINT\":70000}"
+      }
+    },
+    {
+      "name": "sql:MEDIUMTEXT",
+      "cols": [
+        "sql:MEDIUMTEXT"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_MEDIUMTEXT\",\"type\":\"string\"}]}",
+      "rows": {
+        "cdc": "046d74",
+        "snapshot": "046d74"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_MEDIUMTEXT\":\"mt\"}",
+        "snapshot": "map[string]interface {}{\"c_MEDIUMTEXT\":\"mt\"}"
+      }
+    },
+    {
+      "name": "sql:NUMERIC",
+      "cols": [
+        "sql:NUMERIC"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_NUMERIC\",\"type\":\"double\"}]}",
+      "rows": {
+        "cdc": "000000000000c0bf",
+        "snapshot": "000000000000c0bf"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_NUMERIC\":-0.125}",
+        "snapshot": "map[string]interface {}{\"c_NUMERIC\":-0.125}"
+      }
+    },
+    {
+      "name": "sql:SET",
+      "cols": [
+        "sql:SET"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_SET\",\"type\":\"string\"}]}",
+      "rows": {
+        "cdc": "06612c62",
+        "snapshot": "06612c62"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_SET\":\"a,b\"}",
+        "snapshot": "map[string]interface {}{\"c_SET\":\"a,b\"}"
+      }
+    },
+    {
+      "name": "sql:SMALLINT",
+      "cols": [
+        "sql:SMALLINT"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_SMALLINT\",\"type\":\"int\"}]}",
+      "rows": {
+        "cdc": "d704",
+        "snapshot": "d704"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_SMALLINT\":-300}",
+        "snapshot": "map[string]interface {}{\"c_SMALLINT\":-300}"
+      }
+    },
+    {
+      "name": "sql:TEXT",
+      "cols": [
+        "sql:TEXT"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_TEXT\",\"type\":\"string\"}]}",
+      "rows": {
+        "cdc": "0874657874",
+        "snapshot": "0874657874"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_TEXT\":\"text\"}",
+        "snapshot": "map[string]interface {}{\"c_TEXT\":\"text\"}"
+      }
+    },
+    {
+      "name": "sql:TIME",
+      "cols": [
+        "sql:TIME"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_TIME\",\"type\":\"string\"}]}",
+      "rows": {
+        "cdc": "1030333a30343a3035",
+        "snapshot": "1030333a30343a3035"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_TIME\":\"03:04:05\"}",
+        "snapshot": "map[string]interface {}{\"c_TIME\":\"03:04:05\"}"
+      }
+    },
+    {
+      "name": "sql:TIMESTAMP",
+      "cols": [
+        "sql:TIMESTAMP"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_TIMESTAMP\",\"type\":\"string\"}]}",
+      "rows": {
+        "cdc": "26323032342d30312d30322030333a30343a3035",
+        "snapshot": "26323032342d30312d30322030333a30343a3035"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_TIMESTAMP\":\"2024-01-02 03:04:05\"}",
+        "snapshot": "map[string]interface {}{\"c_TIMESTAMP\":\"2024-01-02 03:04:05\"}"
+      }
+    },
+    {
+      "name": "sql:TINYBLOB",
+      "cols": [
+        "sql:TINYBLOB"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_TINYBLOB\",\"type\":\"bytes\"}]}",
+      "rows": {
+        "cdc": "0205",
+        "snapshot": "0205"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_TINYBLOB\":[]uint8{0x5}}",
+        "snapshot": "map[string]interface {}{\"c_TINYBLOB\":[]uint8{0x5}}"
+      }
+    },
+    {
+      "name": "sql:TINYINT",
+      "cols": [
+        "sql:TINYINT"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_TINYINT\",\"type\":\"int\"}]}",
+      "rows": {
+        "cdc": "0d",
+        "snapshot": "0d"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_TINYINT\":-7}",
+        "snapshot": "map[string]interface {}{\"c_TINYINT\":-7}"
+      }
+    },
+    {
+      "name": "sql:TINYTEXT",
+      "cols": [
+        "sql:TINYTEXT"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_TINYTEXT\",\"type\":\"string\"}]}",
+      "rows": {
+        "cdc": "0274",
+        "snapshot": "0274"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_TINYTEXT\":\"t\"}",
+        "snapshot": "map[string]interface {}{\"c_TINYTEXT\":\"t\"}"
+      }
+    },
+    {
+      "name": "sql:UNSIGNED BIGINT",
+      "cols": [
+        "sql:UNSIGNED BIGINT"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_UNSIGNED_BIGINT\",\"type\":\"long\"}]}",
+      "rows": {
+        "cdc": "feffffffffffffffff01",
+        "snapshot": "feffffffffffffffff01"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_UNSIGNED_BIGINT\":9223372036854775807}",
+        "snapshot": "map[string]interface {}{\"c_UNSIGNED_BIGINT\":9223372036854775807}"
+      }
+    },
+    {
+      "name": "sql:UNSIGNED INT",
+      "cols": [
+        "sql:UNSIGNED INT"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_UNSIGNED_INT\",\"type\":\"long\"}]}",
+      "rows": {
+        "cdc": "feffffff1f",
+        "snapshot": "feffffff1f"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_UNSIGNED_INT\":4294967295}",
+        "snapshot": "map[string]interface {}{\"c_UNSIGNED_INT\":4294967295}"
+      }
+    },
+    {
+      "name": "sql:UNSIGNED MEDIUMINT",
+      "cols": [
+        "sql:UNSIGNED MEDIUMINT"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_UNSIGNED_MEDIUMINT\",\"type\":\"int\"}]}",
+      "rows": {
+        "cdc": "feffff0f",
+        "snapshot": "feffff0f"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_UNSIGNED_MEDIUMINT\":16777215}",
+        "snapshot": "map[string]interface {}{\"c_UNSIGNED_MEDIUMINT\":16777215}"
+      }
+    },
+    {
+      "name": "sql:UNSIGNED SMALLINT",
+      "cols": [
+        "sql:UNSIGNED SMALLINT"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_UNSIGNED_SMALLINT\",\"type\":\"int\"}]}",
+      "rows": {
+        "cdc": "feff07",
+        "snapshot": "feff07"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_UNSIGNED_SMALLINT\":65535}",
+        "snapshot": "map[string]interface {}{\"c_UNSIGNED_SMALLINT\":65535}"
+      }
+    },
+    {
+      "name": "sql:UNSIGNED TINYINT",
+      "cols": [
+        "sql:UNSIGNED TINYINT"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_UNSIGNED_TINYINT\",\"type\":\"int\"}]}",
+      "rows": {
+        "cdc": "fe03",
+        "snapshot": "fe03"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_UNSIGNED_TINYINT\":255}",
+        "snapshot": "map[string]interface {}{\"c_UNSIGNED_TINYINT\":255}"
+      }
+    },
+    {
+      "name": "sql:VARBINARY",
+      "cols": [
+        "sql:VARBINARY"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_VARBINARY\",\"type\":\"bytes\"}]}",
+      "rows": {
+        "cdc": "040304",
+        "snapshot": "040304"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_VARBINARY\":[]uint8{0x3, 0x4}}",
+        "snapshot": "map[string]interface {}{\"c_VARBINARY\":[]uint8{0x3, 0x4}}"
+      }
+    },
+    {
+      "name": "sql:VARCHAR",
+      "cols": [
+        "sql:VARCHAR"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_VARCHAR\",\"type\":\"string\"}]}",
+      "rows": {
+        "cdc": "0e666f6f20626172",
+        "snapshot": "0e666f6f20626172"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_VARCHAR\":\"foo bar\"}",
+        "snapshot": "map[string]interface {}{\"c_VARCHAR\":\"foo bar\"}"
+      }
+    },
+    {
+      "name": "sql:YEAR",
+      "cols": [
+        "sql:YEAR"
+      ],
+      "schema": "{\"name\":\"mysql.t_payload\",\"type\":\"record\",\"fields\":[{\"name\":\"c_YEAR\",\"type\":\"int\"}]}",
+      "rows": {
+        "cdc": "d01f",
+        "snapshot": "d01f"
+      },
+      "decoded": {
+        "cdc": "map[string]interface {}{\"c_YEAR\":2024}",
+        "snapshot": "map[string]interface {}{\"c_YEAR\":2024}"
+      }
+    }
+  ]
+}

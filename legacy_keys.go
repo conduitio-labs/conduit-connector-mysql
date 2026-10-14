@@ -43,7 +43,7 @@ import (
 var legacyBase64Types = map[string]bool{
 	"char": true, "varchar": true, "tinytext": true, "text": true, "mediumtext": true, "longtext": true,
 	"binary": true, "varbinary": true, "tinyblob": true, "blob": true, "mediumblob": true, "longblob": true,
-	"decimal": true, "numeric": true, "time": true, "enum": true, "set": true, "bit": true,
+	"decimal": true, "numeric": true, "time": true, "enum": true, "set": true, classBit: true,
 }
 
 // legacyTimeTypes are DATA_TYPEs whose driver value was a time.Time, written as
@@ -138,7 +138,7 @@ func resolveTablePosition(
 		for i, item := range items {
 			column := item.KeyName
 			if column == "" {
-				column = keys[i]
+				column = keys[i] //nolint:gosec // len(items) == len(keys), checked above
 			}
 			lastRead, reason := resolveLegacyValue(item.LastRead, column, types)
 			if reason == "" {

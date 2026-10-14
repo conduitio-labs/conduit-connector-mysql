@@ -27,7 +27,7 @@ import (
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/conduitio/conduit-connector-sdk/schema"
 	mysqlschema "github.com/go-mysql-org/go-mysql/schema"
-	"github.com/hamba/avro/v2"
+	"github.com/iskorotkov/avro/v2"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -251,13 +251,10 @@ func (s *schemaMapper) createKeySchema(
 	return s.createSchema(ctx, schemaName+"_key", colTypes)
 }
 
-func (s *schemaMapper) createSchema(
-	ctx context.Context, table string, mysqlCols []*avroNamedType,
-) (*schemaSubjectVersion, error) {
-	if s.schema != nil {
-		return s.schema, nil
-	}
-
+// buildRecordSchema is the record schema createSchema registers for a table.
+// It is a function of its own so the Avro compatibility test pins exactly what
+// is registered (name, namespace, field order), not a copy of it.
+func buildRecordSchema(table string, mysqlCols []*avroNamedType) (*avro.RecordSchema, error) {
 	fields := make([]*avro.Field, 0, len(mysqlCols))
 	for _, colType := range mysqlCols {
 		field, err := colTypeToAvroField(colType)
@@ -266,13 +263,29 @@ func (s *schemaMapper) createSchema(
 		}
 
 		fields = append(fields, field)
-
-		s.colTypes[colType.Name] = colType
 	}
 
 	recordSchema, err := avro.NewRecordSchema(table, "mysql", fields)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create payload schema: %w", err)
+	}
+
+	return recordSchema, nil
+}
+
+func (s *schemaMapper) createSchema(
+	ctx context.Context, table string, mysqlCols []*avroNamedType,
+) (*schemaSubjectVersion, error) {
+	if s.schema != nil {
+		return s.schema, nil
+	}
+
+	recordSchema, err := buildRecordSchema(table, mysqlCols)
+	if err != nil {
+		return nil, err
+	}
+	for _, colType := range mysqlCols {
+		s.colTypes[colType.Name] = colType
 	}
 
 	schema, err := schema.Create(

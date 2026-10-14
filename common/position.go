@@ -157,6 +157,13 @@ type CdcPosition struct {
 	// PrevPosition represents position of the mysql replication
 	// event just before the current one.
 	PrevPosition *ReplicationEventPosition `json:"prev,omitempty"`
+
+	// TableCoverage records which tables' existing rows the pipeline has
+	// covered; see TableCoverage. nil means a position written before this field
+	// existed. Additive: the position version is intentionally not bumped, so
+	// older builds ignore the field and drop it on their next write. See
+	// docs/design-documents/20261012-cdc-snapshotted-tables.md.
+	TableCoverage *TableCoverage `json:"table_coverage,omitempty"`
 }
 
 func (p ReplicationEventPosition) ToMysqlPos() mysql.Position {

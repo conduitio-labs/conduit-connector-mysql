@@ -17,8 +17,10 @@ package common
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
+	"github.com/conduitio/conduit-commons/opencdc"
 	"github.com/matryer/is"
 )
 
@@ -228,4 +230,53 @@ func TestPosition_GoldenFile_RoundTrip(t *testing.T) {
 	is.True(nPlus1Parsed.SnapshotPosition.CDCStart != nil)
 	is.Equal(nPlus1Parsed.SnapshotPosition.CDCStart.Name, "binlog.000001")
 	is.Equal(nPlus1Parsed.SnapshotPosition.CDCStart.Pos, uint32(4))
+}
+
+// oldCdcPosition is CdcPosition as the previous build defined it (no
+// table_coverage). A build that does not know the field must read, and
+// preserve the meaning of, a position that carries it.
+type oldPosition struct {
+	Version     int `json:"version,omitempty"`
+	CdcPosition *struct {
+		ReplicationEventPosition
+		Index        int                       `json:"idx,omitempty"`
+		PrevPosition *ReplicationEventPosition `json:"prev,omitempty"`
+	} `json:"cdc_position,omitempty"`
+}
+
+func TestCdcPosition_TableCoverage_AdditiveCompat(t *testing.T) {
+	t.Run("N+1 writes, N reads", func(t *testing.T) {
+		is := is.New(t)
+		raw := CdcPosition{
+			ReplicationEventPosition: ReplicationEventPosition{Name: "binlog.000001", Pos: 9},
+			Index:                    1,
+			TableCoverage:            NewTableCoverage([]string{"a", "b"}, nil, nil),
+		}.ToSDKPosition()
+
+		var old oldPosition
+		is.NoErr(json.Unmarshal(raw, &old))
+		is.Equal(old.Version, 1) // version must not be bumped: older builds would refuse it
+		is.Equal(old.CdcPosition.Name, "binlog.000001")
+		is.Equal(old.CdcPosition.Pos, uint32(9))
+		is.Equal(old.CdcPosition.Index, 1)
+	})
+
+	t.Run("N writes, N+1 reads: legacy position has unknown coverage", func(t *testing.T) {
+		is := is.New(t)
+		legacy := opencdc.Position(`{"version":1,"cdc_position":{"name":"binlog.000004","pos":120,"idx":2,"prev":{"name":"binlog.000004","pos":80}}}`)
+		parsed, err := ParseSDKPosition(legacy)
+		is.NoErr(err)
+		is.True(parsed.CdcPosition.TableCoverage == nil)
+		is.Equal(parsed.CdcPosition.Pos, uint32(120))
+	})
+
+	t.Run("known-empty is distinct from absent", func(t *testing.T) {
+		is := is.New(t)
+		raw := CdcPosition{TableCoverage: NewTableCoverage(nil, nil, nil)}.ToSDKPosition()
+		is.True(strings.Contains(string(raw), `"table_coverage":{}`))
+		parsed, err := ParseSDKPosition(raw)
+		is.NoErr(err)
+		is.True(parsed.CdcPosition.TableCoverage != nil)
+		is.True(!parsed.CdcPosition.TableCoverage.Hashed())
+	})
 }

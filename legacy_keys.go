@@ -138,7 +138,7 @@ func resolveTablePosition(
 		for i, item := range items {
 			column := item.KeyName
 			if column == "" {
-				column = keys[i]
+				column = keys[i] //nolint:gosec // len(items) == len(keys), checked above
 			}
 			lastRead, reason := resolveLegacyValue(item.LastRead, column, types)
 			if reason == "" {

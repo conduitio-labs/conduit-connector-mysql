@@ -107,6 +107,12 @@ linters:
       - linters:
           - goconst
         path: (.+)_test\.go
+      # These files are tables of SQL type names (schema.go, legacy_keys.go, test/test_utils.go).
+      # The newer golangci-lint counts the names the tests repeat too and flags
+      # every table entry.
+      - linters:
+          - goconst
+        path: (schema|legacy_keys)\.go|test/test_utils\.go
     paths:
       - third_party$
       - builtin$

@@ -46,6 +46,9 @@ type combinedIteratorConfig struct {
 	mysqlConfig           *mysqldriver.Config
 	disableCanalLogging   bool
 	snapshotEnabled       bool
+
+	// coverage is stamped on CDC positions; see resolveCoverage.
+	coverage *common.TableCoverage
 }
 
 func newCombinedIterator(
@@ -59,6 +62,7 @@ func newCombinedIterator(
 		disableCanalLogging: config.disableCanalLogging,
 		db:                  config.db,
 		startPosition:       config.startCdcPosition,
+		coverage:            config.coverage,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cdc iterator: %w", err)

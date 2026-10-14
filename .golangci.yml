@@ -112,7 +112,7 @@ linters:
       # every table entry.
       - linters:
           - goconst
-        path: (schema|legacy_keys)\.go|test/test_utils\.go
+        path: ^(schema|legacy_keys)\.go$|^test/test_utils\.go$
     paths:
       - third_party$
       - builtin$

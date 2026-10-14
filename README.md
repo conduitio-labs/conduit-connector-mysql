@@ -264,11 +264,11 @@ A skipped column is unknown. It is not NULL and it is not the column default: th
 it, and the schema default may have changed since the row was written, so the connector does not fill it in.
 
 The CDC source halts on the first such event instead of delivering zero values over real data. The error has
-the code `MYSQL_ROW_IMAGE_SKIPPED_COLUMNS` and names the table, the action, the binlog file and position, and
+the code `mysql.cdc.row_image_skipped_columns` and names the table, the action, the binlog file and position, and
 the columns that were left out. Snapshot rows are not affected. If the event sits inside a compressed
 transaction (`binlog_transaction_compression=ON`) the exact position is not available and the error says so.
 
-The source also stops with the code `MYSQL_PARTIAL_JSON_UNSUPPORTED` when a writer logs partial JSON updates
+The source also stops with the code `mysql.cdc.partial_json_unsupported` when a writer logs partial JSON updates
 (`binlog_row_value_options=PARTIAL_JSON`), which the connector cannot read. Set the option to an empty value for
 the writers.
 

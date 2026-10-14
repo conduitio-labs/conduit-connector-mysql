@@ -24,9 +24,8 @@ import (
 )
 
 // CodeSkippedColumns is the stable error code carried by SkippedColumnsError.
-// It joins the MYSQL_* family named in the type-semantics design
-// (ConduitIO/conduit#3040, "Row images").
-const CodeSkippedColumns = "MYSQL_ROW_IMAGE_SKIPPED_COLUMNS"
+// It follows the mysql.<area>.<reason> style of the other codes in errors.go.
+const CodeSkippedColumns = "mysql.cdc.row_image_skipped_columns"
 
 // ErrSkippedColumns matches (errors.Is) every SkippedColumnsError.
 var ErrSkippedColumns = errors.New("row image skipped columns")
@@ -148,7 +147,7 @@ func checkSkippedColumns(e *canal.RowsEvent) *SkippedColumnsError {
 }
 
 // CodePartialJSONUnsupported is the stable error code for ErrPartialJSONUnsupported.
-const CodePartialJSONUnsupported = "MYSQL_PARTIAL_JSON_UNSUPPORTED"
+const CodePartialJSONUnsupported = "mysql.cdc.partial_json_unsupported"
 
 // ErrPartialJSONUnsupported matches (errors.Is) every PartialJSONError.
 var ErrPartialJSONUnsupported = errors.New("partial JSON update unsupported")

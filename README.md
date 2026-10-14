@@ -150,6 +150,91 @@ If the target table already contains a record with the same key, the Destination
 
 If a unique key is not present in the target table, the record will be simply appended.
 
+## Delivery semantics and limits
+
+The source connector is in beta. This section states what it guarantees and what it does not.
+
+### Delivery guarantees
+
+- **At-least-once.** A record is acknowledged upstream only after the destination has
+  acknowledged it, and the position carried on a record is what Conduit persists. After a
+  crash or restart you can receive records again, never fewer. Make destinations idempotent
+  (upsert by key).
+- **Snapshot to CDC handoff.** The connector captures the binlog position at the start of
+  the snapshot and begins CDC from it, so changes made while the snapshot runs are delivered
+  after it. Rows can therefore appear twice: once as a `snapshot` record and again as a
+  CDC change.
+- **Restart.** A restart during the snapshot resumes the snapshot from the last
+  acknowledged key per table. After a CDC restart, CDC resumes from the persisted binlog
+  position; a multi-row binlog event may be replayed from its first row.
+- **Ordering.** CDC records are delivered in binlog order. During the snapshot, rows are
+  ordered by key within a table; tables are read concurrently, so there is no ordering across
+  tables.
+
+### Limits
+
+- **No GTID support.** Positions are a binlog file name and offset on the server the
+  connector read from. They are not portable between servers: a replica, or a replica
+  promoted after a failover, has different binlog files and offsets. **Failing over the
+  source database breaks resume.** The connector may fail to start, or may not resume at the
+  matching point. After a failover, treat the pipeline as needing a new snapshot: clear its
+  position and expect to re-read the data. GTID-based positions are not supported in this
+  release.
+- **Tables added after the pipeline entered CDC are not snapshotted.** A snapshot runs only
+  on a fresh start. The position records which tables were snapshotted, and a restart checks
+  the configuration against it:
+  - If you add a table to an explicit `tables` list (plain table names), or switch
+    `snapshot.enabled` from `false` to `true`, the connector refuses to start with
+    `mysql.snapshot.tables_added_after_cdc`, naming the tables. Start a new pipeline for them,
+    or reset this pipeline's position to snapshot everything again (expect duplicates).
+  - If `tables` uses a pattern (`*`, a regex, an exclude, or an anchored name such as
+    `^orders$`), the connector logs one warning with the same code and then delivers the new
+    tables **from CDC only**: their existing rows are not snapshotted and are never delivered.
+  - A plain name is a regex that is not anchored, so `orders` also matches `orders_archive`.
+    It is still treated as an explicit list, which is the safe side. Anchor it as `^orders$`
+    to make it a pattern.
+  - A table removed from `tables` and added back later counts as added: changes made while it
+    was excluded were never captured. For an explicit list this means a table that is absent
+    at one restart and present at the next errors.
+  - A position written by an older version cannot be checked. The connector adopts the
+    configured tables as **unverified**, never as snapshotted, and logs
+    `mysql.snapshot.tables_unverified` on every start until the position is reset. Tables added
+    afterwards are detected.
+  - With more than 200 tables the position stores a hash of the table set instead of the
+    names. A change to the set then cannot be named or given a direction (a table that was only
+    removed also triggers it). The error says that "the configured table set changed", and
+    the way out is to restore the previous `tables` list or reset the position; removing tables
+    from the list does not clear it.
+- **A key column that was retyped restarts its table's snapshot.** The position records the
+  type of each key column. If the saved key does not fit the column's type now (an `INT` key
+  column that became `VARCHAR`, or `VARCHAR` that became `DECIMAL`, whose values order
+  differently), the table's snapshot restarts from its first row with a warning. Rows already
+  delivered are delivered again; nothing is skipped.
+- **Upgrading in the middle of a snapshot re-reads text, decimal and binary key tables.**
+  A snapshot position written by an older version does not record the key type, so a table
+  whose key is text, binary, `DECIMAL`, `TIME`, `ENUM`, `SET` or `BIT` cannot be checked for a
+  retype and restarts from its first row after the upgrade; its partial progress is re-read.
+  Integer, date and time keys resume where they stopped. Pipelines already in CDC are not
+  affected.
+- **Binlog retention is your responsibility.** If the persisted position has been purged
+  from the server, the connector cannot resume. Keep `binlog_expire_logs_seconds` longer than
+  the longest outage you want to survive.
+- **No heartbeat.** The connector does not send or consume heartbeat events. The position
+  is carried on records, so while the configured tables are quiet the persisted position does
+  not advance, even if the server keeps writing and rotating binlogs for other tables. A long
+  quiet period followed by binlog purging can leave the stored position pointing at a purged
+  file.
+- **DDL during a running pipeline is not handled explicitly and is not tested.** Running
+  `ALTER TABLE` (or other schema changes) on a captured table while the snapshot or CDC is
+  running may produce records that do not match the schema registered earlier, or an error.
+  Stop the pipeline, change the schema, and verify the result before resuming.
+- **Tables must be orderable for the snapshot.** See "Tables without a primary key".
+- **Type mapping has known gaps.** `DECIMAL` and `NUMERIC` map to Avro `double` and can lose
+  precision beyond what a 64-bit float holds. A `BIGINT UNSIGNED` value above 2^63-1 cannot
+  be encoded as Avro `long`; the connector logs a warning and passes the value through
+  unconverted. Date and time types are delivered as strings. A full type-mapping design is
+  pending; do not rely on exact fidelity for these types yet.
+
 ## Requirements and compatibility
 
 The connector is tested against MySQL v8.0. Compatibility with older versions isn't guaranteed.

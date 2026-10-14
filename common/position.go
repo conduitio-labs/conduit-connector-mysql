@@ -31,11 +31,24 @@ const (
 	PositionTypeCDC      PositionType = "cdc"
 )
 
-// CurrentPositionVersion is the version stamped on every position this connector
-// writes. Bump it whenever a position-format change is not safely readable by the
-// previous reader. Absent/0 on read means a legacy pre-version position (treat as
-// readable, see ParseSDKPosition).
-const CurrentPositionVersion = 1
+const (
+	// CDCPositionVersion is stamped on cdc_position envelopes.
+	CDCPositionVersion = 1
+
+	// SnapshotPositionVersion is stamped on snapshot_position envelopes. It is 2
+	// because per-table keys are written type-exactly (see keyvalue.go), a form
+	// version 1 readers cannot interpret: they refuse the position (see
+	// ErrPositionVersionUnsupported) instead of seeking on a misread key. CDC
+	// positions are unaffected, so a downgrade is refused only while a snapshot
+	// is in progress.
+	SnapshotPositionVersion = 2
+
+	// CurrentPositionVersion is the highest envelope version this build reads.
+	// Bump it whenever a position-format change is not safely readable by the
+	// previous reader. Absent/0 on read means a legacy pre-version position
+	// (treat as readable, see ParseSDKPosition).
+	CurrentPositionVersion = SnapshotPositionVersion
+)
 
 // ErrPositionVersionUnsupported is returned by ParseSDKPosition when a persisted
 // position's envelope version is higher than the highest version this connector
@@ -68,13 +81,15 @@ type SnapshotPosition struct {
 	CDCStart *CdcPosition `json:"cdc_start,omitempty"`
 }
 
-func (p SnapshotPosition) ToSDKPosition() opencdc.Position {
-	v, err := json.Marshal(Position{Version: CurrentPositionVersion, SnapshotPosition: &p})
+// ToSDKPosition marshals the position. It fails, rather than writing a lossy
+// position, when a table's last-read key has a Go type that cannot be encoded
+// type-exactly (see keyvalue.go).
+func (p SnapshotPosition) ToSDKPosition() (opencdc.Position, error) {
+	v, err := json.Marshal(Position{Version: SnapshotPositionVersion, SnapshotPosition: &p})
 	if err != nil {
-		// This should never happen, all Position structs should be valid.
-		panic(err)
+		return nil, fmt.Errorf("failed to marshal snapshot position: %w", err)
 	}
-	return v
+	return v, nil
 }
 
 // Clone deep-copies the position, including CDCStart. This is load-bearing: the
@@ -132,6 +147,14 @@ type TablePosition struct {
 type TablePositionSingleKey struct {
 	LastRead    any `json:"last_read"`
 	SnapshotEnd any `json:"snapshot_end"`
+
+	// KeyType is the MySQL type of the key column when the position was
+	// written, lowercase and without "unsigned" (for example "varchar",
+	// "decimal"). It lets a resume tell that the column has since been retyped
+	// to a type with a different ordering, which the key value alone cannot show
+	// (the bytes "10" are both a VARCHAR and a DECIMAL key). Empty in positions
+	// written without it; additive, ignored by readers that do not know it.
+	KeyType string `json:"key_type,omitempty"`
 }
 
 type TablePositionMultipleKey []TablePositionMultipleKeyItem
@@ -140,6 +163,9 @@ type TablePositionMultipleKeyItem struct {
 	KeyName     string `json:"key_name"`
 	LastRead    any    `json:"last_read"`
 	SnapshotEnd any    `json:"snapshot_end"`
+
+	// KeyType: see TablePositionSingleKey.KeyType.
+	KeyType string `json:"key_type,omitempty"`
 }
 
 type ReplicationEventPosition struct {
@@ -157,6 +183,13 @@ type CdcPosition struct {
 	// PrevPosition represents position of the mysql replication
 	// event just before the current one.
 	PrevPosition *ReplicationEventPosition `json:"prev,omitempty"`
+
+	// TableCoverage records which tables' existing rows the pipeline has
+	// covered; see TableCoverage. nil means a position written before this field
+	// existed. Additive: the position version is intentionally not bumped, so
+	// older builds ignore the field and drop it on their next write. See
+	// docs/design-documents/20261012-cdc-snapshotted-tables.md.
+	TableCoverage *TableCoverage `json:"table_coverage,omitempty"`
 }
 
 func (p ReplicationEventPosition) ToMysqlPos() mysql.Position {
@@ -167,7 +200,7 @@ func (p ReplicationEventPosition) ToMysqlPos() mysql.Position {
 }
 
 func (p CdcPosition) ToSDKPosition() opencdc.Position {
-	v, err := json.Marshal(Position{Version: CurrentPositionVersion, CdcPosition: &p})
+	v, err := json.Marshal(Position{Version: CDCPositionVersion, CdcPosition: &p})
 	if err != nil {
 		// This should never happen, all Position structs should be valid.
 		panic(err)

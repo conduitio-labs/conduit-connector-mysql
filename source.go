@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -56,13 +57,15 @@ type SourceConfig struct {
 	// Limits how many rows should be retrieved on each database fetch on snapshot mode.
 	FetchSize uint64 `json:"snapshot.fetchSize" default:"10000"`
 
-	// Allows a snapshot of a table with neither a primary key
-	// nor a defined sorting column. The opencdc.Position won't record the last record
-	// read from a table.
+	// Removed. The unsafe snapshot no longer exists: true fails validation with a migration message, false is accepted and ignored. Tables without a primary key need tableConfig.<table>.sortingColumn.
 	UnsafeSnapshot bool `json:"snapshot.unsafe"`
 
 	// Controls whether the snapshot is done.
 	SnapshotEnabled bool `json:"snapshot.enabled" default:"true"`
+
+	// rawTables holds the table rules as configured, before Open resolves
+	// Tables to concrete table names.
+	rawTables []string
 
 	mysqlCfg *mysql.Config
 }
@@ -72,6 +75,14 @@ func (s *SourceConfig) MysqlCfg() *mysql.Config {
 }
 
 func (s *SourceConfig) Validate(context.Context) error {
+	if s.UnsafeSnapshot {
+		return newError(ErrUnsafeSnapshotRemoved, CodeUnsafeSnapshotRemoved, "snapshot.unsafe",
+			"remove snapshot.unsafe from the configuration (this applies to pipelines already in CDC too), then for each "+
+				"table without a primary key either set tableConfig.<table>.sortingColumn to a column that is NOT NULL and the "+
+				"only column of a primary key or unique index, add a primary key, exclude the table, or set snapshot.enabled=false",
+			"the unsafe snapshot has been removed because it could not record its position or guarantee a consistent read")
+	}
+
 	mysqlCfg, err := mysql.ParseDSN(s.DSN)
 	if err != nil {
 		return fmt.Errorf("failed to parse DSN: %w", err)
@@ -86,7 +97,8 @@ func (s *SourceConfig) Validate(context.Context) error {
 }
 
 type TableConfig struct {
-	// Allows to force using a custom column to sort the snapshot.
+	// Allows to force using a custom column to sort the snapshot. The column must be
+	// NOT NULL and the only column of a primary key or unique index.
 	SortingColumn string `json:"sortingColumn"`
 }
 
@@ -132,6 +144,10 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 		return fmt.Errorf("failed to connect to mysql: %w", err)
 	}
 
+	// getAndFilterTables replaces Tables with the resolved names; keep the
+	// configured rules to tell explicit lists from patterns.
+	s.config.rawTables = slices.Clone(s.config.Tables)
+
 	sdk.Logger(ctx).Info().Msg("Parsing table regexes...")
 	s.config.Tables, err = s.getAndFilterTables(ctx, s.db, s.config.MysqlCfg().DBName)
 	if err != nil {
@@ -144,11 +160,6 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 		Strs("tables", s.config.Tables).
 		Int("count", len(s.config.Tables)).
 		Msgf("Successfully detected tables")
-
-	tableKeys, err := s.getTableKeys(ctx, s.config.MysqlCfg().DBName)
-	if err != nil {
-		return fmt.Errorf("failed to get table keys: %w", err)
-	}
 
 	serverID, err := common.GetServerID(ctx, s.db)
 	if err != nil {
@@ -167,55 +178,59 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 		pos = parsed
 	}
 
-	// Invariant 3: restart seeding. The branch taken here determines whether CDC
-	// resumes from a durable P0 or captures a fresh one; see
-	// docs/design-documents/20260724-snapshot-cdc-position-handoff.md.
-	var startSnapshotPosition *common.SnapshotPosition
-	var startCdcPosition *common.CdcPosition
-	switch {
-	case pos.CdcPosition != nil:
-		// Steady-state CDC restart: the snapshot (if any) already completed and
-		// persisted a cdc_position. Resume CDC from it directly.
-		startCdcPosition = pos.CdcPosition
-		sdk.Logger(ctx).Info().Msg("restart: resuming steady-state cdc from persisted position")
+	// A snapshot only runs when enabled and not resuming steady-state CDC. Only
+	// then must every table have an orderable key, and a sorting column meet its
+	// requirements. Pipelines already in steady-state CDC keep starting whatever
+	// their snapshot config says.
+	snapshotRuns := s.config.SnapshotEnabled && pos.CdcPosition == nil
 
-	case pos.SnapshotPosition != nil && pos.SnapshotPosition.CDCStart != nil:
-		// Mid-snapshot restart with a known P0: seed CDC from the persisted P0
-		// (not a fresh master position) so the binlog window (P0, restart] is
-		// replayed, and resume the snapshot from its persisted per-table
-		// LastRead. This is the fix for the data-loss bug this design closes.
-		startCdcPosition = pos.SnapshotPosition.CDCStart
-		startSnapshotPosition = pos.SnapshotPosition
+	tableKeys, err := s.getTableKeys(s.config.MysqlCfg().DBName, snapshotRuns)
+	if err != nil {
+		return fmt.Errorf("failed to get table keys: %w", err)
+	}
+
+	if snapshotRuns {
+		if err := s.validateSortingColumns(); err != nil {
+			return err
+		}
+	}
+
+	plan := resolveStartPlan(pos)
+
+	coverage, err := resolveCoverage(plan, s.config.SnapshotEnabled, s.config.Tables, tablesAreExplicit(s.config.rawTables))
+	if err != nil {
+		return err
+	}
+	for _, w := range coverage.warnings {
+		sdk.Logger(ctx).Warn().Msg(w)
+	}
+	switch plan.mode {
+	case startModeCDCResume:
+		sdk.Logger(ctx).Info().Msg("restart: resuming steady-state cdc from persisted position, skipping snapshot")
+	case startModeSnapshotResume:
 		sdk.Logger(ctx).Info().
-			Str("cdc_start_binlog_file", startCdcPosition.Name).
-			Uint32("cdc_start_binlog_pos", startCdcPosition.Pos).
+			Str("cdc_start_binlog_file", plan.cdcPosition.Name).
+			Uint32("cdc_start_binlog_pos", plan.cdcPosition.Pos).
 			Msg("restart: resuming mid-snapshot from persisted cdc start position (P0)")
-
 	default:
-		// No persisted P0: either a genuinely fresh start, or a legacy position
-		// written before this fix existed (pos.SnapshotPosition set, CDCStart
-		// nil). Fall back to today's behavior: capture a fresh P0 under the lock
-		// (or, if the snapshot is empty/disabled, a fresh CDC start position - a
-		// known, documented gap for that case; see the design doc's Failure
-		// modes section and Related section (SDK position-only-checkpoint,
-		// ConduitIO/conduit-connector-sdk#378) for why a fresh capture is safe
-		// for the mid-snapshot path this fix closes).
-		startSnapshotPosition = pos.SnapshotPosition
 		sdk.Logger(ctx).Info().Msg("restart: no persisted cdc start position, falling back to a fresh capture")
 	}
 
 	s.iterator, err = newCombinedIterator(ctx, combinedIteratorConfig{
 		db:                    s.db,
 		tableKeys:             tableKeys,
-		startSnapshotPosition: startSnapshotPosition,
-		startCdcPosition:      startCdcPosition,
+		startSnapshotPosition: plan.snapshotPosition,
+		startCdcPosition:      plan.cdcPosition,
 		database:              s.config.MysqlCfg().DBName,
 		canalRegexes:          canalRegexes,
 		serverID:              serverID,
 		mysqlConfig:           s.config.MysqlCfg(),
 		disableCanalLogging:   s.config.DisableLogs,
 		fetchSize:             s.config.FetchSize,
-		snapshotEnabled:       s.config.SnapshotEnabled,
+		// Issue #158: a position that already carries a cdc_position means the
+		// snapshot completed in an earlier run; never run it again.
+		snapshotEnabled: s.config.SnapshotEnabled && plan.mode != startModeCDCResume,
+		coverage:        coverage.carry,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create snapshot iterator: %w", err)
@@ -223,6 +238,65 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 	sdk.Logger(ctx).Info().Msg("opened source connector")
 
 	return nil
+}
+
+type startMode int
+
+const (
+	// startModeFresh: no usable persisted position, or a legacy snapshot
+	// position without a P0. A fresh P0 is captured and the snapshot (if
+	// enabled) starts over from the persisted per-table positions, if any.
+	startModeFresh startMode = iota
+	// startModeSnapshotResume: restart in the middle of (or at the very end of)
+	// a snapshot whose P0 was persisted. Snapshot resumes from per-table
+	// positions; CDC is seeded from P0.
+	startModeSnapshotResume
+	// startModeCDCResume: restart in steady-state CDC. The snapshot already
+	// completed, so it must not run again.
+	startModeCDCResume
+)
+
+// startPlan is what Open derives from the persisted position.
+type startPlan struct {
+	mode             startMode
+	snapshotPosition *common.SnapshotPosition
+	cdcPosition      *common.CdcPosition
+}
+
+// resolveStartPlan decides how a restart is seeded from the persisted position.
+//
+// Invariant 3: the branch taken here determines whether CDC resumes from a
+// durable P0 or captures a fresh one; see
+// docs/design-documents/20260724-snapshot-cdc-position-handoff.md.
+//
+// A cdc_position is only ever written by the CDC iterator, which starts after
+// the snapshot has completed and every snapshot ack has been received. It is
+// therefore proof the snapshot is done (issue #158). A snapshot_position, in
+// contrast, means the snapshot may be incomplete and must be resumed, never
+// skipped. Positions written before cdc_start or the version envelope existed
+// decode into these same shapes (absent fields are nil/0).
+func resolveStartPlan(pos common.Position) startPlan {
+	switch {
+	case pos.CdcPosition != nil:
+		return startPlan{mode: startModeCDCResume, cdcPosition: pos.CdcPosition}
+
+	case pos.SnapshotPosition != nil && pos.SnapshotPosition.CDCStart != nil:
+		// Seed CDC from the persisted P0 (not a fresh master position) so the
+		// binlog window (P0, restart] is replayed, and resume the snapshot from
+		// its persisted per-table LastRead.
+		return startPlan{
+			mode:             startModeSnapshotResume,
+			snapshotPosition: pos.SnapshotPosition,
+			cdcPosition:      pos.SnapshotPosition.CDCStart,
+		}
+
+	default:
+		// Fresh start, or a legacy position written before this fix existed
+		// (pos.SnapshotPosition set, CDCStart nil). Capture a fresh P0 under the
+		// lock; see the design doc's Failure modes section and Related section
+		// (ConduitIO/conduit-connector-sdk#378).
+		return startPlan{mode: startModeFresh, snapshotPosition: pos.SnapshotPosition}
+	}
 }
 
 func (s *Source) ReadN(ctx context.Context, n int) ([]opencdc.Record, error) {
@@ -366,37 +440,193 @@ func ParseRule(rule string) (Action, string, error) {
 	return action, rule, nil // Return action and regex (without the action prefix)
 }
 
-func (s *Source) getTableKeys(ctx context.Context, dbName string) (common.TableKeys, error) {
+// getTableKeys resolves the key columns used to order each table's snapshot.
+// When requireKeys is false (no snapshot will run) tables without a key are
+// allowed: CDC derives their record keys from the binlog position.
+func (s *Source) getTableKeys(dbName string, requireKeys bool) (common.TableKeys, error) {
 	tableKeys := make(common.TableKeys)
 
 	for _, table := range s.config.Tables {
 		preconfiguredTableKey, ok := s.config.TableConfig[table]
-		if ok {
+		if ok && preconfiguredTableKey.SortingColumn != "" {
 			tableKeys[table] = common.PrimaryKeys{preconfiguredTableKey.SortingColumn}
 			continue
 		}
 
 		primaryKeys, err := common.GetPrimaryKeys(s.db, dbName, table)
 		if err != nil {
-			if s.config.UnsafeSnapshot {
-				sdk.Logger(ctx).Warn().Msgf(
-					"table %s has no primary key, doing an unsafe snapshot ", table)
+			return nil, err //nolint:wrapcheck // already wrapped
+		}
 
-				// The snapshot iterator should be able to interpret a zero
-				// value table key as a table where we cannot do a sorted
-				// snapshot.
-
-				tableKeys[table] = common.PrimaryKeys{}
-				continue
-			}
-
-			return nil, fmt.Errorf(
-				"failed to get primary key for table %s. You might want to add a `tableConfig.<table name>.sortingColumn entry, or enable `unsafeSnapshot` mode: %w",
-				table, err)
+		if len(primaryKeys) == 0 && requireKeys {
+			return nil, newError(ErrTableWithoutKey, CodeTableWithoutKey, sortingColumnPath(table),
+				"add a primary key; or set "+sortingColumnPath(table)+" to a column that is NOT NULL and the only column "+
+					"of a primary key or unique index; or exclude the table with a pattern list such as "+
+					`tables: "*,-^`+table+`$" (or drop it from an explicit list); or set snapshot.enabled=false to stream `+
+					"changes only",
+				"table %q has no primary key and no sorting column, so its snapshot cannot be ordered, resumed or read consistently", table)
 		}
 
 		tableKeys[table] = primaryKeys
 	}
 
 	return tableKeys, nil
+}
+
+// coverageDecision is the outcome of checking which tables a restart can
+// trust to be covered by a snapshot.
+type coverageDecision struct {
+	// carry is stamped on every CDC position written by this run. nil keeps a
+	// legacy position's "unknown".
+	carry *common.TableCoverage
+	// warnings are logged at WARN by Open.
+	warnings []string
+}
+
+// tablesAreExplicit reports whether every table rule is a plain table name
+// (an include with no regex metacharacters). Anything else, including "*" and
+// an anchored name such as "^orders$", is a pattern that is allowed to match
+// tables created later.
+func tablesAreExplicit(rules []string) bool {
+	if len(rules) == 0 {
+		return false
+	}
+	for _, rule := range rules {
+		rule = strings.TrimSpace(rule)
+		if rule == AllTablesWildcard {
+			return false
+		}
+		if strings.HasPrefix(rule, "-") {
+			return false
+		}
+		rule = strings.TrimPrefix(rule, "+")
+		if rule == "" || regexp.QuoteMeta(rule) != rule {
+			return false
+		}
+	}
+	return true
+}
+
+// resolveCoverage decides what Open does about tables that were never
+// snapshotted. A snapshot only runs on a fresh start, so a table added to the
+// configuration after the pipeline entered CDC (or a snapshot switched on for
+// a pipeline that ran CDC-only) would otherwise have its pre-existing rows
+// silently never delivered. Invariant 3: that is a loss path, so for an
+// explicit table list it is an error, and for patterns it is a warning, issued
+// once and then recorded (patterns match tables we cannot reasonably refuse to
+// start over).
+//
+// The carried coverage is always restricted to the tables currently
+// configured, so a table removed and added back later is treated as added.
+//
+// tables are the resolved table names; explicit says the configured rules are
+// plain names. See docs/design-documents/20261012-cdc-snapshotted-tables.md.
+func resolveCoverage(plan startPlan, snapshotEnabled bool, tables []string, explicit bool) (coverageDecision, error) {
+	current := sortedUnique(tables)
+
+	if plan.mode != startModeCDCResume {
+		// A snapshot is about to run (or was disabled from the start). When it
+		// runs, every current table is covered by the time CDC starts; when
+		// disabled, nothing is.
+		if snapshotEnabled {
+			return coverageDecision{carry: common.NewTableCoverage(current, nil, nil)}, nil
+		}
+		return coverageDecision{carry: common.NewTableCoverage(nil, nil, nil)}, nil
+	}
+
+	persisted := plan.cdcPosition.TableCoverage
+
+	if persisted == nil {
+		// Legacy position: whether the tables were snapshotted is unknown.
+		if !snapshotEnabled {
+			return coverageDecision{}, nil
+		}
+		// Adopt the tables as unverified, never as snapshotted. Later additions
+		// are detected against them; the warning repeats on every start.
+		return coverageDecision{
+			carry: common.NewTableCoverage(nil, current, nil),
+			warnings: []string{fmt.Sprintf(
+				"%s: restart from a cdc position written by an older version, which did not record which tables were "+
+					"snapshotted. The tables in `tables` %v are ASSUMED to have been snapshotted but this cannot be "+
+					"verified; if any was added after the pipeline entered CDC its existing rows were never delivered. "+
+					"Tables added from now on are detected. Reset the position to snapshot everything again to clear this warning",
+				CodeTablesUnverified, current)},
+		}, nil
+	}
+
+	restricted := persisted.Restrict(current)
+	decision := coverageDecision{carry: restricted}
+
+	if restricted.HasUnverifiedTables() {
+		unverified := fmt.Sprintf("%v", restricted.Unverified)
+		if restricted.Hashed() {
+			unverified = "(not listed: large table set)"
+		}
+		decision.warnings = append(decision.warnings, fmt.Sprintf(
+			"%s: tables %s were adopted from a position written by an older version and could not be verified as "+
+				"snapshotted; if any was added after the pipeline entered CDC its existing rows were never delivered. "+
+				"Reset the position to snapshot everything again to clear this warning",
+			CodeTablesUnverified, unverified))
+	}
+
+	if !snapshotEnabled {
+		return decision, nil
+	}
+
+	added, changed := persisted.Added(current)
+	if !changed {
+		return decision, nil
+	}
+
+	if persisted.Hashed() {
+		// The position stores only a hash, so the direction of the change is
+		// unknown: a table may have been added or removed, and "remove them from
+		// tables" cannot be offered as a fix.
+		if explicit {
+			return coverageDecision{}, newError(ErrTablesAddedAfterCDC, CodeTablesAddedAfterCDC, "tables",
+				"restore the `tables` list this pipeline had when it entered CDC, or reset the pipeline's position "+
+					"(this snapshots every table again; expect duplicates). If a plain name in `tables` matches more tables "+
+					"than intended, anchor it as ^name$ (a pattern); patterns only warn",
+				"the configured table set changed since this pipeline entered CDC (the position recorded %d tables as a "+
+					"hash, the configuration now matches %d), and the difference cannot be named. A table that was added "+
+					"would have its existing rows silently skipped", persisted.Count, len(current))
+		}
+		decision.carry = persisted.WithCDCOnly(nil, current)
+		decision.warnings = append(decision.warnings, fmt.Sprintf(
+			"%s: the configured table set changed since this pipeline entered CDC (the position recorded %d tables as a "+
+				"hash, the configuration now matches %d), and the difference cannot be named. Any table that was added has "+
+				"its existing rows NOT snapshotted and never delivered, only changes from now on are (CDC-only). This is "+
+				"logged once. Reset the position to snapshot everything again",
+			CodeTablesAddedAfterCDC, persisted.Count, len(current)))
+		return decision, nil
+	}
+
+	if explicit {
+		return coverageDecision{}, newError(ErrTablesAddedAfterCDC, CodeTablesAddedAfterCDC, "tables",
+			"start a new pipeline for these tables, or reset this pipeline's position to snapshot everything again "+
+				"(expect duplicates), or remove them from `tables`. If a plain name in `tables` matches more tables than "+
+				"intended, anchor it as ^name$ (a pattern); patterns only warn and the new tables are then delivered "+
+				"from CDC only",
+			"%s were added after this pipeline entered CDC, so their existing rows were never snapshotted "+
+				"and would be silently skipped", fmt.Sprintf("tables %v", added))
+	}
+
+	// Patterns: warn once, then record the tables so the warning does not repeat.
+	decision.carry = persisted.WithCDCOnly(added, current)
+	decision.warnings = append(decision.warnings, fmt.Sprintf(
+		"%s: %s match `tables` but were added after this pipeline entered CDC; their existing rows are NOT "+
+			"snapshotted and will not be delivered, only changes from now on are (CDC-only). This is logged once. "+
+			"Start a new pipeline or reset the position to snapshot them",
+		CodeTablesAddedAfterCDC, fmt.Sprintf("tables %v", added)))
+	return decision, nil
+}
+
+func sortedUnique(in []string) []string {
+	out := slices.Clone(in)
+	slices.Sort(out)
+	out = slices.Compact(out)
+	if out == nil {
+		out = []string{}
+	}
+	return out
 }

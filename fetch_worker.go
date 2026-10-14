@@ -48,9 +48,10 @@ type fetchWorkerConfig struct {
 }
 
 func newFetchWorker(ctx context.Context, config fetchWorkerConfig) fetchWorker {
+	// Tables without a key never get here: Open and snapshotIteratorConfig.validate
+	// refuse them, because a LIMIT/OFFSET snapshot can neither record its position
+	// nor read a consistent order (issue #190 was its teardown hang).
 	switch len(config.primaryKeys) {
-	case 0:
-		return newFetchWorkerByLimit(config)
 	case 1:
 		tablePosition := config.lastPosition.Snapshots[config.table]
 		var singleKeyPosition common.TablePositionSingleKey
@@ -77,11 +78,14 @@ func newFetchWorker(ctx context.Context, config fetchWorkerConfig) fetchWorker {
 				lastPosition:      *tablePosition.MultipleKey,
 			})
 		default:
+			// The persisted position for this table is not a composite-key
+			// position (e.g. the key columns changed). Restart the table from
+			// its first row: duplicates, never a gap (invariant 3).
 			sdk.Logger(ctx).Warn().
 				Str("table", config.table).
-				Msg("multiple key position not found in last position, defaulting to fetch worker by limit iteration")
+				Msg("multiple key position not found in last position, restarting the table snapshot from the beginning")
 
-			return newFetchWorkerByLimit(config)
+			return newFetchWorkerByKeys(fetchWorkerByKeysConfig{fetchWorkerConfig: config})
 		}
 	}
 }
@@ -269,10 +273,18 @@ func (w *fetchWorkerSingleKey) buildFetchData(
 	ctx context.Context, row map[string]any,
 	colTypes []*avroNamedType, lastRead any,
 ) (fetchData, error) {
+	var keyType string
+	for _, colType := range colTypes {
+		if colType.Name == w.primaryKey {
+			keyType = colType.dbType
+			break
+		}
+	}
 	position := common.TablePosition{
 		SingleKey: &common.TablePositionSingleKey{
 			LastRead:    lastRead,
 			SnapshotEnd: w.end,
+			KeyType:     keyType,
 		},
 	}
 
@@ -325,6 +337,11 @@ type fetchWorkerMultipleKey struct {
 	keySchema     *schemaMapper
 
 	start, end common.TablePositionMultipleKey
+
+	// resume is true when start is a real, already-delivered row (the persisted
+	// last position) that must be excluded, false when start is only the table
+	// minimum and the first chunk must read from the beginning.
+	resume bool
 }
 
 type fetchWorkerByKeysConfig struct {
@@ -366,8 +383,9 @@ func (w *fetchWorkerMultipleKey) fetchStartEnd(ctx context.Context) (tableEmpty 
 		})
 	}
 
-	if len(w.config.primaryKeys) == len(w.config.lastPosition) {
-		w.start = w.config.lastPosition
+	if last, ok := w.usableLastPosition(ctx); ok {
+		w.start = last
+		w.resume = true
 	}
 
 	sdk.Logger(ctx).Debug().
@@ -378,6 +396,40 @@ func (w *fetchWorkerMultipleKey) fetchStartEnd(ctx context.Context) (tableEmpty 
 		Msg("fetched start and end")
 
 	return false, nil
+}
+
+// usableLastPosition returns the persisted position with its key names filled in,
+// or false when there is none or it does not describe this table's current key
+// (a different number of columns, or different column names). An unusable
+// position restarts the table from its first row: duplicates, never a gap.
+//
+// Positions written before key names were recorded carry an empty key_name; they
+// are matched to the key columns by index.
+func (w *fetchWorkerMultipleKey) usableLastPosition(ctx context.Context) (common.TablePositionMultipleKey, bool) {
+	last := w.config.lastPosition
+	if len(last) == 0 {
+		return nil, false
+	}
+
+	keys := w.config.primaryKeys
+	if len(last) != len(keys) {
+		sdk.Logger(ctx).Warn().Str("table", w.config.table).
+			Msg("persisted composite key position does not match the table's key columns, restarting the table snapshot")
+		return nil, false
+	}
+
+	resolved := make(common.TablePositionMultipleKey, len(last))
+	for i, item := range last {
+		if item.KeyName != "" && item.KeyName != keys[i] {
+			sdk.Logger(ctx).Warn().Str("table", w.config.table).
+				Msg("persisted composite key position does not match the table's key columns, restarting the table snapshot")
+			return nil, false
+		}
+		item.KeyName = keys[i]
+		resolved[i] = item
+	}
+
+	return resolved, true
 }
 
 func (w *fetchWorkerMultipleKey) run(ctx context.Context) error {
@@ -403,7 +455,7 @@ func (w *fetchWorkerMultipleKey) run(ctx context.Context) error {
 	// If the worker has been given a starting position it means that we have already
 	// read the record in that specific position, so we can just exclude it.
 
-	discardFirst := len(w.config.lastPosition) > 0
+	discardFirst := w.resume
 	chunkStart := w.start
 	for {
 		sdk.Logger(ctx).Info().
@@ -457,7 +509,7 @@ func (w *fetchWorkerMultipleKey) getKeyPos(
 			return nil, false
 		}
 
-		pos = append(pos, common.TablePositionMultipleKeyItem{LastRead: val})
+		pos = append(pos, common.TablePositionMultipleKeyItem{KeyName: key, LastRead: val})
 	}
 
 	return pos, true
@@ -469,13 +521,12 @@ func (w *fetchWorkerMultipleKey) selectRowsChunk(
 ) (*rowsChunk, error) {
 	stmt := squirrel.Select("*").From(w.config.table)
 
-	// build where
-	for _, keyPos := range start {
-		if discardFirst {
-			stmt = stmt.Where(squirrel.Gt{keyPos.KeyName: keyPos.LastRead})
-		} else {
-			stmt = stmt.Where(squirrel.GtOrEq{keyPos.KeyName: keyPos.LastRead})
-		}
+	// Seek past the last delivered row. The predicate must be lexicographic over
+	// the key columns; independent "col > ?" terms ANDed together skip every row
+	// that is larger in one column and not larger in another (issue #189).
+	// The first chunk has nothing to seek past: start is only the table minimum.
+	if discardFirst {
+		stmt = stmt.Where(lexicographicAfter(start))
 	}
 
 	query, args, err := stmt.
@@ -524,12 +575,46 @@ func (w *fetchWorkerMultipleKey) selectRowsChunk(
 	return chunk, nil
 }
 
+// lexicographicAfter builds the predicate for "rows whose key tuple sorts after
+// last", i.e. (k1 > v1) OR (k1 = v1 AND k2 > v2) OR ... It is spelled out
+// rather than as the row constructor (k1, k2) > (v1, v2) so that MySQL can
+// use the primary key index for the range on every supported version.
+func lexicographicAfter(last common.TablePositionMultipleKey) squirrel.Sqlizer {
+	after := make(squirrel.Or, 0, len(last))
+	for i := range last {
+		term := make(squirrel.And, 0, i+1)
+		for _, prev := range last[:i] {
+			term = append(term, squirrel.Eq{prev.KeyName: prev.LastRead})
+		}
+		term = append(term, squirrel.Gt{last[i].KeyName: last[i].LastRead})
+		after = append(after, term)
+	}
+
+	return after
+}
+
 func (w *fetchWorkerMultipleKey) buildFetchData(
 	ctx context.Context, row map[string]any,
 	colTypes []*avroNamedType, lastRead common.TablePositionMultipleKey,
 ) (fetchData, error) {
+	// Record each key column's type next to its value; see
+	// common.TablePositionSingleKey.KeyType. lastRead is built by getKeyPos in
+	// the order of the primary keys.
+	typed := make(common.TablePositionMultipleKey, len(lastRead))
+	copy(typed, lastRead)
+	for i := range typed {
+		if i >= len(w.config.primaryKeys) {
+			break
+		}
+		for _, colType := range colTypes {
+			if colType.Name == w.config.primaryKeys[i] {
+				typed[i].KeyType = colType.dbType
+				break
+			}
+		}
+	}
 	position := common.TablePosition{
-		MultipleKey: &lastRead,
+		MultipleKey: &typed,
 	}
 
 	payloadSubver, err := w.payloadSchema.createPayloadSchema(ctx, w.config.table, colTypes)
@@ -576,142 +661,6 @@ keyColLoop:
 		payloadSchema: payloadSubver,
 		keySchema:     keySubver,
 	}, nil
-}
-
-// fetchWorkerByLimit will perform a snapshot using the LIMIT + OFFSET clauses to fetch
-// rows in chunks.
-type fetchWorkerByLimit struct {
-	config fetchWorkerConfig
-	end    uint64
-
-	payloadSchema *schemaMapper
-}
-
-func newFetchWorkerByLimit(config fetchWorkerConfig) fetchWorker {
-	return &fetchWorkerByLimit{
-		payloadSchema: newSchemaMapper(),
-		config:        config,
-	}
-}
-
-func (w *fetchWorkerByLimit) table() string {
-	return w.config.table
-}
-
-func (w *fetchWorkerByLimit) countTotal(ctx context.Context) (uint64, error) {
-	var total struct {
-		Total uint64 `db:"total"`
-	}
-
-	query, args, err := squirrel.Select("COUNT(*) as total").From(w.config.table).ToSql()
-	if err != nil {
-		return 0, fmt.Errorf("failed to build query: %w", err)
-	}
-
-	row := w.config.db.QueryRowxContext(ctx, query, args...)
-	if err := row.StructScan(&total); err != nil {
-		return 0, fmt.Errorf("failed to fetch total from %s: %w", w.config.table, err)
-	} else if err := row.Err(); err != nil {
-		return 0, fmt.Errorf("failed to fetch total from %s: %w", w.config.table, err)
-	}
-
-	sdk.Logger(ctx).Debug().
-		Str("query", query).Any("args", args).
-		Uint64("result", total.Total).
-		Msg("count query")
-
-	return total.Total, nil
-}
-
-func (w *fetchWorkerByLimit) fetchStartEnd(ctx context.Context) (isTableEmpty bool, err error) {
-	total, err := w.countTotal(ctx)
-	if err != nil {
-		return false, fmt.Errorf("failed to get total: %w", err)
-	} else if total == 0 {
-		return true, nil
-	}
-
-	w.end = total
-
-	return false, nil
-}
-
-func (w *fetchWorkerByLimit) run(ctx context.Context) (err error) {
-	logger := sdk.Logger(ctx).With().Str("table", w.config.table).Logger()
-
-	logger.Debug().Msgf("started fetch worker by limit")
-	defer logger.Debug().Msgf("finished fetch worker by limit")
-
-	for offset := uint64(0); offset < w.end; offset += w.config.fetchSize {
-		query, args, err := squirrel.
-			Select("*").From(w.config.table).
-			Limit(w.config.fetchSize).Offset(offset).ToSql()
-		if err != nil {
-			return fmt.Errorf("failed to build query: %w", err)
-		}
-
-		logger.Debug().Str("query", query).Any("args", args).Msg("created query")
-
-		sqlxRows, err := w.config.db.QueryxContext(ctx, query, args...)
-		if err != nil {
-			return fmt.Errorf("failed to query rows: %w", err)
-		}
-		defer func() {
-			if closeErr := sqlxRows.Close(); closeErr != nil {
-				closeErr = fmt.Errorf("failed to close rows: %w", closeErr)
-				err = errors.Join(err, closeErr)
-			}
-		}()
-		colTypes, err := sqlxRowsToAvroCol(sqlxRows)
-		if err != nil {
-			return fmt.Errorf("failed to retrieve column types: %w", err)
-		}
-
-		rows := []map[string]any{}
-		for sqlxRows.Next() {
-			row := map[string]any{}
-			if err := sqlxRows.MapScan(row); err != nil {
-				return fmt.Errorf("failed to map scan row: %w", err)
-			}
-			rows = append(rows, row)
-		}
-		if err := sqlxRows.Err(); err != nil {
-			return fmt.Errorf("failed to close rows: %w", err)
-		}
-
-		for i, row := range rows {
-			logger.Trace().Msgf("fetched row: %+v", row)
-
-			payloadSubver, err := w.payloadSchema.createPayloadSchema(ctx, w.config.table, colTypes)
-			if err != nil {
-				return fmt.Errorf("failed to create payload schema for table %s: %w", w.config.table, err)
-			}
-
-			payload := make(opencdc.StructuredData)
-			for key, val := range row {
-				payload[key] = w.payloadSchema.formatValue(ctx, key, val)
-			}
-
-			//nolint:gosec // i is guaranteed to be greater than 0
-			rowNum := offset + uint64(i)
-			keyStr := fmt.Sprintf("%s_%d", w.config.table, rowNum)
-			key := opencdc.RawData(keyStr)
-
-			w.config.data <- fetchData{
-				key:           key,
-				table:         w.config.table,
-				payload:       payload,
-				payloadSchema: payloadSubver,
-
-				// ignoring position, we start from 0 each time
-				// TODO: we could save the offset as a position, we might want
-				// to do it in the future.
-				position: common.TablePosition{},
-			}
-		}
-	}
-
-	return nil
 }
 
 type minmaxRow struct {

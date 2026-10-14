@@ -63,6 +63,10 @@ type cdcIteratorConfig struct {
 	tableKeys           common.TableKeys
 	disableCanalLogging bool
 	startPosition       *common.CdcPosition
+
+	// coverage is stamped on every CDC record's position; see
+	// common.TableCoverage.
+	coverage *common.TableCoverage
 }
 
 func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (*cdcIterator, error) {
@@ -116,11 +120,14 @@ func (c *cdcIterator) start(ctx context.Context) error {
 		c.parsedRecordsC,
 		c.config.tableKeys,
 		startPosition,
+		c.config.coverage,
 	)
 
-	go func() {
-		c.canal.SetEventHandler(eventHandler)
+	// Set the handler before the goroutine starts: canal.Close reads it, so a
+	// Close racing a not-yet-scheduled goroutine was a data race.
+	c.canal.SetEventHandler(eventHandler)
 
+	go func() {
 		// We need to run canal from Previous position to be sure
 		// we didn't lose any record from multi-row mysql replication
 		// event.
@@ -307,6 +314,7 @@ type cdcEventHandler struct {
 	parsedRecordsC chan opencdc.Record
 
 	tablePrimaryKeys common.TableKeys
+	coverage         *common.TableCoverage
 
 	onRowsChange onRowChangeFn
 }
@@ -318,8 +326,10 @@ func newCdcEventHandler(
 	parsedRecordsC chan opencdc.Record,
 	tablesPrimaryKeys common.TableKeys,
 	startPosition common.CdcPosition,
+	coverage *common.TableCoverage,
 ) *cdcEventHandler {
 	h := &cdcEventHandler{
+		coverage:         coverage,
 		canal:            canal,
 		canalDoneC:       canalDoneC,
 		parsedRecordsC:   parsedRecordsC,
@@ -434,8 +444,9 @@ func (h *cdcEventHandler) buildRecords(
 				Name: h.canal.SyncedPosition().Name,
 				Pos:  e.Header.LogPos,
 			},
-			PrevPosition: &prevPos,
-			Index:        i,
+			PrevPosition:  &prevPos,
+			Index:         i,
+			TableCoverage: h.coverage,
 		}.ToSDKPosition()
 
 		var rec opencdc.Record

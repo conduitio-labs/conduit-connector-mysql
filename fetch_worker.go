@@ -337,6 +337,11 @@ type fetchWorkerMultipleKey struct {
 	keySchema     *schemaMapper
 
 	start, end common.TablePositionMultipleKey
+
+	// resume is true when start is a real, already-delivered row (the persisted
+	// last position) that must be excluded, false when start is only the table
+	// minimum and the first chunk must read from the beginning.
+	resume bool
 }
 
 type fetchWorkerByKeysConfig struct {
@@ -378,8 +383,9 @@ func (w *fetchWorkerMultipleKey) fetchStartEnd(ctx context.Context) (tableEmpty 
 		})
 	}
 
-	if len(w.config.primaryKeys) == len(w.config.lastPosition) {
-		w.start = w.config.lastPosition
+	if last, ok := w.usableLastPosition(ctx); ok {
+		w.start = last
+		w.resume = true
 	}
 
 	sdk.Logger(ctx).Debug().
@@ -390,6 +396,40 @@ func (w *fetchWorkerMultipleKey) fetchStartEnd(ctx context.Context) (tableEmpty 
 		Msg("fetched start and end")
 
 	return false, nil
+}
+
+// usableLastPosition returns the persisted position with its key names filled in,
+// or false when there is none or it does not describe this table's current key
+// (a different number of columns, or different column names). An unusable
+// position restarts the table from its first row: duplicates, never a gap.
+//
+// Positions written before key names were recorded carry an empty key_name; they
+// are matched to the key columns by index.
+func (w *fetchWorkerMultipleKey) usableLastPosition(ctx context.Context) (common.TablePositionMultipleKey, bool) {
+	last := w.config.lastPosition
+	if len(last) == 0 {
+		return nil, false
+	}
+
+	keys := w.config.primaryKeys
+	if len(last) != len(keys) {
+		sdk.Logger(ctx).Warn().Str("table", w.config.table).
+			Msg("persisted composite key position does not match the table's key columns, restarting the table snapshot")
+		return nil, false
+	}
+
+	resolved := make(common.TablePositionMultipleKey, len(last))
+	for i, item := range last {
+		if item.KeyName != "" && item.KeyName != keys[i] {
+			sdk.Logger(ctx).Warn().Str("table", w.config.table).
+				Msg("persisted composite key position does not match the table's key columns, restarting the table snapshot")
+			return nil, false
+		}
+		item.KeyName = keys[i]
+		resolved[i] = item
+	}
+
+	return resolved, true
 }
 
 func (w *fetchWorkerMultipleKey) run(ctx context.Context) error {
@@ -415,7 +455,7 @@ func (w *fetchWorkerMultipleKey) run(ctx context.Context) error {
 	// If the worker has been given a starting position it means that we have already
 	// read the record in that specific position, so we can just exclude it.
 
-	discardFirst := len(w.config.lastPosition) > 0
+	discardFirst := w.resume
 	chunkStart := w.start
 	for {
 		sdk.Logger(ctx).Info().
@@ -469,7 +509,7 @@ func (w *fetchWorkerMultipleKey) getKeyPos(
 			return nil, false
 		}
 
-		pos = append(pos, common.TablePositionMultipleKeyItem{LastRead: val})
+		pos = append(pos, common.TablePositionMultipleKeyItem{KeyName: key, LastRead: val})
 	}
 
 	return pos, true
@@ -481,13 +521,12 @@ func (w *fetchWorkerMultipleKey) selectRowsChunk(
 ) (*rowsChunk, error) {
 	stmt := squirrel.Select("*").From(w.config.table)
 
-	// build where
-	for _, keyPos := range start {
-		if discardFirst {
-			stmt = stmt.Where(squirrel.Gt{keyPos.KeyName: keyPos.LastRead})
-		} else {
-			stmt = stmt.Where(squirrel.GtOrEq{keyPos.KeyName: keyPos.LastRead})
-		}
+	// Seek past the last delivered row. The predicate must be lexicographic over
+	// the key columns; independent "col > ?" terms ANDed together skip every row
+	// that is larger in one column and not larger in another (issue #189).
+	// The first chunk has nothing to seek past: start is only the table minimum.
+	if discardFirst {
+		stmt = stmt.Where(lexicographicAfter(start))
 	}
 
 	query, args, err := stmt.
@@ -534,6 +573,24 @@ func (w *fetchWorkerMultipleKey) selectRowsChunk(
 	chunk.foundEnd = len(chunk.rows) < int(w.config.fetchSize)
 
 	return chunk, nil
+}
+
+// lexicographicAfter builds the predicate for "rows whose key tuple sorts after
+// last", i.e. (k1 > v1) OR (k1 = v1 AND k2 > v2) OR ... It is spelled out
+// rather than as the row constructor (k1, k2) > (v1, v2) so that MySQL can
+// use the primary key index for the range on every supported version.
+func lexicographicAfter(last common.TablePositionMultipleKey) squirrel.Sqlizer {
+	after := make(squirrel.Or, 0, len(last))
+	for i := range last {
+		term := make(squirrel.And, 0, i+1)
+		for _, prev := range last[:i] {
+			term = append(term, squirrel.Eq{prev.KeyName: prev.LastRead})
+		}
+		term = append(term, squirrel.Gt{last[i].KeyName: last[i].LastRead})
+		after = append(after, term)
+	}
+
+	return after
 }
 
 func (w *fetchWorkerMultipleKey) buildFetchData(

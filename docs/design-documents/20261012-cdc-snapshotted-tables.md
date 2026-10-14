@@ -68,6 +68,11 @@ to snapshot everything again (duplicates expected), or remove the tables from `t
   table from a new one.
 - **Hashed coverage is coarser.** With more than 200 tables an explicit list that merely loses a
   table errors, because a subset cannot be verified from a hash.
+- **The hash encoding is versioned.** The hash input is each name's length (uvarint) followed by
+  its bytes, so no table name, newline included, can make two different sets hash alike. The
+  position records `hash_version`; a hash whose version this build does not compute (or that has
+  none) reads as "changed", never as "unchanged". The first encoding joined names with a newline
+  and was ambiguous; it did not ship in a release.
 - **Legacy positions never become verified.** `unverified` is only cleared by a position reset.
 
 ## Alternatives

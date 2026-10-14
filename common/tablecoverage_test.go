@@ -22,6 +22,8 @@ import (
 	"github.com/matryer/is"
 )
 
+const goldenTablesHash = "1ebfea91daeea763f8201c152c25bac2051fef4690988c97eb0b342a33c32e8a"
+
 func tableNames(n int) []string {
 	out := make([]string, n)
 	for i := range out {
@@ -133,4 +135,55 @@ func BenchmarkCdcPosition_RoundTrip(b *testing.B) {
 			b.ReportMetric(float64(size), "bytes/position")
 		})
 	}
+}
+
+// The hash is persisted in every CDC position and compared by a later build, so
+// its encoding is a position format. This pins one value; if it changes, bump
+// hashVersion and keep reading the old version rather than editing the value.
+func TestTableCoverage_HashGolden(t *testing.T) {
+	is := is.New(t)
+	is.Equal(hashTables([]string{"a", "bc", "x\ny"}), goldenTablesHash)
+}
+
+// A hash written under a different version cannot be compared, so it must read
+// as changed (never as covered): treating an unreadable hash as "unchanged"
+// would be the same silent skip as the collision.
+func TestTableCoverage_UnknownHashVersionReadsAsChanged(t *testing.T) {
+	is := is.New(t)
+	names := tableNames(MaxListedTables + 1)
+	cov := NewTableCoverage(names, nil, nil)
+	is.Equal(cov.HashVersion, hashVersion)
+
+	_, changed := cov.Added(names)
+	is.True(!changed)
+
+	for _, v := range []int{0, hashVersion + 1} {
+		stale := *cov
+		stale.HashVersion = v
+		_, changed := stale.Added(names)
+		is.True(changed) // same table set, hash from another encoding
+	}
+
+	// A position written before the version tag existed has none.
+	var legacy TableCoverage
+	is.NoErr(json.Unmarshal([]byte(`{"hash":"`+cov.Hash+`","count":201}`), &legacy))
+	_, changed = legacy.Added(names)
+	is.True(changed)
+}
+
+// Re-baselining after a detected change must leave a readable coverage, so the
+// warning is logged once and not on every start.
+func TestTableCoverage_WithCDCOnlyRebaselinesHash(t *testing.T) {
+	is := is.New(t)
+	names := tableNames(MaxListedTables + 1)
+
+	stale := NewTableCoverage(names, nil, nil)
+	stale.HashVersion = 0
+	_, changed := stale.Added(names)
+	is.True(changed)
+
+	re := stale.WithCDCOnly(nil, names)
+	is.Equal(re.HashVersion, hashVersion)
+	_, changed = re.Added(names)
+	is.True(!changed)
 }

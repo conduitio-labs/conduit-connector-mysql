@@ -575,6 +575,36 @@ func resolveCoverage(plan startPlan, snapshotEnabled bool, tables []string, expl
 
 	added, changed := persisted.Added(current)
 	if !changed {
+		if persisted.HashStale() {
+			// A legacy hash that was proven equal to the current set: carry
+			// it forward under the current encoding so this check is not
+			// repeated.
+			decision.carry = persisted.WithCDCOnly(nil, current)
+		}
+		return decision, nil
+	}
+
+	if persisted.HashStale() {
+		// The recorded hash was written by another encoding and could not be
+		// shown equal to the configured set. This is not a statement that the
+		// set changed, so say what is actually known.
+		if explicit {
+			return coverageDecision{}, newError(ErrTablesAddedAfterCDC, CodeTablesAddedAfterCDC, "tables",
+				"reset the pipeline's position (this snapshots every table again; expect duplicates), or anchor the rules "+
+					"as ^name$ (patterns); patterns only warn once and then record the current set. Restoring the `tables` "+
+					"list does not help: the recorded hash cannot be compared",
+				"the position records %d tables as a hash written by a different version of the connector (hash version %d, "+
+					"this build uses %d) that cannot be matched against the %d configured tables, so it cannot be verified "+
+					"that no table was added since the pipeline entered CDC. A table that was added would have its "+
+					"existing rows silently skipped", persisted.Count, persisted.HashVersion, common.TableCoverageHashVersion, len(current))
+		}
+		decision.carry = persisted.WithCDCOnly(nil, current)
+		decision.warnings = append(decision.warnings, fmt.Sprintf(
+			"%s: the position records %d tables as a hash written by a different version of the connector, which cannot be "+
+				"matched against the %d configured tables. Any table that was added since the pipeline entered CDC has its "+
+				"existing rows NOT snapshotted and never delivered, only changes from now on are (CDC-only). This is logged "+
+				"once. Reset the position to snapshot everything again",
+			CodeTablesAddedAfterCDC, persisted.Count, len(current)))
 		return decision, nil
 	}
 

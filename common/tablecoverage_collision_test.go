@@ -36,6 +36,11 @@ func fillerNames(n int) []string {
 // produced the same hash, and Added reported no change when the second set
 // replaced the first. The new table's existing rows were then never
 // snapshotted. Invariant 3.
+//
+// Only the first two cases are regressions: they fail on the newline-join
+// encoding. The remaining three ("length prefix lookalike", "empty name",
+// "nul byte") also pass on the old encoding; they are encoding-property checks
+// that guard the length-prefixed form against its own likely mistakes.
 func TestTableCoverage_HashIsInjective(t *testing.T) {
 	cases := []struct {
 		name    string

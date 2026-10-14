@@ -19,6 +19,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"slices"
+	"strings"
 )
 
 // MaxListedTables is the largest table set a TableCoverage stores by name.
@@ -62,9 +63,13 @@ type TableCoverage struct {
 
 // hashVersion is the encoding hashTables produces. Version 1 is the
 // length-prefixed encoding. Positions written before the field existed carry no
-// version (0) and a hash over names joined with "\n", which is ambiguous; they
-// read as changed.
+// version (0) and a hash over names joined with "\n", which is ambiguous; such a
+// hash is accepted only when legacyHashMatches proves the sets equal, and
+// otherwise reads as changed.
 const hashVersion = 1
+
+// TableCoverageHashVersion is the hash encoding this build writes.
+const TableCoverageHashVersion = hashVersion
 
 // newHashed builds the hash form for the sorted, de-duplicated table set.
 func newHashed(sorted []string, hasUnverified bool) *TableCoverage {
@@ -108,9 +113,12 @@ func (c *TableCoverage) HasUnverifiedTables() bool {
 func (c *TableCoverage) Added(current []string) (added []string, changed bool) {
 	current = sortedSet(current)
 	if c.Hashed() {
+		if c.HashVersion == hashVersion {
+			return nil, hashTables(current) != c.Hash
+		}
 		// Invariant 3: a hash we cannot verify is not evidence that no table
-		// was added.
-		return nil, c.HashVersion != hashVersion || hashTables(current) != c.Hash
+		// was added. Only the unversioned (legacy) hash can be proven equal.
+		return nil, !c.legacyHashMatches(current)
 	}
 	known := c.Known()
 	for _, t := range current {
@@ -119,6 +127,29 @@ func (c *TableCoverage) Added(current []string) (added []string, changed bool) {
 		}
 	}
 	return added, len(added) > 0
+}
+
+// HashStale reports whether the coverage is in hash form under an encoding this
+// build does not compute (an unversioned legacy hash, or a newer version).
+func (c *TableCoverage) HashStale() bool { return c.Hashed() && c.HashVersion != hashVersion }
+
+// legacyHashMatches reports whether an unversioned hash proves the recorded set
+// equals current. The legacy hash joined names with "\n", which is ambiguous in
+// general, but it is sound here when all of: the hash matches, the counts agree,
+// and no current name contains "\n". Then current joins to Count-1 newlines; any
+// recorded set of Count names joins to at least Count-1, with equality only if
+// no recorded name has one, so both sets split the same way and are equal.
+func (c *TableCoverage) legacyHashMatches(current []string) bool {
+	if c.HashVersion != 0 || c.Count != len(current) {
+		return false
+	}
+	for _, t := range current {
+		if strings.Contains(t, "\n") {
+			return false
+		}
+	}
+	sum := sha256.Sum256([]byte(strings.Join(current, "\n")))
+	return hex.EncodeToString(sum[:]) == c.Hash
 }
 
 // Restrict returns the coverage limited to the tables in current: a table that

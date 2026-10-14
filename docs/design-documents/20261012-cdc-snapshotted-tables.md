@@ -70,9 +70,12 @@ to snapshot everything again (duplicates expected), or remove the tables from `t
   table errors, because a subset cannot be verified from a hash.
 - **The hash encoding is versioned.** The hash input is each name's length (uvarint) followed by
   its bytes, so no table name, newline included, can make two different sets hash alike. The
-  position records `hash_version`; a hash whose version this build does not compute (or that has
-  none) reads as "changed", never as "unchanged". The first encoding joined names with a newline
-  and was ambiguous; it did not ship in a release.
+  position records `hash_version`. A hash with no version is the first (newline-joined) encoding,
+  which did not ship in a release; it is accepted only when it proves the set unchanged (the
+  legacy hash of the current set matches, the counts agree, and no current name contains a
+  newline) and is then re-recorded under version 1. Any other hash of a different version reads
+  as "cannot be verified": an explicit list errors with a message that says so (restoring the
+  list cannot help), and a pattern warns once and re-records.
 - **Legacy positions never become verified.** `unverified` is only cleared by a position reset.
 
 ## Alternatives

@@ -15,8 +15,12 @@
 package common
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/matryer/is"
@@ -186,4 +190,58 @@ func TestTableCoverage_WithCDCOnlyRebaselinesHash(t *testing.T) {
 	is.Equal(re.HashVersion, hashVersion)
 	_, changed = re.Added(names)
 	is.True(!changed)
+}
+
+// legacyCoverage builds what a build from before hash_version wrote: a hash of
+// the names joined with a newline, and no version.
+func legacyCoverage(names []string) *TableCoverage {
+	sorted := sortedSet(names)
+	sum := sha256.Sum256([]byte(strings.Join(sorted, "\n")))
+	return &TableCoverage{Hash: hex.EncodeToString(sum[:]), Count: len(sorted)}
+}
+
+// An unversioned hash is accepted only when it proves the sets equal: the hash
+// matches, the counts agree and no current name contains a newline. Anything
+// else reads as changed.
+func TestTableCoverage_LegacyHashIsVerified(t *testing.T) {
+	names := tableNames(MaxListedTables + 50)
+	legacy := legacyCoverage(names)
+
+	t.Run("same set is accepted", func(t *testing.T) {
+		is := is.New(t)
+		is.True(legacy.HashStale())
+		_, changed := legacy.Added(names)
+		is.True(!changed)
+	})
+	t.Run("added table", func(t *testing.T) {
+		is := is.New(t)
+		_, changed := legacy.Added(append(slices.Clone(names), "zz_new"))
+		is.True(changed)
+	})
+	t.Run("removed table", func(t *testing.T) {
+		is := is.New(t)
+		_, changed := legacy.Added(names[1:])
+		is.True(changed)
+	})
+	t.Run("newline in a current name is never accepted, even on a hash match", func(t *testing.T) {
+		is := is.New(t)
+		// Two different sets of two names that join to the same bytes and have the
+		// same count: only the newline guard tells them apart.
+		pad := make([]string, MaxListedTables)
+		for i := range pad {
+			pad[i] = fmt.Sprintf("0_%04d", i)
+		}
+		recorded := legacyCoverage(append(slices.Clone(pad), "a\nb", "c"))
+		current := append(slices.Clone(pad), "a", "b\nc")
+		is.Equal(recorded.Count, len(sortedSet(current)))
+		_, changed := recorded.Added(current)
+		is.True(changed)
+	})
+	t.Run("a newer version is never accepted", func(t *testing.T) {
+		is := is.New(t)
+		future := *legacy
+		future.HashVersion = hashVersion + 1
+		_, changed := future.Added(names)
+		is.True(changed)
+	})
 }

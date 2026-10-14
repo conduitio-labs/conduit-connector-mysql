@@ -72,7 +72,7 @@ type (
 
 		payloadSchema *schemaSubjectVersion
 
-		// keySchema might be nil, as fetchWorkerByLimit doesn't have any key
+		// keySchema is set by every fetch worker.
 		keySchema *schemaSubjectVersion
 	}
 	snapshotIterator struct {
@@ -109,6 +109,11 @@ func (config *snapshotIteratorConfig) validate() error {
 	}
 	if len(config.tablePrimaryKeys) == 0 {
 		return fmt.Errorf("tablePrimaryKeys is required")
+	}
+	for table, keys := range config.tablePrimaryKeys {
+		if len(keys) == 0 {
+			return fmt.Errorf("%w: %q", ErrTableWithoutKey, table)
+		}
 	}
 
 	return nil

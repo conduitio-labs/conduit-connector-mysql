@@ -21,12 +21,46 @@ When the connector switches to CDC mode, it starts streaming changes from the
 obtained position at the start of the snapshot. It uses the row-based binlog format
 to capture detailed changes at the individual row level.
 
-### Unsafe snapshot
+### Tables without a primary key
 
-By default, the connector will error out if it finds a table that has no primary key and no specified sorting column specified, as we can't guarantee that the snapshot will be consistent. Table changes during the snapshot will be however captured by CDC mode.
+The snapshot reads each table in key order and records the last key read in the
+position, so it can resume exactly where it stopped and read a consistent view.
+That needs a primary key, or a column you name with
+`tableConfig.<table>.sortingColumn`. If a table has neither, the connector
+fails to start with error `mysql.snapshot.table_without_key`, naming the table
+and the config path `tableConfig.<table>.sortingColumn`. To fix it, do one of:
 
-As of writing, the unsafe snapshot is implemented using batches with `LIMIT` and `OFFSET`, so expect it to be slow for large tables. You can optimize the snapshot by specifying a sorting column (see source configuration parameters).
-The position of the table is currently not recorded, so the unsafe snapshot will restart from zero every time.
+- add a primary key to the table;
+- set `tableConfig.<table>.sortingColumn` to a column that is `NOT NULL` and the
+  only column of a primary key or unique index. Anything else is rejected at
+  start with `mysql.snapshot.sorting_column_invalid`, because duplicate or NULL
+  values can make the snapshot skip rows;
+- exclude the table. With a pattern list, a later `-` rule removes tables from an
+  earlier match, for example `tables: "*,-^audit_log$"` snapshots everything
+  except `audit_log`. With an explicit list, remove the table from it;
+- set `snapshot.enabled: false` to stream changes only. Rows that already exist
+  are then not copied. CDC works for tables without a primary key; their record
+  keys are derived from the binlog position.
+
+The key and sorting-column checks run only when a snapshot is about to run. A
+pipeline restarting in CDC mode is not affected.
+
+#### Migrating from `snapshot.unsafe`
+
+The `snapshot.unsafe` setting has been removed. It snapshotted keyless tables
+with `LIMIT`/`OFFSET`, recorded no position (so every restart began again from
+zero), and could skip or repeat rows when the table changed during the
+snapshot. In practice it also applied without the setting: a keyless table was
+snapshotted this way even when `snapshot.unsafe` was not set.
+
+- `snapshot.unsafe: true` now fails configuration validation with error
+  `mysql.config.unsafe_snapshot_removed`, **including for pipelines that are
+  already in CDC mode**: validation does not look at the position. Remove the
+  setting before upgrading.
+- `snapshot.unsafe: false` is accepted and ignored.
+- After upgrading, a pipeline that still has a keyless table and will run a
+  snapshot fails to start with `mysql.snapshot.table_without_key` until you use
+  one of the options above.
 
 ### Schema
 
@@ -83,14 +117,11 @@ Records produced by the MySQL source connector contain the following [opencdc re
 
 *   **Operation**: `snapshot`.
 *   **Payload `After`**: `opencdc.StructuredData` with all column values.
-*   **Key**:
-    *   With Primary Key(s): `opencdc.StructuredData` using primary key columns and values.
-    *   Without Primary Key(s) (using `LIMIT`/`OFFSET`): `opencdc.RawData` string `"<table_name>_<row_offset>"`.
+*   **Key**: `opencdc.StructuredData` using the primary key columns (or the configured `tableConfig.<table>.sortingColumn`) and their values.
 *   **Position (`snapshot_position` field)**: A JSON object containing:
     *   `snapshots`: (object) Maps table names to their specific snapshot position object.
         *   *(Single Primary Key Table)*: Contains `last_read` (any) and `snapshot_end` (any).
         *   *(Multiple Primary Key Table)*: Contains an array of objects, each with `key_name` (string), `last_read` (any), and `snapshot_end` (any).
-        *   *(No Primary Key Table)*: Table entry might be missing or empty (offset is not persisted).
 
 #### CDC Records
 
@@ -241,9 +272,9 @@ pipelines:
           # Type: int
           # Required: no
           snapshot.fetchSize: "10000"
-          # Allows a snapshot of a table with neither a primary key nor a
-          # defined sorting column. The opencdc.Position won't record the last
-          # record read from a table.
+          # Removed. The unsafe snapshot no longer exists: true fails validation
+          # with a migration message, false is accepted and ignored. Tables
+          # without a primary key need tableConfig.<table>.sortingColumn.
           # Type: bool
           # Required: no
           snapshot.unsafe: "false"

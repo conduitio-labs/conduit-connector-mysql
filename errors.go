@@ -30,6 +30,13 @@ const (
 	// after it entered CDC, and a snapshot would be needed to cover them.
 	CodeTablesAddedAfterCDC = "mysql.snapshot.tables_added_after_cdc"
 
+	// CodeUnsafeSnapshotRemoved: the removed snapshot.unsafe setting is true.
+	CodeUnsafeSnapshotRemoved = "mysql.config.unsafe_snapshot_removed"
+
+	// CodeTableWithoutKey: a snapshot is required for a table with neither a
+	// primary key nor a sorting column.
+	CodeTableWithoutKey = "mysql.snapshot.table_without_key"
+
 	// CodeSortingColumnInvalid: a tableConfig sortingColumn is nullable or not
 	// unique, so a snapshot ordered by it could skip rows.
 	CodeSortingColumnInvalid = "mysql.snapshot.sorting_column_invalid"
@@ -72,3 +79,9 @@ func (e *Error) Is(target error) bool {
 
 // ErrTablesAddedAfterCDC is the sentinel for CodeTablesAddedAfterCDC.
 var ErrTablesAddedAfterCDC = errors.New("tables added after cdc")
+
+// ErrUnsafeSnapshotRemoved is the sentinel for CodeUnsafeSnapshotRemoved.
+var ErrUnsafeSnapshotRemoved = errors.New("snapshot.unsafe has been removed")
+
+// ErrTableWithoutKey is the sentinel for CodeTableWithoutKey.
+var ErrTableWithoutKey = errors.New("table has no primary key and no sorting column")

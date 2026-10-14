@@ -57,9 +57,7 @@ type SourceConfig struct {
 	// Limits how many rows should be retrieved on each database fetch on snapshot mode.
 	FetchSize uint64 `json:"snapshot.fetchSize" default:"10000"`
 
-	// Allows a snapshot of a table with neither a primary key
-	// nor a defined sorting column. The opencdc.Position won't record the last record
-	// read from a table.
+	// Removed. The unsafe snapshot no longer exists: true fails validation with a migration message, false is accepted and ignored. Tables without a primary key need tableConfig.<table>.sortingColumn.
 	UnsafeSnapshot bool `json:"snapshot.unsafe"`
 
 	// Controls whether the snapshot is done.
@@ -77,6 +75,14 @@ func (s *SourceConfig) MysqlCfg() *mysql.Config {
 }
 
 func (s *SourceConfig) Validate(context.Context) error {
+	if s.UnsafeSnapshot {
+		return newError(ErrUnsafeSnapshotRemoved, CodeUnsafeSnapshotRemoved, "snapshot.unsafe",
+			"remove snapshot.unsafe from the configuration (this applies to pipelines already in CDC too), then for each "+
+				"table without a primary key either set tableConfig.<table>.sortingColumn to a column that is NOT NULL and the "+
+				"only column of a primary key or unique index, add a primary key, exclude the table, or set snapshot.enabled=false",
+			"the unsafe snapshot has been removed because it could not record its position or guarantee a consistent read")
+	}
+
 	mysqlCfg, err := mysql.ParseDSN(s.DSN)
 	if err != nil {
 		return fmt.Errorf("failed to parse DSN: %w", err)
@@ -91,7 +97,8 @@ func (s *SourceConfig) Validate(context.Context) error {
 }
 
 type TableConfig struct {
-	// Allows to force using a custom column to sort the snapshot.
+	// Allows to force using a custom column to sort the snapshot. The column must be
+	// NOT NULL and the only column of a primary key or unique index.
 	SortingColumn string `json:"sortingColumn"`
 }
 
@@ -154,11 +161,6 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 		Int("count", len(s.config.Tables)).
 		Msgf("Successfully detected tables")
 
-	tableKeys, err := s.getTableKeys(ctx, s.config.MysqlCfg().DBName)
-	if err != nil {
-		return fmt.Errorf("failed to get table keys: %w", err)
-	}
-
 	serverID, err := common.GetServerID(ctx, s.db)
 	if err != nil {
 		return fmt.Errorf("failed to get server id: %w", err)
@@ -174,6 +176,23 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 			return fmt.Errorf("bad source position given: %w", err)
 		}
 		pos = parsed
+	}
+
+	// A snapshot only runs when enabled and not resuming steady-state CDC. Only
+	// then must every table have an orderable key, and a sorting column meet its
+	// requirements. Pipelines already in steady-state CDC keep starting whatever
+	// their snapshot config says.
+	snapshotRuns := s.config.SnapshotEnabled && pos.CdcPosition == nil
+
+	tableKeys, err := s.getTableKeys(s.config.MysqlCfg().DBName, snapshotRuns)
+	if err != nil {
+		return fmt.Errorf("failed to get table keys: %w", err)
+	}
+
+	if snapshotRuns {
+		if err := s.validateSortingColumns(); err != nil {
+			return err
+		}
 	}
 
 	plan := resolveStartPlan(pos)
@@ -421,33 +440,31 @@ func ParseRule(rule string) (Action, string, error) {
 	return action, rule, nil // Return action and regex (without the action prefix)
 }
 
-func (s *Source) getTableKeys(ctx context.Context, dbName string) (common.TableKeys, error) {
+// getTableKeys resolves the key columns used to order each table's snapshot.
+// When requireKeys is false (no snapshot will run) tables without a key are
+// allowed: CDC derives their record keys from the binlog position.
+func (s *Source) getTableKeys(dbName string, requireKeys bool) (common.TableKeys, error) {
 	tableKeys := make(common.TableKeys)
 
 	for _, table := range s.config.Tables {
 		preconfiguredTableKey, ok := s.config.TableConfig[table]
-		if ok {
+		if ok && preconfiguredTableKey.SortingColumn != "" {
 			tableKeys[table] = common.PrimaryKeys{preconfiguredTableKey.SortingColumn}
 			continue
 		}
 
 		primaryKeys, err := common.GetPrimaryKeys(s.db, dbName, table)
 		if err != nil {
-			if s.config.UnsafeSnapshot {
-				sdk.Logger(ctx).Warn().Msgf(
-					"table %s has no primary key, doing an unsafe snapshot ", table)
+			return nil, err //nolint:wrapcheck // already wrapped
+		}
 
-				// The snapshot iterator should be able to interpret a zero
-				// value table key as a table where we cannot do a sorted
-				// snapshot.
-
-				tableKeys[table] = common.PrimaryKeys{}
-				continue
-			}
-
-			return nil, fmt.Errorf(
-				"failed to get primary key for table %s. You might want to add a `tableConfig.<table name>.sortingColumn entry, or enable `unsafeSnapshot` mode: %w",
-				table, err)
+		if len(primaryKeys) == 0 && requireKeys {
+			return nil, newError(ErrTableWithoutKey, CodeTableWithoutKey, sortingColumnPath(table),
+				"add a primary key; or set "+sortingColumnPath(table)+" to a column that is NOT NULL and the only column "+
+					"of a primary key or unique index; or exclude the table with a pattern list such as "+
+					`tables: "*,-^`+table+`$" (or drop it from an explicit list); or set snapshot.enabled=false to stream `+
+					"changes only",
+				"table %q has no primary key and no sorting column, so its snapshot cannot be ordered, resumed or read consistently", table)
 		}
 
 		tableKeys[table] = primaryKeys

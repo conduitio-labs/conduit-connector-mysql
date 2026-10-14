@@ -1,4 +1,4 @@
-module github.com/conduitio-labs/conduit-connector-mysql
+module github.com/conduitio/conduit-connector-mysql
 
 go 1.24.2
 

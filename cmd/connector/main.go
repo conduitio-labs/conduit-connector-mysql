@@ -15,7 +15,7 @@
 package main
 
 import (
-	mysql "github.com/conduitio-labs/conduit-connector-mysql"
+	mysql "github.com/conduitio/conduit-connector-mysql"
 	sdk "github.com/conduitio/conduit-connector-sdk"
 )
 

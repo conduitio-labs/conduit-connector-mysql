@@ -54,7 +54,8 @@ func TestSnapshotIterator_BuildRecord_StampsCDCStartOnFirstRecord(t *testing.T) 
 
 	// This is the very first call to buildRecord - simulating the first record
 	// of a fresh snapshot - and it must already carry cdc_start.
-	rec := iterator.buildRecord(data)
+	rec, err := iterator.buildRecord(data)
+	is.NoErr(err)
 
 	parsed, err := common.ParseSDKPosition(rec.Position)
 	is.NoErr(err)
@@ -68,7 +69,8 @@ func TestSnapshotIterator_BuildRecord_StampsCDCStartOnFirstRecord(t *testing.T) 
 	data2.payload = opencdc.StructuredData{"id": 2}
 	data2.position = common.TablePosition{SingleKey: &common.TablePositionSingleKey{LastRead: float64(2), SnapshotEnd: float64(2)}}
 
-	rec2 := iterator.buildRecord(data2)
+	rec2, err := iterator.buildRecord(data2)
+	is.NoErr(err)
 	parsed2, err := common.ParseSDKPosition(rec2.Position)
 	is.NoErr(err)
 	is.True(parsed2.SnapshotPosition.CDCStart != nil)
@@ -100,9 +102,32 @@ func TestSnapshotIterator_BuildRecord_NoCDCStartWhenNotSet(t *testing.T) {
 		keySchema:     &schemaSubjectVersion{subject: "users_key", version: 1},
 	}
 
-	rec := iterator.buildRecord(data)
+	rec, err := iterator.buildRecord(data)
+	is.NoErr(err)
 
 	parsed, err := common.ParseSDKPosition(rec.Position)
 	is.NoErr(err)
 	is.True(parsed.SnapshotPosition.CDCStart == nil)
+}
+
+// A key of a type the position cannot encode type-exactly must fail the read
+// with an error. It used to be a panic path, and must never write a lossy position.
+func TestSnapshotIterator_BuildRecord_UnsupportedKeyTypeIsAnError(t *testing.T) {
+	is := is.New(t)
+
+	iterator, err := newSnapshotIterator(snapshotIteratorConfig{
+		tablePrimaryKeys: common.TableKeys{"users": {"id"}},
+		database:         "meroxadb",
+		serverID:         "1",
+	})
+	is.NoErr(err)
+
+	_, err = iterator.buildRecord(fetchData{
+		table:         "users",
+		key:           opencdc.RawData("1"),
+		payload:       opencdc.StructuredData{"id": 1},
+		position:      common.TablePosition{SingleKey: &common.TablePositionSingleKey{LastRead: struct{}{}}},
+		payloadSchema: &schemaSubjectVersion{subject: "users_payload", version: 1},
+	})
+	is.True(err != nil)
 }

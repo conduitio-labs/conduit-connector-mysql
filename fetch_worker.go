@@ -269,10 +269,18 @@ func (w *fetchWorkerSingleKey) buildFetchData(
 	ctx context.Context, row map[string]any,
 	colTypes []*avroNamedType, lastRead any,
 ) (fetchData, error) {
+	var keyType string
+	for _, colType := range colTypes {
+		if colType.Name == w.primaryKey {
+			keyType = colType.dbType
+			break
+		}
+	}
 	position := common.TablePosition{
 		SingleKey: &common.TablePositionSingleKey{
 			LastRead:    lastRead,
 			SnapshotEnd: w.end,
+			KeyType:     keyType,
 		},
 	}
 
@@ -528,8 +536,24 @@ func (w *fetchWorkerMultipleKey) buildFetchData(
 	ctx context.Context, row map[string]any,
 	colTypes []*avroNamedType, lastRead common.TablePositionMultipleKey,
 ) (fetchData, error) {
+	// Record each key column's type next to its value; see
+	// common.TablePositionSingleKey.KeyType. lastRead is built by getKeyPos in
+	// the order of the primary keys.
+	typed := make(common.TablePositionMultipleKey, len(lastRead))
+	copy(typed, lastRead)
+	for i := range typed {
+		if i >= len(w.config.primaryKeys) {
+			break
+		}
+		for _, colType := range colTypes {
+			if colType.Name == w.config.primaryKeys[i] {
+				typed[i].KeyType = colType.dbType
+				break
+			}
+		}
+	}
 	position := common.TablePosition{
-		MultipleKey: &lastRead,
+		MultipleKey: &typed,
 	}
 
 	payloadSubver, err := w.payloadSchema.createPayloadSchema(ctx, w.config.table, colTypes)

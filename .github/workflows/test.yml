@@ -43,3 +43,9 @@ jobs:
         env:
           RAPID_CHECKS: "100"
         run: go test -v -race -count=1 ./...
+
+      # Kills the source as a real process (SIGKILL) at chosen points and
+      # checks no gap, exact resume and monotonic positions; see
+      # test/chaos/doc.go.
+      - name: SIGKILL chaos
+        run: go test -v -race -count=1 -tags chaos ./test/chaos/

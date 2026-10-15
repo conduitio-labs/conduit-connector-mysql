@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       base_ref:
-        description: 'Release tag or commit to upgrade from (default: the latest release tag)'
+        description: 'Release tag or commit to upgrade from (default: see "Pick the base")'
         required: false
   pull_request:
     paths:
@@ -46,16 +46,38 @@ jobs:
         with:
           go-version-file: 'go.mod'
 
-      # The child is built from the release's source with this harness copied
-      # in; it only uses the connector's public API (mysql.NewSource,
-      # mysql.Connector), which the releases share.
-      - name: Build the release's child
+      # The base is the latest release tag once a release contains the fix for
+      # #158 (f86aea9, #195): a release without it goes back to the snapshot
+      # after CDC, every exact upgrade check falls back to a gap check, and the
+      # test fails on purpose (an over-skipping source would pass). Until then
+      # the base is 4676f45, the last main commit before #228, the change this
+      # test was written for.
+      - name: Pick the base
+        id: base
         env:
           BASE_REF: ${{ inputs.base_ref }}
         run: |
-          base="${BASE_REF:-$(git tag --list 'v*' --sort=-v:refname | head -n 1)}"
+          fixed_158=f86aea9
+          tag="$(git tag --list 'v*' --sort=-v:refname | head -n 1)"
+          if [ -n "$BASE_REF" ]; then
+            base="$BASE_REF"
+          elif [ -n "$tag" ] && git merge-base --is-ancestor "$fixed_158" "$tag"; then
+            base="$tag"
+          else
+            base=4676f45
+            echo "::notice::latest release $tag predates the #158 fix; upgrading from $base instead"
+          fi
           echo "upgrading from $base"
-          git worktree add "$RUNNER_TEMP/base" "$base"
+          echo "ref=$base" >> "$GITHUB_OUTPUT"
+
+      # The child is built from the base's source with this harness copied
+      # in; it only uses the connector's public API (mysql.NewSource,
+      # mysql.Connector), which the releases share.
+      - name: Build the base's child
+        env:
+          BASE: ${{ steps.base.outputs.ref }}
+        run: |
+          git worktree add "$RUNNER_TEMP/base" "$BASE"
           mkdir -p "$RUNNER_TEMP/base/test/chaos"
           cp test/chaos/child.go test/chaos/store.go test/chaos/doc.go "$RUNNER_TEMP/base/test/chaos/"
           cp -r test/chaos/cmd "$RUNNER_TEMP/base/test/chaos/"
@@ -64,4 +86,4 @@ jobs:
       - name: Upgrade and downgrade
         env:
           MYSQL_CHAOS_BASE_CHILD: ${{ runner.temp }}/base-child
-        run: go test -v -race -count=1 -tags chaos -run 'TestSIGKILL_UpgradeDowngrade' ./test/chaos/
+        run: go test -v -race -count=1 -timeout 20m -tags chaos -run 'TestSIGKILL_UpgradeDowngrade' ./test/chaos/

@@ -51,10 +51,13 @@ type step struct {
 //
 // Checked for every sequence: no gap (invariant 3) and no row that was never
 // written. For an upgrade from positions the release wrote with a single
-// restart, resume is also exact and positions are monotonic (verify), unless
-// the release itself went back to the snapshot after CDC (#158, fixed after
-// v0.3.0): then this build correctly continues the snapshot the release
-// stored, rows come again, and only the no-gap check applies (logged). The
+// restart, resume is also exact, each run starts right after the position it
+// opened at, and positions are monotonic (verify), unless the release itself
+// went back to the snapshot after CDC (#158, fixed after v0.3.0): then this
+// build correctly continues the snapshot the release stored, rows come again,
+// and only the no-gap check applies (logged, and a GitHub warning). If that
+// happens to every exact sequence, the test fails: with no exact check left,
+// a source that skips rows on resume would pass. The
 // release replays a multi-row event from its first row when it resumes inside
 // it, and the positions it writes after that cannot say which rows came
 // before; those sequences may deliver rows again, which is counted, not
@@ -89,7 +92,11 @@ func TestSIGKILL_UpgradeDowngrade(t *testing.T) {
 	}
 
 	const total = 13
+	exact, fellBack := 0, 0
 	for i, s := range seqs {
+		if s.exact {
+			exact++
+		}
 		t.Run(s.name, func(t *testing.T) {
 			h := &harness{t: t, dir: t.TempDir(), table: "chaos_updown_" + strconv.Itoa(i), db: db, batch: "1"}
 			h.exec("DROP TABLE IF EXISTS " + h.table)
@@ -138,7 +145,11 @@ func TestSIGKILL_UpgradeDowngrade(t *testing.T) {
 
 			if s.exact {
 				if releaseResnapshotted(t, h, baseRuns) {
+					fellBack++
 					t.Log("the release went back to the snapshot after CDC (#158); checking for gaps only")
+					if os.Getenv("GITHUB_ACTIONS") == "true" {
+						fmt.Printf("::warning::%s: the base went back to the snapshot after CDC (#158); exact checks skipped\n", t.Name())
+					}
 				} else {
 					verify(t, h.dir, h.table, total)
 					return
@@ -160,8 +171,12 @@ func TestSIGKILL_UpgradeDowngrade(t *testing.T) {
 				}
 				dups += n - 1
 			}
-			t.Logf("%d rows delivered more than once (the release's replay from the first row)", dups)
+			t.Logf("%d rows delivered more than once; allowed here, because a release resuming inside an event replays it from its first row", dups)
 		})
+	}
+	if exact > 0 && fellBack == exact {
+		t.Errorf("all %d exact sequences fell back to the gap check, because the base goes back to the snapshot after CDC "+
+			"(#158): nothing here would catch a source that skips rows on resume. Use a base that has the #158 fix (f86aea9)", exact)
 	}
 }
 

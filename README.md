@@ -490,3 +490,11 @@ Run `make test` to run all tests.
 The Docker compose file at `test/docker-compose.yml` can be used to run the required resource locally. It includes [adminer](https://www.adminer.org/) for database management.
 
 Use the `TRACE=true` environment variable to enable trace logs when running tests.
+
+`test/chaos` kills the source with SIGKILL, as a real process, mid-snapshot, mid-checkpoint, at the
+snapshot/CDC boundary, twice inside one large binlog statement and at a random instant, and checks that
+nothing acked was lost or read again and that positions never moved backwards. It is behind a build tag:
+
+```sh
+go test -race -count=1 -tags chaos ./test/chaos/
+```

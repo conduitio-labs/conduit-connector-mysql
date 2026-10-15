@@ -235,8 +235,8 @@ func (d *Destination) Teardown(_ context.Context) error {
 // UNIQUE keys) decide which row ON DUPLICATE KEY UPDATE overwrites, so they go
 // through the same checks as delete keys (typeKeyValue). MySQL converts on
 // assignment: {"id":1.5} into a BIGINT key became 2 and overwrote row 2.
-// Column names are matched case-insensitively, as MySQL does ("ID" is column
-// id).
+// Column names are matched as MySQL matches them, ignoring the case of ASCII
+// letters only ("ID" is column id, see foldColumn).
 //
 // A record must also be idempotent under redelivery (at-least-once): some
 // unique index of the table must be fully non-null in it, otherwise every
@@ -269,7 +269,7 @@ func (d *Destination) upsertRecords(ctx context.Context, tx *sqlx.Tx, table stri
 			values := make([]any, 0, len(run.columns))
 			for _, col := range run.columns {
 				v := payload[col]
-				if kc, ok := uniq.cols[strings.ToLower(col)]; ok && v != nil {
+				if kc, ok := uniq.cols[foldColumn(col)]; ok && v != nil {
 					if v, err = typeKeyValue(kc, v, ".Payload.After"); err != nil {
 						return err
 					}
@@ -365,12 +365,12 @@ func columnRuns(recs []opencdc.Record) ([]upsertRun, error) {
 		for col := range payload {
 			// MySQL column names are case-insensitive: "id" and "ID" are one
 			// column, and which value lands is not up to the record.
-			if other, dup := folded[strings.ToLower(col)]; dup {
+			if other, dup := folded[foldColumn(col)]; dup {
 				return nil, newError(ErrDuplicateColumn, CodeDuplicateColumn, ".Payload.After",
 					"send each column once; MySQL column names are case-insensitive",
 					"record %q has the fields %q and %q, which name the same column", keyString(rec), other, col)
 			}
-			folded[strings.ToLower(col)] = col
+			folded[foldColumn(col)] = col
 			columns = append(columns, col)
 		}
 		slices.Sort(columns)
@@ -667,7 +667,7 @@ func (d *Destination) uniqueIndexes(ctx context.Context, tx *sqlx.Tx, table stri
 			info.functional = true
 			continue
 		}
-		col := strings.ToLower(p.Column.String)
+		col := foldColumn(p.Column.String)
 		info.cols[col] = keyColumn{Name: p.Column.String, DataType: strings.ToLower(p.DataType), ColumnType: strings.ToLower(p.ColumnType)}
 		byIndex[p.Index] = append(byIndex[p.Index], col)
 		if p.Index == "PRIMARY" && strings.Contains(strings.ToLower(p.Extra), "auto_increment") {
@@ -694,7 +694,7 @@ func (u *uniqueInfo) checkIdempotent(table string, payload opencdc.StructuredDat
 	}
 	values := make(map[string]any, len(payload))
 	for field, v := range payload {
-		values[strings.ToLower(field)] = v
+		values[foldColumn(field)] = v
 	}
 	for _, idx := range u.indexes {
 		covered := true
@@ -737,12 +737,13 @@ func (d *Destination) splitTable(table string) (string, string) {
 	return d.config.MysqlCfg().DBName, table
 }
 
-// foldLookup returns the field of fields that names column, compared
-// case-insensitively as MySQL compares column names. dup is set when more than
-// one field names the column.
+// foldLookup returns the field of fields that names column, compared with
+// foldColumn as MySQL compares column names. dup is set when more than one
+// field names the column.
 func foldLookup(fields map[string]any, column string) (val any, ok bool, dup string) {
+	want := foldColumn(column)
 	for name, v := range fields {
-		if !strings.EqualFold(name, column) {
+		if foldColumn(name) != want {
 			continue
 		}
 		if ok {
@@ -751,6 +752,22 @@ func foldLookup(fields map[string]any, column string) (val any, ok bool, dup str
 		val, ok = v, true
 	}
 	return val, ok, ""
+}
+
+// foldColumn folds a column name the way MySQL compares column names: ASCII
+// letters only. MySQL 8.0 treats "a" and "A" as one column, but "ä" and "Ä",
+// "ſ" and "s", the Kelvin sign and "k", "İ" and "i" as different names, checked
+// against MySQL 8.0.39. Neither strings.EqualFold nor strings.ToLower may be
+// used here: both fold those pairs, so a delete key {"ſ":1} (EqualFold) or
+// {"İ":1} (ToLower) deleted the row of another column.
+func foldColumn(name string) string {
+	b := []byte(name)
+	for i, c := range b {
+		if 'A' <= c && c <= 'Z' {
+			b[i] = c + ('a' - 'A')
+		}
+	}
+	return string(b)
 }
 
 // stringTypes are the DATA_TYPE values of columns compared as strings. ENUM and

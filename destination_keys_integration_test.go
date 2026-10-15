@@ -686,3 +686,53 @@ func TestDestination_Upsert_RecordMustBeIdempotent(t *testing.T) {
 		})
 	}
 }
+
+// MySQL folds only ASCII letters in column names. strings.EqualFold equated
+// "ſ" (long s) with "s", so the delete key {"ſ":1} deleted the row s=1, and
+// strings.ToLower equates "İ" with "i" and the Kelvin sign with "k". None of
+// them names the column; each delete is refused and deletes nothing. ASCII case
+// still matches.
+func TestDestination_Delete_KeyFieldUnicodeFolding(t *testing.T) {
+	ctx := testutils.TestContext(t)
+	is := is.New(t)
+	db := testutils.NewDB(t)
+	t.Cleanup(func() { db.Exec("DROP TABLE IF EXISTS dest_keyfold") })
+
+	dest, cleanup := testDestination(ctx, is)
+	defer cleanup()
+
+	t.Run("ASCII case matches", func(t *testing.T) {
+		is := is.New(t)
+		is.NoErr(db.Exec("DROP TABLE IF EXISTS dest_keyfold").Error)
+		is.NoErr(db.Exec("CREATE TABLE dest_keyfold (s BIGINT PRIMARY KEY)").Error)
+		is.NoErr(db.Exec("INSERT INTO dest_keyfold VALUES (1), (2)").Error)
+		written, err := dest.Write(ctx, []opencdc.Record{keysTestDelete("dest_keyfold", opencdc.StructuredData{"S": 1})})
+		is.NoErr(err)
+		is.Equal(written, 1)
+	})
+
+	for name, tc := range map[string]struct {
+		column string
+		key    opencdc.StructuredData
+	}{
+		"long s is not s":           {"s", opencdc.StructuredData{"ſ": 1}},
+		"dotted capital I is not i": {"i", opencdc.StructuredData{"İ": 1}},
+		"Kelvin sign is not k":      {"k", opencdc.StructuredData{"\u212a": 1}},
+		"non-ASCII case differs":    {"`é`", opencdc.StructuredData{"É": 1}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			is := is.New(t)
+			is.NoErr(db.Exec("DROP TABLE IF EXISTS dest_keyfold").Error)
+			is.NoErr(db.Exec("CREATE TABLE dest_keyfold (" + tc.column + " BIGINT PRIMARY KEY)").Error)
+			is.NoErr(db.Exec("INSERT INTO dest_keyfold VALUES (1), (2)").Error)
+
+			written, err := dest.Write(ctx, []opencdc.Record{keysTestDelete("dest_keyfold", tc.key)})
+			is.True(errors.Is(err, ErrKeyColumnMissing))
+			is.Equal(written, 0)
+
+			var n int64
+			is.NoErr(db.Raw("SELECT COUNT(*) FROM dest_keyfold").Scan(&n).Error)
+			is.Equal(n, int64(2)) // nothing deleted
+		})
+	}
+}

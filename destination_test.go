@@ -205,3 +205,12 @@ func TestExactNumber_HugeExponentIsCheap(t *testing.T) {
 	allocated := after.TotalAlloc - before.TotalAlloc
 	is.True(allocated < 64<<10) // bytes allocated to classify one huge literal
 }
+
+func TestFoldColumn(t *testing.T) {
+	is := is.New(t)
+	is.Equal(foldColumn("ID"), "id")
+	is.Equal(foldColumn("Mixed_Case9"), "mixed_case9")
+	for _, name := range []string{"ſ", "İ", "\u212a", "É", "ß"} {
+		is.Equal(foldColumn(name), name) // MySQL keeps non-ASCII letters apart
+	}
+}

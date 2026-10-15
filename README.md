@@ -150,7 +150,7 @@ If the target table already contains a record with the same key, the Destination
 
 If a unique key is not present in the target table, the record will be simply appended.
 
-With several unique indexes (including functional and prefix indexes), `ON DUPLICATE KEY UPDATE` overwrites the row matched by any of them, including that row's primary key.
+With several unique indexes (including functional and prefix indexes), `ON DUPLICATE KEY UPDATE` overwrites the row matched by any of them, including that row's primary key. Functional unique indexes are read but not evaluated: the destination cannot compute their expressions, so it neither type-checks their inputs nor uses them to decide whether a record can be matched.
 
 ### Columns and schema changes
 

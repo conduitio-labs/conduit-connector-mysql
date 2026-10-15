@@ -28,6 +28,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Masterminds/squirrel"
 	"github.com/conduitio/conduit-commons/opencdc"
@@ -80,10 +81,15 @@ func (d *Destination) Config() sdk.DestinationConfig {
 }
 
 func (d *Destination) Open(ctx context.Context) (err error) {
-	d.db, err = sqlx.Open("mysql", d.config.DSN)
+	dsn, idle, err := withSessionTimeout(d.config.DSN)
+	if err != nil {
+		return err
+	}
+	d.db, err = sqlx.Open("mysql", dsn)
 	if err != nil {
 		return fmt.Errorf("failed to connect to mysql: %w", err)
 	}
+	d.db.SetConnMaxIdleTime(idle)
 
 	// The DSN is not the only way to pick the session character set (a
 	// character_set_client parameter, the server's init_connect), so the
@@ -102,6 +108,48 @@ func (d *Destination) Open(ctx context.Context) (err error) {
 	}
 
 	return nil
+}
+
+// sessionWaitTimeout is the wait_timeout the destination sets on its own
+// connections unless the DSN sets one. A variable so tests can shorten it.
+var sessionWaitTimeout = 60 * time.Second
+
+// withSessionTimeout returns the DSN with a session wait_timeout, and the pool's
+// maximum idle time, which stays below it.
+//
+// Invariant 1 and 3 on crash: when the connector process dies in the middle of
+// a write transaction (SIGKILL, OOM), the server keeps that session and its row
+// locks until it notices the peer is gone. If the close does not reach it (a
+// NAT, a proxy, a half-open TCP connection), the default wait_timeout of 8 hours
+// applies, and the redelivered records wait on those locks (or time out with
+// lock wait errors) for that long. Nothing of the dead transaction is
+// committed; this only bounds how long its locks block recovery. A connection
+// of the destination is never idle inside a transaction for long, so a short
+// session timeout does not end live work, and the pool drops idle connections
+// before the server does.
+func withSessionTimeout(dsn string) (string, time.Duration, error) {
+	cfg, err := mysql.ParseDSN(dsn)
+	if err != nil {
+		return "", 0, fmt.Errorf("failed to parse DSN: %w", err)
+	}
+	timeout := sessionWaitTimeout
+	if v, ok := cfg.Params["wait_timeout"]; ok {
+		secs, err := strconv.Atoi(strings.Trim(v, "'\""))
+		if err != nil || secs < 1 {
+			return "", 0, fmt.Errorf("invalid wait_timeout %q in the DSN: want a whole number of seconds of at least 1", v)
+		}
+		timeout = time.Duration(secs) * time.Second
+	} else {
+		if cfg.Params == nil {
+			cfg.Params = map[string]string{}
+		}
+		secs := int(sessionWaitTimeout / time.Second)
+		if secs < 1 {
+			secs = 1
+		}
+		cfg.Params["wait_timeout"] = strconv.Itoa(secs) // sent as SET wait_timeout on every new connection
+	}
+	return cfg.FormatDSN(), timeout / 2, nil
 }
 
 // unsafeCharsets are the multibyte character sets in which a valid character

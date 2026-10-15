@@ -181,6 +181,8 @@ specification:
 
     Each write is a single transaction. If any record in the write fails, nothing from that write is stored and none of its records are acknowledged; the records are redelivered after the pipeline recovers. Upserts on a primary or unique key make the redelivery idempotent. Redelivering a record whose `AUTO_INCREMENT` key is null or absent, or a record for a table with no unique key, appends another row.
 
+    The destination sets `wait_timeout=60` on its own connections (unless the DSN sets `wait_timeout`), and the pool drops connections idle for half of it. If the connector dies in the middle of a write and the server does not see the connection close (a NAT, a proxy, a half-open TCP connection), the uncommitted transaction and its row locks end within that time instead of the server default of 8 hours, so the redelivered records do not wait on them.
+
     ## Delivery semantics and limits
 
     The source connector is in beta. This section states what it guarantees and what it does not.

@@ -24,3 +24,6 @@
 
 ### OS ###
 .DS_Store
+
+# Fail files rapid writes to replay a failing property locally.
+testdata/rapid/

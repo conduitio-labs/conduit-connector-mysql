@@ -86,6 +86,11 @@ func TestCompare_TransitiveOverBoundaryNames(t *testing.T) {
 	}
 }
 
+// triplePool are three names whose order is a cycle when unnumbered names
+// compare to numbered ones as text: 999999 < 1000000 by number, but
+// "1000000" < "1x" < "999999" as text.
+var triplePool = []string{"binlog.999999", "binlog.1000000", "binlog.1x"}
+
 func genEventPosition(t *rapid.T, label string) ReplicationEventPosition {
 	return ReplicationEventPosition{
 		Name: genBinlogName(t, label),
@@ -98,9 +103,23 @@ func genEventPosition(t *rapid.T, label string) ReplicationEventPosition {
 // for equal positions. A resume compares the saved position with every
 // event it reads, so an order that is not transitive could keep or drop an
 // event depending on what came before it (invariant 3).
+//
+// A transitivity bug shows only on a particular triple, which independent
+// draws of arbitrary names almost never produce. So half the cases draw all
+// three positions from triplePool, the names where number order and text
+// order disagree; with #239's order this fails within 100 checks. The other
+// half draw from genEventPosition. TestCompare_TransitiveOverBoundaryNames
+// checks every triple of the boundary names exhaustively and stays the
+// guard of record.
 func TestCompare_PropertyTotalOrder(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
-		a, b, c := genEventPosition(t, "a"), genEventPosition(t, "b"), genEventPosition(t, "c")
+		gen := rapid.Custom(func(t *rapid.T) ReplicationEventPosition { return genEventPosition(t, "") })
+		if rapid.Bool().Draw(t, "from the boundary pool") {
+			gen = rapid.Custom(func(t *rapid.T) ReplicationEventPosition {
+				return ReplicationEventPosition{Name: rapid.SampledFrom(triplePool).Draw(t, "name"), Pos: 4}
+			})
+		}
+		a, b, c := gen.Draw(t, "a"), gen.Draw(t, "b"), gen.Draw(t, "c")
 		ab, ba, bc, ac := a.Compare(b), b.Compare(a), b.Compare(c), a.Compare(c)
 		if ab != -ba {
 			t.Fatalf("not antisymmetric: Compare(%v, %v) = %d, reverse %d", a, b, ab, ba)

@@ -160,13 +160,11 @@ func genSnapshotPosition(t *rapid.T) (in, want SnapshotPosition) {
 	return in, want
 }
 
-// genBinlogPos draws a binlog position: a file name with a six-digit sequence
-// number, and an offset. MySQL pads the number to at least six digits and
-// keeps counting past 999999 (seven digits and more); those names are left
-// out because Compare orders them wrongly (ConduitIO/conduit-connector-mysql#238).
+// genBinlogPos draws a binlog position: a file name with a sequence number
+// padded to at least six digits, as the server writes it, and an offset.
 func genBinlogPos(t *rapid.T, label string) ReplicationEventPosition {
 	return ReplicationEventPosition{
-		Name: fmt.Sprintf("mysql-bin.%06d", rapid.IntRange(1, 999999).Draw(t, label+" file")),
+		Name: fmt.Sprintf("mysql-bin.%06d", rapid.IntRange(1, math.MaxInt32).Draw(t, label+" file")),
 		Pos:  rapid.Uint32().Draw(t, label+" offset"),
 	}
 }
@@ -308,19 +306,16 @@ func TestCdcPosition_PropertyRoundTrip(t *testing.T) {
 }
 
 // TestCdcPosition_PropertyOrderSurvivesSerialization: for binlog file names
-// with six-digit sequence numbers (mysql-bin.000001 to mysql-bin.999999),
-// Compare orders positions as the binlog does (file sequence, then offset),
-// is antisymmetric, and gives the same answer after a round trip. The CDC
-// iterator compares these to decide what a restart skips (invariant 3).
-//
-// It does not cover names past .999999: MySQL keeps counting with seven or
-// more digits, and Compare, which compares names as strings, orders those
-// wrongly. That is ConduitIO/conduit-connector-mysql#238; widen the range to
-// 1<<31-1 when it is fixed.
+// as the server writes them, with sequence numbers from 1 to 2^31-1 padded
+// to at least six digits, Compare orders positions as the binlog does (file
+// sequence, then offset), is antisymmetric, and gives the same answer after
+// a round trip. The CDC iterator compares these to decide what a restart
+// skips (invariant 3). Before #239 this held only below 1000000 (#238).
 func TestCdcPosition_PropertyOrderSurvivesSerialization(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
-		aSeq := rapid.IntRange(1, 999999).Draw(t, "a file")
-		bSeq := rapid.IntRange(1, 999999).Draw(t, "b file")
+		fileSeq := rapid.OneOf(rapid.IntRange(1, 999999), rapid.IntRange(999990, 1000010), rapid.IntRange(1, math.MaxInt32))
+		aSeq := fileSeq.Draw(t, "a file")
+		bSeq := fileSeq.Draw(t, "b file")
 		aOff := rapid.Uint32().Draw(t, "a offset")
 		bOff := rapid.Uint32().Draw(t, "b offset")
 		a := CdcPosition{ReplicationEventPosition: ReplicationEventPosition{Name: fmt.Sprintf("mysql-bin.%06d", aSeq), Pos: aOff}}

@@ -572,9 +572,15 @@ func findKeyColType(avroCols []*avroNamedType, keyCol string) (*avroNamedType, b
 // Invariant 6: canal decodes an event with the table's schema as it is when
 // the event is read, not as it was when the event was written. An event
 // written before a column was added has fewer values than the table has
-// columns now; which column each value belongs to is then unknown, so this
-// halts with CodeRowColumnsMismatch instead of guessing (it used to panic on
-// the missing index, which crashed the plugin on every restart).
+// columns now (this used to panic on the missing index, on every restart);
+// one written before a column was dropped has more, and mapping the first
+// values to the remaining columns shifted every value after a dropped middle
+// column into the wrong column, silently. The same happens when the
+// connector's user cannot see a column (column privileges, or a generated
+// invisible primary key hidden by show_gipk_in_create_table_and_information_schema).
+// Which column each value belongs to is unknown in all of these, so this
+// halts with CodeRowColumnsMismatch instead of guessing. Generated (virtual or
+// stored) and INVISIBLE columns are both logged and listed, so they match.
 func (h *cdcEventHandler) buildPayload(
 	ctx context.Context,
 	payloadSchema *schemaMapper,
@@ -582,14 +588,21 @@ func (h *cdcEventHandler) buildPayload(
 	values []any,
 ) (opencdc.StructuredData, error) {
 	columns := e.Table.Columns
-	if len(values) < len(columns) {
+	if len(values) != len(columns) {
+		cause := "a column was added after the event was written"
+		fix := ""
+		if len(values) > len(columns) {
+			cause = "a column was dropped after the event was written, or the connector's user cannot see every column " +
+				"(column privileges, or a generated invisible primary key with " +
+				"show_gipk_in_create_table_and_information_schema=OFF)"
+			fix = "If columns are hidden from the connector's user, make them visible and restart; that is enough. Otherwise "
+		}
 		return nil, newError(ErrRowColumnsMismatch, CodeRowColumnsMismatch, "tables",
-			"reset the pipeline's position to snapshot again (expect duplicates; see the README on recovery). There is no "+
-				"lighter fix: restarting does not help, because the connector decodes every binlog event with the table's current "+
-				"columns, so this event fails the same way on every restart",
-			"a binlog event for table %s.%s in %s (event end offset %d) has %d values, but the table now has %d columns: "+
-				"its schema changed after the event was written",
-			e.Table.Schema, e.Table.Name, h.canal.SyncedPosition().Name, e.Header.LogPos, len(values), len(columns))
+			fix+"reset the pipeline's position to snapshot again (expect duplicates; see the README on recovery). Restarting "+
+				"alone does not help: the connector decodes every binlog event with the table's current columns, so this event "+
+				"fails the same way on every restart",
+			"a binlog event for table %s.%s in %s (event end offset %d) has %d values, but the table now has %d columns: %s",
+			e.Table.Schema, e.Table.Name, h.canal.SyncedPosition().Name, e.Header.LogPos, len(values), len(columns), cause)
 	}
 	payload := opencdc.StructuredData{}
 	for i, col := range columns {

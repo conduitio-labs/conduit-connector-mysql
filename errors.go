@@ -41,9 +41,10 @@ const (
 	// unique, so a snapshot ordered by it could skip rows.
 	CodeSortingColumnInvalid = "mysql.snapshot.sorting_column_invalid"
 
-	// CodeRowColumnsMismatch: a binlog row image has fewer values than the
-	// table has columns now, so its values cannot be mapped to columns. The
-	// table's schema changed after the event was written.
+	// CodeRowColumnsMismatch: a binlog row image has a different number of
+	// values than the table has columns now, so its values cannot be mapped
+	// to columns. The table's schema changed after the event was written, or
+	// the connector's user cannot see every column.
 	CodeRowColumnsMismatch = "mysql.cdc.row_columns_mismatch"
 
 	// CodeResumeEventNotFound: on a restart, the binlog event the saved

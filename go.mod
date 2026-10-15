@@ -90,6 +90,9 @@ require (
 // tell a NULL from a column that a partial row image (binlog_row_image=MINIMAL or NOBLOB) left out.
 // Upstream: https://github.com/go-mysql-org/go-mysql/issues/1205, PR
 // https://github.com/go-mysql-org/go-mysql/pull/1206.
-// Remove this replace (and the ConduitIO/go-mysql fork) once a go-mysql release contains the field:
+// The fork also carries a backport of upstream 088eb1f (go-mysql#1147): rows inside compressed
+// transactions decode with canal's parser options (ParseTime, ...), ConduitIO/conduit-connector-mysql#230.
+// Pinned to the fork PR's commit (ConduitIO/go-mysql#1) until it is tagged v1.14.0-conduit.2.
+// Remove this replace (and the ConduitIO/go-mysql fork) once a go-mysql release contains both:
 // bump the require above to that release and delete these lines.
-replace github.com/go-mysql-org/go-mysql => github.com/ConduitIO/go-mysql v1.14.0-conduit.1
+replace github.com/go-mysql-org/go-mysql => github.com/ConduitIO/go-mysql v1.14.1-0.20261015174051-277e8842847f

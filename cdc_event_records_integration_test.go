@@ -262,13 +262,13 @@ func TestCDCIterator_ResumeFromPositionsOfOlderVersions(t *testing.T) {
 	db := testutils.NewDB(t)
 	testutils.CreateUserTable(is, db)
 
-	insert := func(from, to int) {
-		var users []*testutils.User
-		for i := from; i <= to; i++ {
-			users = append(users, testutils.CreateUser(i))
-		}
-		is.NoErr(db.Create(users).Error)
-	}
+	// The saved event must have an offset to be found by an older version's
+	// position (one inside a compressed transaction delivers the file again,
+	// by design), so the other writes are uncompressed even when the server
+	// compresses by default.
+	plain := newSession(ctx, t, is)
+	plain.compression(false)
+	insert := func(from, to int) { plain.insertUsers(from, to) }
 
 	iterator, teardown := testCdcIterator(ctx, t, is)
 	insert(100, 102) // an earlier event in the same binlog file

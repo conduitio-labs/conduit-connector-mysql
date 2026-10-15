@@ -23,6 +23,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/conduitio/conduit-commons/opencdc"
 	"github.com/matryer/is"
 )
 
@@ -243,5 +244,76 @@ func TestTableCoverage_LegacyHashIsVerified(t *testing.T) {
 		future.HashVersion = hashVersion + 1
 		_, changed := future.Added(names)
 		is.True(changed)
+	})
+}
+
+// Issue #218: the coverage records its database, and every derived coverage
+// keeps it, so a restart can tell another database's same-named tables apart.
+func TestTableCoverage_DatabaseIsKept(t *testing.T) {
+	is := is.New(t)
+
+	listed := NewTableCoverage([]string{"a", "b"}, []string{"u"}, nil).WithDatabase("shop")
+	is.Equal(listed.Restrict([]string{"a", "u"}).Database, "shop")
+	is.Equal(listed.WithCDCOnly([]string{"c"}, []string{"a", "b", "c", "u"}).Database, "shop")
+
+	hashed := NewTableCoverage(tableNames(MaxListedTables+1), nil, nil).WithDatabase("shop")
+	is.Equal(hashed.Restrict(tableNames(3)).Database, "shop")
+	is.Equal(hashed.WithCDCOnly(nil, tableNames(MaxListedTables+2)).Database, "shop")
+
+	// WithDatabase copies.
+	base := NewTableCoverage([]string{"a"}, nil, nil)
+	_ = base.WithDatabase("shop")
+	is.Equal(base.Database, "")
+}
+
+// The database is a position format addition: written as "database", absent
+// in positions from older builds (decoded as "", unknown), ignored by them.
+func TestTableCoverage_DatabaseAdditiveCompat(t *testing.T) {
+	t.Run("round trip", func(t *testing.T) {
+		is := is.New(t)
+		for _, in := range []*TableCoverage{
+			NewTableCoverage([]string{"a"}, nil, nil).WithDatabase("shop"),
+			NewTableCoverage(tableNames(MaxListedTables+1), nil, nil).WithDatabase("shop"),
+			NewTableCoverage(nil, nil, nil).WithDatabase("shop"),
+		} {
+			raw := CdcPosition{TableCoverage: in}.ToSDKPosition()
+			is.True(strings.Contains(string(raw), `"database":"shop"`))
+			parsed, err := ParseSDKPosition(raw)
+			is.NoErr(err)
+			is.Equal(*parsed.CdcPosition.TableCoverage, *in)
+			is.Equal(parsed.Version, CDCPositionVersion) // not bumped: older builds must still read it
+		}
+	})
+
+	t.Run("older build's coverage has no database", func(t *testing.T) {
+		is := is.New(t)
+		raw := opencdc.Position(`{"version":1,"cdc_position":{"name":"binlog.000004","pos":120,"table_coverage":{"snapshotted":["a"]}}}`)
+		parsed, err := ParseSDKPosition(raw)
+		is.NoErr(err)
+		is.Equal(parsed.CdcPosition.TableCoverage.Database, "")
+		is.Equal(parsed.CdcPosition.TableCoverage.Snapshotted, []string{"a"})
+	})
+
+	t.Run("older build reads a position with the database", func(t *testing.T) {
+		is := is.New(t)
+		raw := CdcPosition{
+			ReplicationEventPosition: ReplicationEventPosition{Name: "binlog.000001", Pos: 9},
+			TableCoverage:            NewTableCoverage([]string{"a"}, nil, nil).WithDatabase("shop"),
+		}.ToSDKPosition()
+		// The previous build's TableCoverage, which lacks Database.
+		var old struct {
+			Version     int `json:"version"`
+			CdcPosition struct {
+				ReplicationEventPosition
+				TableCoverage *struct {
+					Snapshotted []string `json:"snapshotted,omitempty"`
+					HashVersion int      `json:"hash_version,omitempty"`
+				} `json:"table_coverage,omitempty"`
+			} `json:"cdc_position"`
+		}
+		is.NoErr(json.Unmarshal(raw, &old))
+		is.Equal(old.Version, 1)
+		is.Equal(old.CdcPosition.Pos, uint32(9))
+		is.Equal(old.CdcPosition.TableCoverage.Snapshotted, []string{"a"})
 	})
 }

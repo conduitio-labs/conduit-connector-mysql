@@ -138,7 +138,10 @@ func TestTablesAreExplicit(t *testing.T) {
 // Silent loss of pre-existing rows for tables added after CDC began (review of
 // #195). Invariant 3.
 func TestResolveCoverage(t *testing.T) {
-	cov := common.NewTableCoverage
+	const db = "shop"
+	cov := func(snapshotted, unverified, cdcOnly []string) *common.TableCoverage {
+		return common.NewTableCoverage(snapshotted, unverified, cdcOnly).WithDatabase(db)
+	}
 	cdc := func(c *common.TableCoverage) startPlan {
 		return startPlan{mode: startModeCDCResume, cdcPosition: &common.CdcPosition{TableCoverage: c}}
 	}
@@ -151,6 +154,7 @@ func TestResolveCoverage(t *testing.T) {
 	}
 
 	// legacy is what a build from before hash_version wrote for a hashed set.
+	// Such a build also predates the database field.
 	legacy := func(names []string) *common.TableCoverage {
 		sorted := slices.Clone(names)
 		slices.Sort(sorted)
@@ -186,17 +190,24 @@ func TestResolveCoverage(t *testing.T) {
 		{"cdc known, snapshot off: restricted, nothing checked", cdc(cov([]string{"a", "b"}, nil, nil)), false, []string{"a", "c"}, true, false, 0, cov([]string{"a"}, nil, nil)},
 		{"hash form, same set", cdc(cov(many(300), nil, nil)), true, many(300), true, false, 0, cov(many(300), nil, nil)},
 		{"hash form, set changed, explicit: error", cdc(cov(many(300), nil, nil)), true, many(301), true, true, 0, nil},
-		{"hash form, v0 hash that matches, explicit: accepted and re-baselined to v1", cdc(legacy(many(300))), true, many(300), true, false, 0, cov(many(300), nil, nil)},
+		{"hash form, v0 hash that matches, explicit: accepted, re-baselined to v1, database assumed", cdc(legacy(many(300))), true, many(300), true, false, 1, cov(many(300), nil, nil)},
 		{"hash form, v0 hash that does not match, explicit: error", cdc(legacy(many(300))), true, many(301), true, true, 0, nil},
-		{"hash form, v0 hash, pattern, set changed: warn once and carry v1", cdc(legacy(many(300))), true, many(301), false, false, 1, cov(many(301), nil, nil)},
+		{"hash form, v0 hash, pattern, set changed: warn once and carry v1", cdc(legacy(many(300))), true, many(301), false, false, 2, cov(many(301), nil, nil)},
 		{"hash form, v0 hash, snapshot off: carried forward untouched", cdc(legacy(many(300))), false, many(300), true, false, 0, legacy(many(300))},
 		{"hash form, set changed, pattern: warn and re-record", cdc(cov(many(300), nil, nil)), true, many(301), false, false, 1, cov(many(301), nil, nil)},
+
+		// Issue #218: the coverage belongs to a database.
+		{"cdc, coverage without database (older build): adopted for the dsn's database, warn once", cdc(common.NewTableCoverage([]string{"a"}, nil, nil)), true, []string{"a"}, true, false, 1, cov([]string{"a"}, nil, nil)},
+		{"cdc, coverage without database, pattern gained a table: both warnings, both recorded", cdc(common.NewTableCoverage([]string{"a"}, nil, nil)), true, []string{"a", "b"}, false, false, 2, cov([]string{"a"}, nil, []string{"b"})},
+		{"cdc, coverage without database, snapshot off: carried untouched", cdc(common.NewTableCoverage([]string{"a"}, nil, nil)), false, []string{"a"}, true, false, 0, common.NewTableCoverage([]string{"a"}, nil, nil)},
+		{"cdc, other database, snapshot off: nothing checked, old database kept", cdc(common.NewTableCoverage([]string{"a"}, nil, nil).WithDatabase("other")), false, []string{"a"}, true, false, 0, common.NewTableCoverage([]string{"a"}, nil, nil).WithDatabase("other")},
+		{"hash form, other database, snapshot off: carried untouched", cdc(common.NewTableCoverage(many(300), nil, nil).WithDatabase("other")), false, many(300), true, false, 0, common.NewTableCoverage(many(300), nil, nil).WithDatabase("other")},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			is := is.New(t)
-			got, err := resolveCoverage(tc.plan, tc.snapshot, tc.tables, tc.explicit)
+			got, err := resolveCoverage(tc.plan, tc.snapshot, tc.tables, tc.explicit, db)
 			if tc.wantCode {
 				is.True(errors.Is(err, ErrTablesAddedAfterCDC))
 				var coded *Error
@@ -221,17 +232,17 @@ func TestResolveCoverage(t *testing.T) {
 
 	t.Run("v0 hash, pattern: the next start is silent", func(t *testing.T) {
 		is := is.New(t)
-		first, err := resolveCoverage(cdc(legacy(many(300))), true, many(301), false)
+		first, err := resolveCoverage(cdc(legacy(many(300))), true, many(301), false, db)
 		is.NoErr(err)
-		is.Equal(len(first.warnings), 1)
-		second, err := resolveCoverage(cdc(first.carry), true, many(301), false)
+		is.Equal(len(first.warnings), 2) // set changed, database assumed
+		second, err := resolveCoverage(cdc(first.carry), true, many(301), false, db)
 		is.NoErr(err)
 		is.Equal(len(second.warnings), 0)
 	})
 
 	t.Run("v0 hash, explicit, no match: the message does not claim the set changed", func(t *testing.T) {
 		is := is.New(t)
-		_, err := resolveCoverage(cdc(legacy(many(300))), true, many(301), true)
+		_, err := resolveCoverage(cdc(legacy(many(300))), true, many(301), true, db)
 		var coded *Error
 		is.True(errors.As(err, &coded))
 		is.True(!strings.Contains(coded.Message, "table set changed"))
@@ -241,7 +252,7 @@ func TestResolveCoverage(t *testing.T) {
 
 	t.Run("hashed explicit list: no direction claimed, no impossible fix", func(t *testing.T) {
 		is := is.New(t)
-		_, err := resolveCoverage(cdc(cov(many(300), nil, nil)), true, many(299), true) // a table was REMOVED
+		_, err := resolveCoverage(cdc(cov(many(300), nil, nil)), true, many(299), true, db) // a table was REMOVED
 		var coded *Error
 		is.True(errors.As(err, &coded))
 		is.True(strings.Contains(coded.Message, "configured table set changed"))
@@ -253,16 +264,70 @@ func TestResolveCoverage(t *testing.T) {
 
 	t.Run("hashed pattern mode: warning claims no direction", func(t *testing.T) {
 		is := is.New(t)
-		got, err := resolveCoverage(cdc(cov(many(300), nil, nil)), true, many(299), false)
+		got, err := resolveCoverage(cdc(cov(many(300), nil, nil)), true, many(299), false, db)
 		is.NoErr(err)
 		is.Equal(len(got.warnings), 1)
 		is.True(strings.Contains(got.warnings[0], "configured table set changed"))
 		is.True(!strings.Contains(got.warnings[0], "were added after"))
 	})
 
+	// Issue #218: a DSN pointed at another database whose tables have the same
+	// names. Table names alone compared equal, so the restart continued and the
+	// other database's existing rows were never snapshotted. Refused for every
+	// table form and for patterns as well as explicit lists.
+	for _, c := range []struct {
+		name     string
+		persist  *common.TableCoverage
+		tables   []string
+		explicit bool
+	}{
+		{"list form, explicit", cov([]string{"a", "b"}, nil, nil), []string{"a", "b"}, true},
+		{"list form, pattern", cov([]string{"a", "b"}, nil, nil), []string{"a", "b"}, false},
+		{"list form, pattern, cdc-only tables", cov([]string{"a"}, nil, []string{"b"}), []string{"a", "b"}, false},
+		{"list form, unverified tables", cov(nil, []string{"a"}, nil), []string{"a"}, true},
+		{"hash form, explicit", cov(many(300), nil, nil), many(300), true},
+		{"hash form, pattern", cov(many(300), nil, nil), many(300), false},
+		{"known-empty (cdc-only run), pattern", cov(nil, nil, nil), []string{"a"}, false},
+	} {
+		t.Run("other database: "+c.name, func(t *testing.T) {
+			is := is.New(t)
+			_, err := resolveCoverage(cdc(c.persist), true, c.tables, c.explicit, "shop_restore")
+			is.True(errors.Is(err, ErrDatabaseChanged))
+			is.True(!errors.Is(err, ErrTablesAddedAfterCDC))
+			var coded *Error
+			is.True(errors.As(err, &coded))
+			is.Equal(coded.Code, "mysql.snapshot.database_changed")
+			is.Equal(coded.ConfigPath, "dsn")
+			is.True(strings.Contains(coded.Message, `"shop"`))
+			is.True(strings.Contains(coded.Message, `"shop_restore"`))
+			is.True(strings.Contains(coded.Fix, "reset this pipeline's position"))
+		})
+	}
+
+	t.Run("coverage without database: adopted once, the next start is silent", func(t *testing.T) {
+		is := is.New(t)
+		first, err := resolveCoverage(cdc(common.NewTableCoverage([]string{"a"}, nil, nil)), true, []string{"a"}, true, db)
+		is.NoErr(err)
+		is.Equal(len(first.warnings), 1)
+		is.True(strings.Contains(first.warnings[0], "mysql.snapshot.database_assumed"))
+		is.True(strings.Contains(first.warnings[0], `"shop"`))
+		is.Equal(first.carry.Database, db)
+		second, err := resolveCoverage(cdc(first.carry), true, []string{"a"}, true, db)
+		is.NoErr(err)
+		is.Equal(len(second.warnings), 0)
+	})
+
+	t.Run("the persisted coverage is never modified", func(t *testing.T) {
+		is := is.New(t)
+		persisted := common.NewTableCoverage(many(300), nil, nil) // hash form: Restrict returns it as is
+		_, err := resolveCoverage(cdc(persisted), true, many(300), true, db)
+		is.NoErr(err)
+		is.Equal(persisted.Database, "")
+	})
+
 	t.Run("error names the added tables", func(t *testing.T) {
 		is := is.New(t)
-		_, err := resolveCoverage(cdc(cov([]string{"a"}, nil, nil)), true, []string{"a", "late"}, true)
+		_, err := resolveCoverage(cdc(cov([]string{"a"}, nil, nil)), true, []string{"a", "late"}, true, db)
 		is.True(strings.Contains(err.Error(), "late"))
 	})
 }

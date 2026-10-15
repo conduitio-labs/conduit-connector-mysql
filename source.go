@@ -197,7 +197,8 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 
 	plan := resolveStartPlan(pos)
 
-	coverage, err := resolveCoverage(plan, s.config.SnapshotEnabled, s.config.Tables, tablesAreExplicit(s.config.rawTables))
+	coverage, err := resolveCoverage(plan, s.config.SnapshotEnabled, s.config.Tables,
+		tablesAreExplicit(s.config.rawTables), s.config.MysqlCfg().DBName)
 	if err != nil {
 		return err
 	}
@@ -519,9 +520,15 @@ func tablesAreExplicit(rules []string) bool {
 // The carried coverage is always restricted to the tables currently
 // configured, so a table removed and added back later is treated as added.
 //
+// Table names only identify tables within a database, so the coverage also
+// records the database it belongs to, and a restart against another database
+// is refused before any table is compared (see checkDatabase).
+//
 // tables are the resolved table names; explicit says the configured rules are
-// plain names. See docs/design-documents/20261012-cdc-snapshotted-tables.md.
-func resolveCoverage(plan startPlan, snapshotEnabled bool, tables []string, explicit bool) (coverageDecision, error) {
+// plain names; database is the database named in the DSN. See
+// docs/design-documents/20261012-cdc-snapshotted-tables.md and
+// docs/design-documents/20261014-table-coverage-database.md.
+func resolveCoverage(plan startPlan, snapshotEnabled bool, tables []string, explicit bool, database string) (coverageDecision, error) {
 	current := sortedUnique(tables)
 
 	if plan.mode != startModeCDCResume {
@@ -529,9 +536,9 @@ func resolveCoverage(plan startPlan, snapshotEnabled bool, tables []string, expl
 		// runs, every current table is covered by the time CDC starts; when
 		// disabled, nothing is.
 		if snapshotEnabled {
-			return coverageDecision{carry: common.NewTableCoverage(current, nil, nil)}, nil
+			return coverageDecision{carry: common.NewTableCoverage(current, nil, nil).WithDatabase(database)}, nil
 		}
-		return coverageDecision{carry: common.NewTableCoverage(nil, nil, nil)}, nil
+		return coverageDecision{carry: common.NewTableCoverage(nil, nil, nil).WithDatabase(database)}, nil
 	}
 
 	persisted := plan.cdcPosition.TableCoverage
@@ -544,7 +551,7 @@ func resolveCoverage(plan startPlan, snapshotEnabled bool, tables []string, expl
 		// Adopt the tables as unverified, never as snapshotted. Later additions
 		// are detected against them; the warning repeats on every start.
 		return coverageDecision{
-			carry: common.NewTableCoverage(nil, current, nil),
+			carry: common.NewTableCoverage(nil, current, nil).WithDatabase(database),
 			warnings: []string{fmt.Sprintf(
 				"%s: restart from a cdc position written by an older version, which did not record which tables were "+
 					"snapshotted. The tables in `tables` %v are ASSUMED to have been snapshotted but this cannot be "+
@@ -570,9 +577,75 @@ func resolveCoverage(plan startPlan, snapshotEnabled bool, tables []string, expl
 	}
 
 	if !snapshotEnabled {
+		// Nothing is checked, and the recorded database is kept as it is, so a
+		// later snapshot.enabled=true still compares against the truth.
 		return decision, nil
 	}
 
+	warning, err := checkDatabase(persisted, database, current)
+	if err != nil {
+		return coverageDecision{}, err
+	}
+	if warning != "" {
+		decision.warnings = append(decision.warnings, warning)
+	}
+
+	// From here on the coverage is known to belong to database (or was adopted
+	// for it), so every coverage carried forward records it.
+	tableDecision, err := resolveTableSet(persisted, decision, current, explicit)
+	if err != nil {
+		return coverageDecision{}, err
+	}
+	tableDecision.carry = tableDecision.carry.WithDatabase(database)
+	return tableDecision, nil
+}
+
+// checkDatabase compares the database the persisted coverage was recorded for
+// with the one the DSN names now.
+//
+// Invariant 3: the tables of another database were never snapshotted by this
+// pipeline, whatever their names, so continuing would silently skip all of
+// their existing rows. That is refused for explicit lists and patterns alike:
+// the reason patterns only warn about added tables (a pattern legitimately
+// matches tables created later, whose rows CDC then sees from the start) does
+// not apply when every table is from a database CDC was never reading.
+//
+// A coverage with no database was written by a build from before the field
+// existed. Its database cannot be verified; it is adopted for the DSN's
+// database with a warning, once, and recorded from then on.
+func checkDatabase(persisted *common.TableCoverage, database string, current []string) (warning string, err error) {
+	switch persisted.Database {
+	case database:
+		return "", nil
+	case "":
+		return fmt.Sprintf(
+			"%s: restart from a cdc position written by an older version, which did not record which database its "+
+				"table coverage belongs to. It is ASSUMED to be database %q, the one `dsn` names now. If `dsn` was "+
+				"pointed at a different database in the same restart as the upgrade, the existing rows of its tables "+
+				"%v were never delivered. This is logged once; the database is recorded from now on",
+			CodeDatabaseAssumed, database, current), nil
+	default:
+		return "", newError(ErrDatabaseChanged, CodeDatabaseChanged, "dsn",
+			fmt.Sprintf("point `dsn` back at database %q; or, to read database %q, start a new pipeline or reset this "+
+				"pipeline's position so its tables are snapshotted (if the data was copied from %q and already "+
+				"delivered, expect duplicates); or set snapshot.enabled=false to stream only changes from now on. If "+
+				"the two names differ only in letter case and the server's lower_case_table_names is 1 or 2, they are "+
+				"the same database: restore the original spelling", persisted.Database, database, persisted.Database),
+			"the position was written for database %q but `dsn` now names database %q. Table names identify tables "+
+				"only within a database, so none of the configured tables %v is known to have been snapshotted, and "+
+				"their existing rows would be silently skipped", persisted.Database, database, current)
+	}
+}
+
+// resolveTableSet is the table-set part of resolveCoverage, for a CDC restart
+// with the snapshot enabled whose coverage belongs to the current database.
+// decision holds the restricted coverage and the warnings so far.
+func resolveTableSet(
+	persisted *common.TableCoverage,
+	decision coverageDecision,
+	current []string,
+	explicit bool,
+) (coverageDecision, error) {
 	added, changed := persisted.Added(current)
 	if !changed {
 		if persisted.HashStale() {

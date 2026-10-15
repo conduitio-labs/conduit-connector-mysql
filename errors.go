@@ -30,6 +30,16 @@ const (
 	// after it entered CDC, and a snapshot would be needed to cover them.
 	CodeTablesAddedAfterCDC = "mysql.snapshot.tables_added_after_cdc"
 
+	// CodeDatabaseChanged: the DSN names a different database than the one the
+	// position's table coverage was recorded for, so none of the configured
+	// tables is known to have been snapshotted.
+	CodeDatabaseChanged = "mysql.snapshot.database_changed"
+
+	// CodeDatabaseAssumed: a position written by an older version recorded the
+	// table coverage without its database; the DSN's database was adopted.
+	// Warning only, logged once.
+	CodeDatabaseAssumed = "mysql.snapshot.database_assumed"
+
 	// CodeUnsafeSnapshotRemoved: the removed snapshot.unsafe setting is true.
 	CodeUnsafeSnapshotRemoved = "mysql.config.unsafe_snapshot_removed"
 
@@ -136,6 +146,9 @@ func (e *Error) Is(target error) bool {
 
 // ErrTablesAddedAfterCDC is the sentinel for CodeTablesAddedAfterCDC.
 var ErrTablesAddedAfterCDC = errors.New("tables added after cdc")
+
+// ErrDatabaseChanged is the sentinel for CodeDatabaseChanged.
+var ErrDatabaseChanged = errors.New("database changed after cdc")
 
 // ErrUnsafeSnapshotRemoved is the sentinel for CodeUnsafeSnapshotRemoved.
 var ErrUnsafeSnapshotRemoved = errors.New("snapshot.unsafe has been removed")

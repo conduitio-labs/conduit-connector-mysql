@@ -15,10 +15,13 @@
 package common
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
+	"strconv"
+	"strings"
 
 	"github.com/conduitio/conduit-commons/opencdc"
 	"github.com/go-mysql-org/go-mysql/mysql"
@@ -233,20 +236,66 @@ type CompressedEventRef struct {
 	Tables string `json:"tables"`
 }
 
-// Compare orders two binlog positions: by file name (binlog file names have a
-// fixed-width sequence number, so they sort as text), then by offset.
+// Compare orders two binlog positions the way the server writes them: by
+// file, then by offset within the file.
+//
+// Files are ordered by base name, then by the number after the last ".",
+// compared as a number. MySQL and MariaDB pad that number to at least six
+// digits and keep counting past 999999 up to 2^31-1 (find_uniq_filename,
+// "%06lu", MAX_LOG_UNIQUE_FN_EXT; mysql-server sql/binlog.cc, MariaDB
+// sql/log.cc), so "mysql-bin.1000000" follows "mysql-bin.999999" although it
+// sorts before it as text. Comparing names as text skipped records on a
+// resume across that rotation (#238).
+//
+// Invariant 3: this ordering decides which re-read events a restart drops as
+// already delivered (cdcEventHandler.onRows, passedTarget), so it must match
+// the server's order.
+//
+// A name without a numeric suffix, which the server does not write, is
+// compared as text, as before. go-mysql's CompareBinlogFileName is not used
+// because it panics on such a name, and a position is read from storage.
 func (p ReplicationEventPosition) Compare(o ReplicationEventPosition) int {
-	switch {
-	case p.Name < o.Name:
-		return -1
-	case p.Name > o.Name:
-		return 1
-	case p.Pos < o.Pos:
-		return -1
-	case p.Pos > o.Pos:
-		return 1
+	if c := compareBinlogFileNames(p.Name, o.Name); c != 0 {
+		return c
 	}
-	return 0
+	return cmp.Compare(p.Pos, o.Pos)
+}
+
+// compareBinlogFileNames orders binlog file names by base name, then by
+// sequence number; see ReplicationEventPosition.Compare.
+func compareBinlogFileNames(a, b string) int {
+	if a == b {
+		return 0
+	}
+	aBase, aSeq, aOK := splitBinlogFileName(a)
+	bBase, bSeq, bOK := splitBinlogFileName(b)
+	if !aOK || !bOK {
+		return strings.Compare(a, b)
+	}
+	if c := strings.Compare(aBase, bBase); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(aSeq, bSeq); c != 0 {
+		return c
+	}
+	// The same number written with other padding ("000010" and "10"): not a
+	// name the server writes, but keep the order total and consistent with
+	// equality.
+	return strings.Compare(a, b)
+}
+
+// splitBinlogFileName splits "base.000123" into "base" and 123. ok is false
+// when the name has no all-digit suffix after its last ".".
+func splitBinlogFileName(name string) (base string, seq uint64, ok bool) {
+	i := strings.LastIndexByte(name, '.')
+	if i < 0 || i == len(name)-1 {
+		return "", 0, false
+	}
+	seq, err := strconv.ParseUint(name[i+1:], 10, 64)
+	if err != nil {
+		return "", 0, false
+	}
+	return name[:i], seq, true
 }
 
 func (p ReplicationEventPosition) ToMysqlPos() mysql.Position {

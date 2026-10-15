@@ -394,8 +394,8 @@ func verify(t *testing.T, dir, table string, rows int64) {
 		case pos.CdcPosition != nil:
 			cp := pos.CdcPosition
 			if lastCDC != nil && cdcLess(cp, lastCDC) {
-				t.Errorf("position %d (run %d): CDC position %s:%d#%d is behind %s:%d#%d (invariant 2)",
-					i, p.Run, cp.Name, cp.Pos, cp.Index, lastCDC.Name, lastCDC.Pos, lastCDC.Index)
+				t.Errorf("position %d (run %d): CDC position %+v#%d is behind %+v#%d (invariant 2)",
+					i, p.Run, cdcOrderKey(cp), cp.Index, cdcOrderKey(lastCDC), lastCDC.Index)
 			}
 			lastCDC, inCDC = cp, true
 		case pos.SnapshotPosition != nil:
@@ -423,12 +423,36 @@ func verify(t *testing.T, dir, table string, rows int64) {
 	}
 }
 
+// cdcLess orders CDC positions by where their row is in the binlog. A row
+// inside a compressed transaction has no offset of its own (Pos is 0); it is
+// placed at its transaction's start (ReplayFrom), then by its rows event's
+// number after that point (Compressed.Ordinal), then by Index. A rows event
+// with an offset never ends exactly at a transaction start, so the two kinds
+// never tie.
 func cdcLess(a, b *common.CdcPosition) bool {
-	if a.Name != b.Name {
-		return a.Name < b.Name
+	ka, kb := cdcOrderKey(a), cdcOrderKey(b)
+	if ka.name != kb.name {
+		return ka.name < kb.name
 	}
-	if a.Pos != b.Pos {
-		return a.Pos < b.Pos
+	if ka.offset != kb.offset {
+		return ka.offset < kb.offset
+	}
+	if ka.ordinal != kb.ordinal {
+		return ka.ordinal < kb.ordinal
 	}
 	return a.Index < b.Index
+}
+
+type cdcKey struct {
+	name    string
+	offset  uint32
+	ordinal int
+}
+
+func cdcOrderKey(p *common.CdcPosition) cdcKey {
+	k := cdcKey{name: p.Name, offset: p.Pos}
+	if p.Pos == 0 && p.ReplayFrom != nil && p.Compressed != nil {
+		k.offset, k.ordinal = p.ReplayFrom.Pos, p.Compressed.Ordinal
+	}
+	return k
 }

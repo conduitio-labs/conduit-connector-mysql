@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
-	"github.com/conduitio/conduit-commons/csync"
 	"github.com/conduitio/conduit-commons/opencdc"
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/jmoiron/sqlx"
@@ -78,7 +77,7 @@ type (
 	snapshotIterator struct {
 		t            *tomb.Tomb
 		data         chan fetchData
-		acks         csync.WaitGroup
+		acks         ackCounter
 		lastPosition common.SnapshotPosition
 		workers      []fetchWorker
 		config       snapshotIteratorConfig
@@ -131,7 +130,6 @@ func newSnapshotIterator(config snapshotIteratorConfig) (*snapshotIterator, erro
 	iterator := &snapshotIterator{
 		t:            &tomb.Tomb{},
 		data:         make(chan fetchData),
-		acks:         csync.WaitGroup{},
 		config:       config,
 		lastPosition: lastPosition,
 	}
@@ -219,7 +217,11 @@ func (s *snapshotIterator) ReadN(ctx context.Context, n int) ([]opencdc.Record, 
 			return nil, fmt.Errorf(
 				"cannot stop snapshot mode, fetchers exited unexpectedly: %w", err)
 		}
-		if err := s.acks.Wait(ctx); err != nil {
+		// Invariant 3: hand over to CDC only once every snapshot record is
+		// acked, so a CDC position is never persisted ahead of an unacked
+		// snapshot row. Giving up here (ctx done) leaves nothing running; the
+		// next ReadN waits again.
+		if err := s.acks.wait(ctx); err != nil {
 			return nil, fmt.Errorf("failed to wait for acks on snapshot iterator done: %w", err)
 		}
 		return nil, ErrSnapshotIteratorDone
@@ -228,7 +230,7 @@ func (s *snapshotIterator) ReadN(ctx context.Context, n int) ([]opencdc.Record, 
 		if err != nil {
 			return nil, err
 		}
-		s.acks.Add(1)
+		s.acks.add(1)
 		recs = append(recs, rec)
 	}
 
@@ -239,15 +241,21 @@ func (s *snapshotIterator) ReadN(ctx context.Context, n int) ([]opencdc.Record, 
 			rec, err := s.buildRecord(data)
 			if err != nil {
 				// The records already built are dropped with the error, so
-				// their acks will never arrive: release them.
-				for range recs {
-					s.acks.Done()
-				}
+				// their acks will never arrive: release them. They were added
+				// above, so done cannot fail here.
+				_ = s.acks.done(len(recs))
 				return nil, err
 			}
-			s.acks.Add(1)
+			s.acks.add(1)
 			recs = append(recs, rec)
 		case <-ctx.Done():
+			// As in the error branch above: the records built so far are
+			// dropped, so release their acks, or the handoff would wait for
+			// acks that never come. Their rows are not acked either, so their
+			// snapshot positions are not persisted and they are read again.
+			// Dropping them is safe only because SDK v0.16 cancels ReadN's
+			// context only on stop, so nothing after them is acked first.
+			_ = s.acks.done(len(recs))
 			//nolint:wrapcheck // no need to wrap canceled error
 			return nil, ctx.Err()
 		default:
@@ -260,8 +268,7 @@ func (s *snapshotIterator) ReadN(ctx context.Context, n int) ([]opencdc.Record, 
 }
 
 func (s *snapshotIterator) Ack(context.Context, opencdc.Position) error {
-	s.acks.Done()
-	return nil
+	return s.acks.done(1)
 }
 
 func (s *snapshotIterator) Teardown(ctx context.Context) error {
@@ -283,7 +290,7 @@ func (s *snapshotIterator) Teardown(ctx context.Context) error {
 	ackCtx, cancelAcks := context.WithTimeout(ctx, DefaultTeardownAckTimeout)
 	defer cancelAcks()
 
-	if err := s.acks.Wait(ackCtx); err != nil {
+	if err := s.acks.wait(ackCtx); err != nil {
 		// Deliberately NOT returned as an error. Teardown's job is to release
 		// resources; failing it on un-arrived acks leaves the caller with a
 		// half-torn-down connector and no better options. Log loudly instead so

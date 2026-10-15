@@ -200,6 +200,15 @@ The source connector is in beta. This section states what it guarantees and what
     configured tables as **unverified**, never as snapshotted, and logs
     `mysql.snapshot.tables_unverified` on every start until the position is reset. Tables added
     afterwards are detected.
+  - The position also records the database (from `dsn`) its tables belong to. If `dsn` is
+    pointed at a different database and the position is kept, the connector refuses to start
+    with `mysql.snapshot.database_changed`, for explicit lists and patterns alike: none of that
+    database's tables was snapshotted, whatever their names. Point `dsn` back, start a new
+    pipeline, or reset the position. With `snapshot.enabled: false` nothing is checked. A
+    position that recorded tables but not the database (written by a development build before
+    this check) is assumed to belong to the database `dsn` names, with one
+    `mysql.snapshot.database_assumed` warning. Only the database name is compared, not the
+    server: moving to another server is covered by the GTID limit above.
   - With more than 200 tables the position stores a hash of the table set instead of the
     names. A change to the set then cannot be named or given a direction (a table that was only
     removed also triggers it). The error says that "the configured table set changed", and

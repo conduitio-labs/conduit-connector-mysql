@@ -50,7 +50,17 @@ const MaxListedTables = 200
 // and Count, with HasUnverified keeping the warning alive. HashVersion names
 // the encoding Hash was computed with (see hashTables); a hash of a version this
 // build does not compute is never trusted to say "unchanged".
+//
+// Database names the MySQL database (schema) the table names belong to: the
+// database in the DSN when the coverage was written. Table names alone do not
+// identify tables, so a DSN pointed at another database with the same table
+// names would otherwise compare equal and that database's existing rows would
+// never be snapshotted. Empty means a coverage written before the field
+// existed (database unknown). Additive, like the coverage itself. See
+// docs/design-documents/20261014-table-coverage-database.md.
 type TableCoverage struct {
+	Database string `json:"database,omitempty"`
+
 	Snapshotted []string `json:"snapshotted,omitempty"`
 	Unverified  []string `json:"unverified,omitempty"`
 	CDCOnly     []string `json:"cdc_only,omitempty"`
@@ -86,6 +96,14 @@ func NewTableCoverage(snapshotted, unverified, cdcOnly []string) *TableCoverage 
 		return newHashed(union, len(unverified) > 0)
 	}
 	return &TableCoverage{Snapshotted: snapshotted, Unverified: unverified, CDCOnly: cdcOnly}
+}
+
+// WithDatabase returns a copy of the coverage recorded for database. The
+// receiver is not modified.
+func (c *TableCoverage) WithDatabase(database string) *TableCoverage {
+	out := *c
+	out.Database = database
+	return &out
 }
 
 // Hashed reports whether the coverage is in hash form (names not stored).
@@ -155,7 +173,7 @@ func (c *TableCoverage) legacyHashMatches(current []string) bool {
 // Restrict returns the coverage limited to the tables in current: a table that
 // left the configuration is forgotten, so adding it back later is detected as an
 // addition rather than assumed covered. In hash form the set cannot be
-// restricted and the coverage is returned as is.
+// restricted and the coverage is returned as is. The database is kept.
 func (c *TableCoverage) Restrict(current []string) *TableCoverage {
 	if c.Hashed() {
 		return c
@@ -169,17 +187,17 @@ func (c *TableCoverage) Restrict(current []string) *TableCoverage {
 		}
 		return out
 	}
-	return NewTableCoverage(keep(c.Snapshotted), keep(c.Unverified), keep(c.CDCOnly))
+	return NewTableCoverage(keep(c.Snapshotted), keep(c.Unverified), keep(c.CDCOnly)).WithDatabase(c.Database)
 }
 
 // WithCDCOnly returns the coverage with the given tables recorded as CDC-only.
 // In hash form the new hash is that of current, the full table set, which is
-// the set the restart is now continuing with.
+// the set the restart is now continuing with. The database is kept.
 func (c *TableCoverage) WithCDCOnly(added, current []string) *TableCoverage {
 	if c.Hashed() {
-		return newHashed(sortedSet(current), c.HasUnverified)
+		return newHashed(sortedSet(current), c.HasUnverified).WithDatabase(c.Database)
 	}
-	return NewTableCoverage(c.Snapshotted, c.Unverified, slices.Concat(c.CDCOnly, added))
+	return NewTableCoverage(c.Snapshotted, c.Unverified, slices.Concat(c.CDCOnly, added)).WithDatabase(c.Database)
 }
 
 func sortedSet(in []string) []string {

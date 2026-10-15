@@ -74,6 +74,10 @@ func writerSession(ctx context.Context, t *testing.T, is *is.I, image string) *s
 	t.Cleanup(func() { conn.Close() })
 	_, err = conn.ExecContext(ctx, "SET SESSION binlog_row_image = '"+image+"'")
 	is.NoErr(err)
+	// These tests check the binlog offsets in the error; inside a compressed
+	// transaction there are none (covered by the compressed-position test).
+	_, err = conn.ExecContext(ctx, "SET SESSION binlog_transaction_compression = OFF")
+	is.NoErr(err)
 	return conn
 }
 

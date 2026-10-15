@@ -45,3 +45,38 @@ jobs:
       # test/chaos/doc.go.
       - name: SIGKILL chaos
         run: go test -v -race -count=1 -tags chaos ./test/chaos/
+
+  # The same suite with binlog_transaction_compression=ON on the server, so
+  # rows inside compressed transactions are covered too (#230). A separate job,
+  # not a matrix row, so the required "test" context keeps its name.
+  test-compression-on:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0.39
+        env:
+          MYSQL_DATABASE: meroxadb
+          MYSQL_USER: meroxauser
+          MYSQL_PASSWORD: meroxapass
+          MYSQL_ROOT_PASSWORD: meroxaadmin
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost"
+          --health-interval=1s
+          --health-timeout=20s
+          --health-retries=30
+          --health-start-period=10s
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Compress binlog transactions by default
+        run: mysql -h 127.0.0.1 -u root -pmeroxaadmin -e "SET PERSIST binlog_transaction_compression = ON"
+
+      - name: Test
+        run: go test -v -race -count=1 -skip '^TestAcceptanceV2$' ./...

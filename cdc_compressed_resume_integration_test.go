@@ -50,6 +50,15 @@ func newSession(ctx context.Context, t *testing.T, is *is.I) sessionExec {
 	}
 }
 
+// serverCompresses reports whether the server compresses transactions by
+// default (binlog_transaction_compression=ON globally).
+func serverCompresses(ctx context.Context, t *testing.T, is *is.I) bool {
+	t.Helper()
+	var on bool
+	is.NoErr(testutils.NewDB(t).SqlxDB.QueryRowContext(ctx, "SELECT @@GLOBAL.binlog_transaction_compression").Scan(&on))
+	return on
+}
+
 func (exec sessionExec) compression(on bool) {
 	if on {
 		exec("SET SESSION binlog_transaction_compression = ON")
@@ -306,4 +315,41 @@ func readUntilError(ctx context.Context, it common.Iterator) error {
 		}
 	}
 	return errors.New("no error within 10s")
+}
+
+// Regression test (#230, invariant 6): go-mysql decoded the events of a
+// compressed transaction with a fresh parser, without canal's options, so
+// DATETIME values came as strings instead of times. A row must have the same
+// value types compressed and uncompressed.
+func TestCDCIterator_CompressedRowsDecodeLikeUncompressed(t *testing.T) {
+	ctx := testutils.TestContext(t)
+	is := is.New(t)
+	db := testutils.NewDB(t)
+	testutils.CreateUserTable(is, db)
+	exec := newSession(ctx, t, is)
+
+	iterator, teardown := testCdcIterator(ctx, t, is)
+	defer teardown()
+	exec.compression(false)
+	exec.insertUsers(1, 1)
+	exec.compression(true)
+	exec.insertUsers(2, 2)
+
+	readCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	var recs []opencdc.Record
+	for len(recs) < 2 {
+		got, err := iterator.ReadN(readCtx, 2-len(recs))
+		is.NoErr(err)
+		recs = append(recs, got...)
+	}
+	plain := recs[0].Payload.After.(opencdc.StructuredData)
+	compressed := recs[1].Payload.After.(opencdc.StructuredData)
+	for col, v := range plain {
+		if got, want := fmt.Sprintf("%T", compressed[col]), fmt.Sprintf("%T", v); got != want {
+			t.Errorf("column %s: %s in a compressed transaction, %s otherwise", col, got, want)
+		}
+	}
+	_, isTime := compressed["created_at"].(time.Time)
+	is.True(isTime) // DATETIME decodes as a time
 }

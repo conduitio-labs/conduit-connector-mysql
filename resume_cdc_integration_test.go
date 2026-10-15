@@ -312,6 +312,13 @@ func TestRestart_TableAddedAfterCDC_Pattern_WarnsOnly(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 	db := testutils.NewDB(t)
+	if serverCompresses(ctx, t, is) {
+		// The saved position is inside a compressed transaction and the
+		// table set changes, so that transaction is delivered again by design
+		// (TestCDCIterator_ResumeInsideCompressedTransactionAfterTablesChanged);
+		// this test counts records exactly.
+		t.Skip("binlog_transaction_compression is ON on the server")
+	}
 	resetTables(is, db)
 	is.NoErr(db.Create(&crashRow{ID: 1, Val: "a"}).Error)
 

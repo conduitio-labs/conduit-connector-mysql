@@ -90,6 +90,17 @@ require (
 // tell a NULL from a column that a partial row image (binlog_row_image=MINIMAL or NOBLOB) left out.
 // Upstream: https://github.com/go-mysql-org/go-mysql/issues/1205, PR
 // https://github.com/go-mysql-org/go-mysql/pull/1206.
-// Remove this replace (and the ConduitIO/go-mysql fork) once a go-mysql release contains the field:
-// bump the require above to that release and delete these lines.
-replace github.com/go-mysql-org/go-mysql => github.com/ConduitIO/go-mysql v1.14.0-conduit.1
+// The fork also carries a backport of upstream 088eb1f (go-mysql#1147): rows inside compressed
+// transactions decode with canal's parser options (ParseTime, ...), ConduitIO/conduit-connector-mysql#230.
+// Pinned to the fork PR's commit (ConduitIO/go-mysql#1) until it is tagged v1.14.0-conduit.2.
+//
+// Do not drop the fork by bumping to a go-mysql release that has both fixes without more work. Any
+// release that contains upstream ace1fb4 ("make compressed transaction payloads checkpointable";
+// first in v1.16.0) stamps the events of a compressed transaction with the payload's start offset
+// instead of 0. The compressed resume of #228 (cdcEventHandler.onRows) tells those events by
+// Header.LogPos == 0, so after such a bump a resume from inside a compressed transaction drops or
+// repeats rows. Rework that resume first. TestCanalDeliversCompressedSubEventsAtOffsetZero fails when
+// the offset changes.
+// Remove this replace (and the ConduitIO/go-mysql fork) only after that, once a go-mysql release
+// contains both fields: bump the require above to that release and delete these lines.
+replace github.com/go-mysql-org/go-mysql => github.com/ConduitIO/go-mysql v1.14.1-0.20261015174051-277e8842847f

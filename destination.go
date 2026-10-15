@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"net/url"
 	"slices"
 	"strconv"
@@ -453,10 +454,12 @@ func (d *Destination) parseRecordKey(keyName string, keyVal opencdc.Data) (any, 
 	return val, nil
 }
 
-// exactNumber converts a JSON number to an int64 or uint64 when it is an
-// integer in range, so it is compared exactly. Other numbers become float64, as
-// before: MySQL compares a string with a DECIMAL column as double precision
-// too, so keeping the literal would not make such a key match more exactly.
+// exactNumber converts a JSON number so that it is compared exactly: a whole
+// value in any form (9007199254740993, 9.007199254740993e15,
+// 9007199254740993.0) becomes an int64 or uint64, anything else stays the
+// literal string. MySQL compares a string with a numeric column exactly for
+// such literals, while a float64 would be rounded to the nearest double and
+// match a different row.
 func exactNumber(n json.Number) any {
 	if i, err := n.Int64(); err == nil {
 		return i
@@ -464,8 +467,12 @@ func exactNumber(n json.Number) any {
 	if u, err := strconv.ParseUint(n.String(), 10, 64); err == nil {
 		return u
 	}
-	if f, err := n.Float64(); err == nil {
-		return f
+	if r, ok := new(big.Rat).SetString(n.String()); ok && r.IsInt() {
+		if num := r.Num(); num.IsInt64() {
+			return num.Int64()
+		} else if num.IsUint64() {
+			return num.Uint64()
+		}
 	}
 	return n.String()
 }

@@ -186,5 +186,8 @@ func TestExactNumber(t *testing.T) {
 	is.Equal(exactNumber("9007199254740993"), any(int64(9007199254740993)))
 	is.Equal(exactNumber("18446744073709551615"), any(uint64(18446744073709551615)))
 	is.Equal(exactNumber("-1"), any(int64(-1)))
-	is.Equal(exactNumber("1.5"), any(1.5))
+	is.Equal(exactNumber("9.007199254740993e15"), any(int64(9007199254740993)))
+	is.Equal(exactNumber("9007199254740993.0"), any(int64(9007199254740993)))
+	is.Equal(exactNumber("1.5"), any("1.5"))
+	is.Equal(exactNumber("1e400"), any("1e400"))
 }

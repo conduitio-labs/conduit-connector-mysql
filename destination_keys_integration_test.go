@@ -35,6 +35,9 @@ func TestDestination_Delete_LargeIntegerKeyIsExact(t *testing.T) {
 	for name, key := range map[string]opencdc.Data{
 		"structured key": opencdc.StructuredData{"id": int64(9007199254740993)},
 		"raw JSON key":   opencdc.RawData(`{"id":9007199254740993}`),
+		"raw exponent":   opencdc.RawData(`{"id":9.007199254740993e15}`),
+		"raw decimal":    opencdc.RawData(`{"id":9007199254740993.0}`),
+		"string":         opencdc.StructuredData{"id": "9007199254740993"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			ctx := testutils.TestContext(t)

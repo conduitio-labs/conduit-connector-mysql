@@ -16,6 +16,8 @@ package mysql
 
 import (
 	"context"
+	"errors"
+	"runtime"
 	"testing"
 
 	"github.com/conduitio/conduit-commons/opencdc"
@@ -102,6 +104,23 @@ func TestBatchRecords(t *testing.T) {
 		is.Equal(batches[2].table, "table1")
 	})
 
+	t.Run("error on an operation the destination does not handle", func(t *testing.T) {
+		is := is.New(t)
+
+		// Skipping the record would still count it as written.
+		_, err := batchRecords([]opencdc.Record{
+			testRec("table1", opencdc.OperationCreate),
+			testRec("table1", opencdc.Operation(0)),
+		})
+		is.True(errors.Is(err, ErrUnsupportedOperation))
+		var coded *Error
+		is.True(errors.As(err, &coded))
+		is.Equal(coded.Code, CodeUnsupportedOperation)
+
+		_, err = batchRecords([]opencdc.Record{testRec("table1", opencdc.Operation(0))})
+		is.True(errors.Is(err, ErrUnsupportedOperation))
+	})
+
 	t.Run("error when collection metadata is missing", func(t *testing.T) {
 		is := is.New(t)
 
@@ -109,4 +128,80 @@ func TestBatchRecords(t *testing.T) {
 		_, err := batchRecords([]opencdc.Record{rec})
 		is.True(err != nil)
 	})
+}
+
+func TestColumnRuns(t *testing.T) {
+	rec := func(after opencdc.Data) opencdc.Record {
+		return opencdc.Record{Operation: opencdc.OperationCreate, Payload: opencdc.Change{After: after}}
+	}
+
+	t.Run("consecutive records with the same fields share a run, order is kept", func(t *testing.T) {
+		is := is.New(t)
+		recs := []opencdc.Record{
+			rec(opencdc.StructuredData{"id": 1, "v": "a"}),
+			rec(opencdc.StructuredData{"v": "b", "id": 2}),
+			rec(opencdc.StructuredData{"id": 3, "v": "c", "extra": "x"}),
+			rec(opencdc.StructuredData{"id": 4, "v": "d"}),
+		}
+		runs, err := columnRuns(recs)
+		is.NoErr(err)
+		is.Equal(len(runs), 3)
+		is.Equal(runs[0].columns, []string{"id", "v"})
+		is.Equal(runs[1].columns, []string{"extra", "id", "v"})
+		is.Equal(runs[2].columns, []string{"id", "v"})
+		is.Equal(len(runs[0].payloads), 2)
+		var got []any
+		for _, r := range runs {
+			for _, p := range r.payloads {
+				got = append(got, p["id"])
+			}
+		}
+		is.Equal(got, []any{1, 2, 3, 4})
+	})
+
+	t.Run("raw payload is refused", func(t *testing.T) {
+		is := is.New(t)
+		_, err := columnRuns([]opencdc.Record{rec(opencdc.RawData(`{"id":1}`))})
+		is.True(errors.Is(err, ErrPayloadNotStructured))
+	})
+
+	t.Run("empty payload is refused", func(t *testing.T) {
+		is := is.New(t)
+		_, err := columnRuns([]opencdc.Record{rec(opencdc.StructuredData{})})
+		is.True(errors.Is(err, ErrPayloadEmpty))
+	})
+}
+
+func TestQuoteIdentifiers(t *testing.T) {
+	is := is.New(t)
+	is.Equal(quoteIdent("order"), "`order`")
+	is.Equal(quoteIdent("we`ird"), "`we``ird`")
+	is.Equal(quoteIdent("a`) DROP"), "`a``) DROP`")
+	is.Equal(quoteTable("t"), "`t`")
+	is.Equal(quoteTable("db.t"), "`db`.`t`")
+	is.Equal(quoteTable("db.t.x"), "`db`.`t.x`")
+}
+
+func TestExactNumber(t *testing.T) {
+	is := is.New(t)
+	is.Equal(exactNumber("9007199254740993"), any(int64(9007199254740993)))
+	is.Equal(exactNumber("18446744073709551615"), any(uint64(18446744073709551615)))
+	is.Equal(exactNumber("-1"), any(int64(-1)))
+	is.Equal(exactNumber("9.007199254740993e15"), any(int64(9007199254740993)))
+	is.Equal(exactNumber("9007199254740993.0"), any(int64(9007199254740993)))
+	is.Equal(exactNumber("1.5"), any("1.5"))
+	is.Equal(exactNumber("1e400"), any("1e400"))
+}
+
+// A JSON number with a huge exponent is not evaluated: big.Rat would build a
+// number with a million digits (about 400 KB and milliseconds per value).
+func TestExactNumber_HugeExponentIsCheap(t *testing.T) {
+	is := is.New(t)
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	got := exactNumber("1e1000000")
+	runtime.ReadMemStats(&after)
+	is.Equal(got, any("1e1000000"))
+	allocated := after.TotalAlloc - before.TotalAlloc
+	is.True(allocated < 64<<10) // bytes allocated to classify one huge literal
 }

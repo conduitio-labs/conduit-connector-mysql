@@ -137,35 +137,6 @@ func (t TableKeys) GetTables() []string {
 	return names
 }
 
-// TableKeyFetcher fetches primary keys from the database and caches them.
-type TableKeyFetcher struct {
-	database string
-	cache    TableKeys
-}
-
-func NewTableKeyFetcher(database string) *TableKeyFetcher {
-	return &TableKeyFetcher{
-		database: database,
-		cache:    make(TableKeys),
-	}
-}
-
-func (t *TableKeyFetcher) GetKeys(tx *sqlx.Tx, table string) (PrimaryKeys, error) {
-	keys, ok := t.cache[table]
-	if ok {
-		return keys, nil
-	}
-
-	keys, err := GetPrimaryKeys(tx, t.database, table)
-	if err != nil {
-		return nil, err
-	}
-
-	t.cache[table] = keys
-
-	return keys, nil
-}
-
 // keyQuerier allows us to select primary keys from both a sqlx.DB and an sqlx.Tx transaction.
 type keyQuerier interface {
 	Select(dest any, query string, args ...any) error

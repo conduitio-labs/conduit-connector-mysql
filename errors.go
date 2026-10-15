@@ -92,6 +92,10 @@ const (
 	// CodeTableNotFound: a delete record's collection names a table that does
 	// not exist.
 	CodeTableNotFound = "mysql.destination.table_not_found"
+
+	// CodeDuplicateColumn: a record has two fields that name the same column
+	// (column names are case-insensitive).
+	CodeDuplicateColumn = "mysql.destination.duplicate_column"
 )
 
 // Error is a user-facing configuration or state error with a stable code, the
@@ -182,3 +186,6 @@ var ErrKeyValueTypeMismatch = errors.New("record key value does not fit the key 
 
 // ErrTableNotFound is the sentinel for CodeTableNotFound.
 var ErrTableNotFound = errors.New("table not found")
+
+// ErrDuplicateColumn is the sentinel for CodeDuplicateColumn.
+var ErrDuplicateColumn = errors.New("two fields name the same column")

@@ -558,3 +558,125 @@ func TestDestination_Delete_TableNotFound(t *testing.T) {
 		is.True(errors.Is(err, ErrTableNotFound))
 	}
 }
+
+// MySQL column names are case-insensitive, but the unique-column lookup was
+// exact: {"ID":1.5,"v":"new"} skipped the key checks, became id 2 and
+// overwrote row 2. Fields are matched case-insensitively, and two fields that
+// name the same column are refused.
+func TestDestination_KeyColumnsAreCaseInsensitive(t *testing.T) {
+	ctx := testutils.TestContext(t)
+	is := is.New(t)
+	db := testutils.NewDB(t)
+	t.Cleanup(func() { db.Exec("DROP TABLE IF EXISTS dest_keycase") })
+
+	dest, cleanup := testDestination(ctx, is)
+	defer cleanup()
+
+	reset := func(t *testing.T) {
+		is := is.New(t)
+		is.NoErr(db.Exec("DROP TABLE IF EXISTS dest_keycase").Error)
+		is.NoErr(db.Exec("CREATE TABLE dest_keycase (id BIGINT PRIMARY KEY, v VARCHAR(10))").Error)
+		is.NoErr(db.Exec("INSERT INTO dest_keycase VALUES (2, 'orig')").Error)
+	}
+	values := func(t *testing.T) []string {
+		var v []string
+		is.New(t).NoErr(db.Raw("SELECT CONCAT(id, ':', v) FROM dest_keycase ORDER BY id").Scan(&v).Error)
+		return v
+	}
+
+	t.Run("upper-case key field is typed", func(t *testing.T) {
+		is := is.New(t)
+		reset(t)
+		_, err := dest.Write(ctx, []opencdc.Record{keysTestUpsert("dest_keycase", opencdc.StructuredData{"ID": 1.5, "v": "new"})})
+		is.True(errors.Is(err, ErrKeyValueTypeMismatch))
+		is.Equal(values(t), []string{"2:orig"})
+	})
+	t.Run("fields that fold to one column are refused", func(t *testing.T) {
+		is := is.New(t)
+		reset(t)
+		_, err := dest.Write(ctx, []opencdc.Record{keysTestUpsert("dest_keycase", opencdc.StructuredData{"id": 3, "ID": 2, "v": "new"})})
+		is.True(errors.Is(err, ErrDuplicateColumn))
+		is.Equal(values(t), []string{"2:orig"})
+
+		_, err = dest.Write(ctx, []opencdc.Record{keysTestDelete("dest_keycase", opencdc.StructuredData{"id": 3, "ID": 2})})
+		is.True(errors.Is(err, ErrDuplicateColumn))
+		is.Equal(values(t), []string{"2:orig"})
+	})
+	t.Run("upper-case key field is written and deleted", func(t *testing.T) {
+		is := is.New(t)
+		reset(t)
+		written, err := dest.Write(ctx, []opencdc.Record{keysTestUpsert("dest_keycase", opencdc.StructuredData{"ID": 2, "V": "new"})})
+		is.NoErr(err)
+		is.Equal(written, 1)
+		is.Equal(values(t), []string{"2:new"})
+		written, err = dest.Write(ctx, []opencdc.Record{keysTestDelete("dest_keycase", opencdc.StructuredData{"ID": 2})})
+		is.NoErr(err)
+		is.Equal(written, 1)
+		is.Equal(len(values(t)), 0)
+	})
+}
+
+// A null in a nullable UNIQUE column never conflicts, so a record carrying one
+// inserted another row on every redelivery. A null in a unique-key column is
+// refused unless the column is AUTO_INCREMENT, and so is a record that leaves
+// out every unique key. A record that leaves a UNIQUE column out while its
+// primary key identifies the row is written.
+func TestDestination_Upsert_RecordMustBeIdempotent(t *testing.T) {
+	ctx := testutils.TestContext(t)
+	is := is.New(t)
+	db := testutils.NewDB(t)
+	t.Cleanup(func() { db.Exec("DROP TABLE IF EXISTS dest_upidem") })
+
+	dest, cleanup := testDestination(ctx, is)
+	defer cleanup()
+
+	for name, tc := range map[string]struct {
+		ddl   string
+		after opencdc.StructuredData
+		ok    bool
+		rows  int64 // after writing the record twice
+	}{
+		"null in nullable unique, no primary key": {
+			"(email VARCHAR(20) UNIQUE, v VARCHAR(5))", opencdc.StructuredData{"email": nil, "v": "a"}, false, 0,
+		},
+		"absent nullable unique, no primary key": {
+			"(email VARCHAR(20) UNIQUE, v VARCHAR(5))", opencdc.StructuredData{"v": "a"}, false, 0,
+		},
+		"null unique column, primary key present": {
+			"(id BIGINT PRIMARY KEY, email VARCHAR(20) UNIQUE, v VARCHAR(5))", opencdc.StructuredData{"id": 1, "email": nil, "v": "a"}, false, 0,
+		},
+		"absent unique column, primary key present": {
+			"(id BIGINT PRIMARY KEY, email VARCHAR(20) UNIQUE, v VARCHAR(5))", opencdc.StructuredData{"id": 1, "v": "a"}, true, 1,
+		},
+		"composite unique key with a null part": {
+			"(a INT, b INT, v VARCHAR(5), UNIQUE KEY (a, b))", opencdc.StructuredData{"a": 1, "b": nil, "v": "x"}, false, 0,
+		},
+		"null auto-increment key": {
+			"(id BIGINT AUTO_INCREMENT PRIMARY KEY, v VARCHAR(5))", opencdc.StructuredData{"id": nil, "v": "a"}, true, 2,
+		},
+		"no unique key at all": {
+			"(id BIGINT, v VARCHAR(5))", opencdc.StructuredData{"id": 1, "v": "a"}, true, 2,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			is := is.New(t)
+			is.NoErr(db.Exec("DROP TABLE IF EXISTS dest_upidem").Error)
+			is.NoErr(db.Exec("CREATE TABLE dest_upidem " + tc.ddl).Error)
+
+			rec := keysTestUpsert("dest_upidem", tc.after)
+			for i := 0; i < 2; i++ { // the second write is a redelivery
+				written, err := dest.Write(ctx, []opencdc.Record{rec})
+				if tc.ok {
+					is.NoErr(err)
+					is.Equal(written, 1)
+				} else {
+					is.True(errors.Is(err, ErrKeyColumnMissing))
+					is.Equal(written, 0)
+				}
+			}
+			var n int64
+			is.NoErr(db.Raw("SELECT COUNT(*) FROM dest_upidem").Scan(&n).Error)
+			is.Equal(n, tc.rows)
+		})
+	}
+}

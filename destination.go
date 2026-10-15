@@ -17,6 +17,7 @@ package mysql
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -233,15 +234,24 @@ func (d *Destination) Teardown(_ context.Context) error {
 // Invariant 6: the values of columns in a unique index (the primary key and
 // UNIQUE keys) decide which row ON DUPLICATE KEY UPDATE overwrites, so they go
 // through the same checks as delete keys (typeKeyValue). MySQL converts on
-// assignment: {"id":1.5} into a BIGINT key became 2 and overwrote row 2. A null
-// value in such a column is passed on (an AUTO_INCREMENT key generates a new
-// id; other keys reject it).
+// assignment: {"id":1.5} into a BIGINT key became 2 and overwrote row 2.
+// Column names are matched case-insensitively, as MySQL does ("ID" is column
+// id).
+//
+// A record must also be idempotent under redelivery (at-least-once). A null
+// value in a unique-key column fails with key_column_missing, unless the column
+// is AUTO_INCREMENT: a null never conflicts, so on a nullable UNIQUE column
+// every redelivery inserted another row. A record that leaves out every column
+// of every unique key fails the same way. Allowed and documented: a null or
+// absent AUTO_INCREMENT primary key (a new id per write), a table with no
+// unique index, and a table with a functional unique index, whose expression
+// the destination cannot evaluate.
 func (d *Destination) upsertRecords(ctx context.Context, tx *sqlx.Tx, table string, recs []opencdc.Record) error {
 	runs, err := columnRuns(recs)
 	if err != nil {
 		return err
 	}
-	uniqueCols, err := d.uniqueColumns(ctx, tx, table)
+	uniq, err := d.uniqueIndexes(ctx, tx, table)
 	if err != nil {
 		return err
 	}
@@ -253,12 +263,23 @@ func (d *Destination) upsertRecords(ctx context.Context, tx *sqlx.Tx, table stri
 		}
 		insert := squirrel.Insert(quoteTable(table)).Columns(quoted...)
 		for _, payload := range run.payloads {
+			if err := uniq.checkIdempotent(table, payload); err != nil {
+				return err
+			}
 			values := make([]any, 0, len(run.columns))
 			for _, col := range run.columns {
 				v := payload[col]
-				if kc, ok := uniqueCols[col]; ok && v != nil {
-					if v, err = typeKeyValue(kc, v, ".Payload.After"); err != nil {
-						return err
+				if kc, ok := uniq.cols[strings.ToLower(col)]; ok {
+					if v == nil && !kc.AutoInc {
+						// A null never conflicts, so it cannot identify the row.
+						return newError(ErrKeyColumnMissing, CodeKeyColumnMissing, ".Payload.After",
+							"send a non-null value for every unique-key column, or drop the field so the column default applies",
+							"the record has a null value for the unique-key column %q of table %q", col, table)
+					}
+					if v != nil {
+						if v, err = typeKeyValue(kc, v, ".Payload.After"); err != nil {
+							return err
+						}
 					}
 				}
 				values = append(values, v)
@@ -348,7 +369,16 @@ func columnRuns(recs []opencdc.Record) ([]upsertRun, error) {
 		}
 
 		columns := make([]string, 0, len(payload))
+		folded := make(map[string]string, len(payload))
 		for col := range payload {
+			// MySQL column names are case-insensitive: "id" and "ID" are one
+			// column, and which value lands is not up to the record.
+			if other, dup := folded[strings.ToLower(col)]; dup {
+				return nil, newError(ErrDuplicateColumn, CodeDuplicateColumn, ".Payload.After",
+					"send each column once; MySQL column names are case-insensitive",
+					"record %q has the fields %q and %q, which name the same column", keyString(rec), other, col)
+			}
+			folded[strings.ToLower(col)] = col
 			columns = append(columns, col)
 		}
 		slices.Sort(columns)
@@ -433,6 +463,7 @@ type keyColumn struct {
 	Name       string `db:"COLUMN_NAME"`
 	DataType   string `db:"DATA_TYPE"`   // e.g. bigint, varchar
 	ColumnType string `db:"COLUMN_TYPE"` // e.g. bigint unsigned, varchar(20)
+	AutoInc    bool   `db:"-"`           // AUTO_INCREMENT; set by uniqueIndexes only
 }
 
 // primaryKeyColumns returns the primary-key columns of table in key order. A
@@ -491,7 +522,12 @@ func parseRecordKey(col keyColumn, keyVal opencdc.Data) (any, error) {
 		}
 	}
 
-	val, ok := fields[col.Name]
+	val, ok, dup := foldLookup(fields, col.Name)
+	if dup != "" {
+		return nil, newError(ErrDuplicateColumn, CodeDuplicateColumn, ".Key",
+			"send each key column once; MySQL column names are case-insensitive",
+			"the record key has the fields %q and %q, which both name the column %q", dup, col.Name, col.Name)
+	}
 	if !ok || val == nil {
 		// A null value never matches a primary-key column, so the delete
 		// would do nothing and still be acked.
@@ -596,25 +632,100 @@ func bitWidth(columnType string) uint {
 	return uint(m)
 }
 
-// uniqueColumns returns the columns of every unique index of table (the
-// primary key and UNIQUE keys) with their types, read in this transaction.
-func (d *Destination) uniqueColumns(ctx context.Context, tx *sqlx.Tx, table string) (map[string]keyColumn, error) {
+// uniqueInfo describes the unique indexes of a table (the primary key and
+// UNIQUE keys). Column names are lower case: MySQL column names are
+// case-insensitive.
+type uniqueInfo struct {
+	cols       map[string]keyColumn // every plain column of a unique index
+	indexes    [][]string           // the plain columns of each index without a functional part
+	functional bool                 // some unique index has a functional key part
+	autoIncPK  string               // the primary key, if it is one AUTO_INCREMENT column
+}
+
+// uniqueIndexes reads the unique indexes of table in this transaction.
+func (d *Destination) uniqueIndexes(ctx context.Context, tx *sqlx.Tx, table string) (*uniqueInfo, error) {
 	database, name := d.splitTable(table)
-	var cols []keyColumn
-	if err := tx.SelectContext(ctx, &cols, `
-		SELECT DISTINCT s.COLUMN_NAME, c.DATA_TYPE, c.COLUMN_TYPE
+	var parts []struct {
+		Index      string         `db:"INDEX_NAME"`
+		Column     sql.NullString `db:"COLUMN_NAME"` // NULL for a functional key part
+		DataType   string         `db:"DATA_TYPE"`
+		ColumnType string         `db:"COLUMN_TYPE"`
+		Extra      string         `db:"EXTRA"`
+	}
+	if err := tx.SelectContext(ctx, &parts, `
+		SELECT s.INDEX_NAME, s.COLUMN_NAME,
+			COALESCE(c.DATA_TYPE, '') AS DATA_TYPE, COALESCE(c.COLUMN_TYPE, '') AS COLUMN_TYPE, COALESCE(c.EXTRA, '') AS EXTRA
 		FROM information_schema.statistics s
-		JOIN information_schema.columns c
+		LEFT JOIN information_schema.columns c
 			ON c.TABLE_SCHEMA = s.TABLE_SCHEMA AND c.TABLE_NAME = s.TABLE_NAME AND c.COLUMN_NAME = s.COLUMN_NAME
-		WHERE s.NON_UNIQUE = 0 AND s.TABLE_SCHEMA = ? AND s.TABLE_NAME = ?`, database, name); err != nil {
-		return nil, fmt.Errorf("failed to get the unique-key columns of table %s: %w", table, err)
+		WHERE s.NON_UNIQUE = 0 AND s.TABLE_SCHEMA = ? AND s.TABLE_NAME = ?
+		ORDER BY s.INDEX_NAME, s.SEQ_IN_INDEX`, database, name); err != nil {
+		return nil, fmt.Errorf("failed to get the unique indexes of table %s: %w", table, err)
 	}
-	out := make(map[string]keyColumn, len(cols))
-	for _, c := range cols {
-		c.DataType, c.ColumnType = strings.ToLower(c.DataType), strings.ToLower(c.ColumnType)
-		out[c.Name] = c
+
+	info := &uniqueInfo{cols: make(map[string]keyColumn)}
+	byIndex := map[string][]string{}
+	functional := map[string]bool{}
+	var order []string
+	for _, p := range parts {
+		if _, seen := byIndex[p.Index]; !seen && !functional[p.Index] {
+			order = append(order, p.Index)
+		}
+		if !p.Column.Valid {
+			functional[p.Index] = true
+			info.functional = true
+			continue
+		}
+		col := strings.ToLower(p.Column.String)
+		info.cols[col] = keyColumn{
+			Name: p.Column.String, DataType: strings.ToLower(p.DataType), ColumnType: strings.ToLower(p.ColumnType),
+			AutoInc: strings.Contains(strings.ToLower(p.Extra), "auto_increment"),
+		}
+		byIndex[p.Index] = append(byIndex[p.Index], col)
+		if p.Index == "PRIMARY" && strings.Contains(strings.ToLower(p.Extra), "auto_increment") {
+			info.autoIncPK = col
+		}
 	}
-	return out, nil
+	for _, idx := range order {
+		if !functional[idx] {
+			info.indexes = append(info.indexes, byIndex[idx])
+		}
+	}
+	if pk := byIndex["PRIMARY"]; len(pk) != 1 {
+		info.autoIncPK = "" // only a single-column AUTO_INCREMENT key generates the row's identity
+	}
+	return info, nil
+}
+
+// checkIdempotent fails if no unique index is fully non-null in payload, so a
+// redelivery of the record would insert another row. See upsertRecords for the
+// allowed cases.
+func (u *uniqueInfo) checkIdempotent(table string, payload opencdc.StructuredData) error {
+	if len(u.indexes) == 0 || u.functional {
+		return nil // no unique index (appends, documented) or one the destination cannot evaluate
+	}
+	values := make(map[string]any, len(payload))
+	for field, v := range payload {
+		values[strings.ToLower(field)] = v
+	}
+	for _, idx := range u.indexes {
+		covered := true
+		for _, col := range idx {
+			if v, ok := values[col]; !ok || v == nil {
+				covered = false
+				break
+			}
+		}
+		if covered {
+			return nil
+		}
+	}
+	if u.autoIncPK != "" && values[u.autoIncPK] == nil {
+		return nil // a new AUTO_INCREMENT id per write (appends on redelivery, documented)
+	}
+	return newError(ErrKeyColumnMissing, CodeKeyColumnMissing, ".Payload.After",
+		"give every record a non-null value for all columns of at least one unique key (for example the primary key)",
+		"the record has no non-null value for all columns of any unique key of table %q, so every redelivery would insert another row", table)
 }
 
 // tableExists reports whether table exists, looked up like primaryKeyColumns.
@@ -636,6 +747,22 @@ func (d *Destination) splitTable(table string) (string, string) {
 		return schema, rest
 	}
 	return d.config.MysqlCfg().DBName, table
+}
+
+// foldLookup returns the field of fields that names column, compared
+// case-insensitively as MySQL compares column names. dup is set when more than
+// one field names the column.
+func foldLookup(fields map[string]any, column string) (val any, ok bool, dup string) {
+	for name, v := range fields {
+		if !strings.EqualFold(name, column) {
+			continue
+		}
+		if ok {
+			return nil, false, name
+		}
+		val, ok = v, true
+	}
+	return val, ok, ""
 }
 
 // stringTypes are the DATA_TYPE values of columns compared as strings. ENUM and

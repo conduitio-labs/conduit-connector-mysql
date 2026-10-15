@@ -235,18 +235,47 @@ specification:
       running may produce records that do not match the schema registered earlier, or an error.
       Stop the pipeline, change the schema, and verify the result before resuming.
     - **Tables must be orderable for the snapshot.** See "Tables without a primary key".
-    - **Type mapping has known gaps.** `DECIMAL` and `NUMERIC` map to Avro `double` and can lose
-      precision beyond what a 64-bit float holds. SQL `NULL` is delivered as the column type's
-      zero value (`0`, `""`), so it cannot be told apart from a real zero. Date and time types are
-      delivered as strings. A full type-mapping design is pending; do not rely on exact fidelity
-      for these types yet.
-    - **`BIGINT UNSIGNED` above 2^63-1 stops the source.** The column maps to Avro `long`, which
-      cannot hold values above 9223372036854775807. When the snapshot or CDC reads such a value,
-      the source stops with `mysql.types.unsigned_overflow`, naming the table, column and value.
-      No record is emitted for that row and the position does not move past it. Exclude the
-      table, or bring the values into range, and restart. Versions before this one emitted a
-      wrong number in the snapshot (18446744073709551615 came out as 3474867090068222261) and
-      failed with an encoder error in CDC.
+    - **Type mapping depends on `types.mode`.** See "Type modes" below. In `legacy` mode (the
+      default for pipelines that do not set it), SQL `NULL` is delivered as the column type's zero
+      value and `DECIMAL`/`NUMERIC` as a `double`, which loses precision. Date and time types are
+      delivered as strings in both modes.
+    - **`BIGINT UNSIGNED` above 2^63-1 stops the source** unless `types.bigintUnsigned=string`.
+      The column maps to Avro `long`, which cannot hold values above 9223372036854775807. When the
+      snapshot or CDC reads such a value, the source stops with `mysql.types.unsigned_overflow`
+      (or `mysql.types.unsigned_overflow_legacy_snapshot`), naming the table, column and value and
+      a remedy that the next start accepts. No record is emitted for that row and the position does
+      not move past it. Versions before this one emitted a wrong number in the snapshot
+      (18446744073709551615 came out as 3474867090068222261) and failed with an encoder error in
+      CDC.
+
+    ### Type modes
+
+    **The Conduit Certified configuration is `types.mode=strict`.** The certification (acceptance
+    suite v2 and the SIGKILL chaos tests) runs in strict mode; `legacy` mode is not covered by it.
+
+    | Column | `strict` | `legacy` (deprecated) |
+    | --- | --- | --- |
+    | nullable column | `["null", T]` union, default `null`; `NULL` is null | `T`; `NULL` is the zero value |
+    | `NOT NULL` column holding `NULL` | stops with `mysql.types.null_in_not_null` | the zero value |
+    | `DECIMAL`, `NUMERIC` | `string` with the exact text (`types.decimal=string`, default), or `double` | `double` |
+    | `BIGINT UNSIGNED` | `long`, stops above 2^63-1 (`types.bigintUnsigned=long`, default), or `string` | `long`, stops above 2^63-1 |
+    | a value that does not fit its type | stops with `mysql.types.value_not_representable` | passed on; may fail in the encoder |
+
+    Strict schemas are registered with field defaults and a `mysql.type` property (for example
+    `decimal(30,10)`) on exactly mapped columns. Strict mode also refuses to start when the server's
+    `binlog_format` is not `ROW`, `binlog_row_image` is not `FULL`, or `binlog_row_value_options` is
+    not empty; legacy mode logs a warning. The Avro `decimal` logical type is not available yet.
+
+    The type configuration is recorded in every position written in strict mode (envelope version
+    3), and a start whose settings differ from it is refused: with
+    `mysql.types.switch_in_snapshot` while the pipeline is still in its snapshot (finish it, or
+    create a new connector instance), and with `mysql.types.stamp_mismatch` in CDC until
+    `types.acceptChangeFrom` names the configuration being replaced (`legacy`, or for example
+    `strict/string/long`). Unset settings follow the position. To move a pipeline from legacy to
+    strict: let it reach CDC, make sure the destination accepts the new schema, set
+    `types.mode=strict` and `types.acceptChangeFrom=legacy`, and remove the token once the log says
+    a record under the new configuration was acknowledged. A version that predates strict mode
+    refuses strict positions instead of misreading them.
 
     ## Requirements and compatibility
 
@@ -375,6 +404,41 @@ specification:
         description: |-
           Allows to force using a custom column to sort the snapshot. The column must be
           NOT NULL and the only column of a primary key or unique index.
+        type: string
+        default: ""
+        validations: []
+      - name: types.acceptChangeFrom
+        description: |-
+          Confirms a change of the type configuration of a pipeline that is in CDC: the name of the
+          configuration being replaced, as the refusal names it (for example `legacy` or
+          `strict/string/long`). Remove it once the log says a record under the new configuration was
+          acknowledged.
+        type: string
+        default: ""
+        validations: []
+      - name: types.bigintUnsigned
+        description: |-
+          BIGINT UNSIGNED in strict mode: `long` (the default; a value above 9223372036854775807 stops
+          the source) or `string` (the full range, as decimal text). Unset: the value the position was
+          written with, else `long`.
+        type: string
+        default: ""
+        validations: []
+      - name: types.decimal
+        description: |-
+          DECIMAL and NUMERIC in strict mode: `string` (the exact text, the default) or `double`
+          (lossy). Unset: the value the position was written with, else `string`.
+        type: string
+        default: ""
+        validations: []
+      - name: types.mode
+        description: |-
+          How column values become record values. `strict`: SQL NULL is null (nullable columns are
+          Avro unions with null), DECIMAL is exact, and a value that does not fit its schema type stops
+          the source; this is the certified configuration. `legacy`: the shapes of earlier versions
+          (NULL as the zero value, DECIMAL as double), deprecated. Unset: the mode the position was
+          written with, or `legacy` with a warning for a pipeline without a position. Changing it for a
+          pipeline that has a position needs `types.acceptChangeFrom`.
         type: string
         default: ""
         validations: []

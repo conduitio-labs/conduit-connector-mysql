@@ -63,6 +63,29 @@ type SourceConfig struct {
 	// Controls whether the snapshot is done.
 	SnapshotEnabled bool `json:"snapshot.enabled" default:"true"`
 
+	// How column values become record values. `strict`: SQL NULL is null (nullable columns are
+	// Avro unions with null), DECIMAL is exact, and a value that does not fit its schema type stops
+	// the source; this is the certified configuration. `legacy`: the shapes of earlier versions
+	// (NULL as the zero value, DECIMAL as double), deprecated. Unset: the mode the position was
+	// written with, or `legacy` with a warning for a pipeline without a position. Changing it for a
+	// pipeline that has a position needs `types.acceptChangeFrom`.
+	TypesMode string `json:"types.mode"`
+
+	// DECIMAL and NUMERIC in strict mode: `string` (the exact text, the default) or `double`
+	// (lossy). Unset: the value the position was written with, else `string`.
+	TypesDecimal string `json:"types.decimal"`
+
+	// BIGINT UNSIGNED in strict mode: `long` (the default; a value above 9223372036854775807 stops
+	// the source) or `string` (the full range, as decimal text). Unset: the value the position was
+	// written with, else `long`.
+	TypesBigintUnsigned string `json:"types.bigintUnsigned"`
+
+	// Confirms a change of the type configuration of a pipeline that is in CDC: the name of the
+	// configuration being replaced, as the refusal names it (for example `legacy` or
+	// `strict/string/long`). Remove it once the log says a record under the new configuration was
+	// acknowledged.
+	TypesAcceptChangeFrom string `json:"types.acceptChangeFrom"`
+
 	// rawTables holds the table rules as configured, before Open resolves
 	// Tables to concrete table names.
 	rawTables []string
@@ -74,7 +97,20 @@ func (s *SourceConfig) MysqlCfg() *mysql.Config {
 	return s.mysqlCfg
 }
 
+func (s *SourceConfig) explicitTypes() explicitTypes {
+	return explicitTypes{
+		mode:             s.TypesMode,
+		decimal:          s.TypesDecimal,
+		bigintUnsigned:   s.TypesBigintUnsigned,
+		acceptChangeFrom: s.TypesAcceptChangeFrom,
+	}
+}
+
 func (s *SourceConfig) Validate(context.Context) error {
+	if err := s.explicitTypes().validate(); err != nil {
+		return err
+	}
+
 	if s.UnsafeSnapshot {
 		return newError(ErrUnsafeSnapshotRemoved, CodeUnsafeSnapshotRemoved, "snapshot.unsafe",
 			"remove snapshot.unsafe from the configuration (this applies to pipelines already in CDC too), then for each "+
@@ -114,6 +150,7 @@ type Source struct {
 	config   SourceConfig
 	db       *sqlx.DB
 	iterator common.Iterator
+	types    *typeSettings
 }
 
 const (
@@ -196,6 +233,11 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 		return fmt.Errorf("failed to get table keys: %w", err)
 	}
 
+	s.types, err = s.openTypes(ctx, sdkPos != nil, pos)
+	if err != nil {
+		return err
+	}
+
 	if snapshotRuns {
 		if err := s.validateSortingColumns(); err != nil {
 			return err
@@ -238,6 +280,7 @@ func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) 
 		// snapshot completed in an earlier run; never run it again.
 		snapshotEnabled: s.config.SnapshotEnabled && plan.mode != startModeCDCResume,
 		coverage:        coverage.carry,
+		types:           s.types,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create snapshot iterator: %w", err)

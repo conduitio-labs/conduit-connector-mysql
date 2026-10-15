@@ -55,6 +55,8 @@ type harness struct {
 	table string
 	db    *sql.DB
 	run   int
+	// types is passed to children as MYSQL_CHAOS_TYPES.
+	types string
 }
 
 type childProc struct {
@@ -81,6 +83,7 @@ func (h *harness) start(park string) *childProc {
 		envRun + "=" + strconv.Itoa(h.run),
 		envTable + "=" + h.table,
 		envPark + "=" + park,
+		envTypes + "=" + h.types,
 		envDSN + "=" + testDSN(),
 	}
 	var out bytes.Buffer
@@ -141,9 +144,9 @@ func (h *harness) kill(c *childProc) {
 	h.t.Logf("run %d: killed (SIGKILL)", h.run)
 }
 
-func (h *harness) exec(q string, args ...any) {
+func (h *harness) exec(q string) {
 	h.t.Helper()
-	if _, err := h.db.ExecContext(context.Background(), q, args...); err != nil {
+	if _, err := h.db.ExecContext(context.Background(), q); err != nil {
 		h.t.Fatalf("%s: %v", q, err)
 	}
 }
@@ -220,7 +223,8 @@ func TestSIGKILL_ResumeWithoutLossOrRedelivery(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	h := &harness{t: t, dir: dir, table: "chaos_sigkill", db: db}
+	// The certified configuration (strict type mode).
+	h := &harness{t: t, dir: dir, table: "chaos_sigkill", db: db, types: "types.mode=strict"}
 	h.exec("DROP TABLE IF EXISTS " + h.table)
 	h.exec("CREATE TABLE " + h.table + " (id BIGINT NOT NULL PRIMARY KEY, v VARCHAR(32) NOT NULL)")
 	t.Cleanup(func() { _, _ = db.ExecContext(context.Background(), "DROP TABLE IF EXISTS "+h.table) })

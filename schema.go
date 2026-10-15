@@ -17,6 +17,7 @@ package mysql
 import (
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"math"
 	"regexp"
@@ -38,11 +39,14 @@ type schemaMapper struct {
 	colTypes map[string]*avroNamedType
 	// table is the table the schema describes, for error messages.
 	table string
+	// types is the source's type configuration; nil is legacy.
+	types *typeSettings
 }
 
-func newSchemaMapper() *schemaMapper {
+func newSchemaMapper(types *typeSettings) *schemaMapper {
 	return &schemaMapper{
 		colTypes: make(map[string]*avroNamedType),
+		types:    types,
 	}
 }
 
@@ -108,6 +112,60 @@ type avroNamedType struct {
 	// dbType is the driver's type name for the column, lowercase and without
 	// "unsigned". Empty when the column did not come from a query.
 	dbType string
+
+	// strict is set in types.mode=strict, from information_schema; nil in
+	// legacy mode.
+	strict *strictColumn
+}
+
+// strictColumn is how strict mode maps a column. See ConduitIO/conduit
+// docs/design-documents/20261012-mysql-type-semantics.md.
+type strictColumn struct {
+	// nullable makes the field the union ["null", T] with default null. Key
+	// columns are never nullable.
+	nullable bool
+	// columnType is information_schema COLUMN_TYPE, written to the field's
+	// "mysql.type" property for exactly mapped DECIMAL and unsigned columns.
+	columnType string
+	// decimalString: DECIMAL/NUMERIC as its exact text (types.decimal=string).
+	decimalString bool
+	// unsignedString: BIGINT UNSIGNED as decimal text (types.bigintUnsigned=string).
+	unsignedString bool
+}
+
+// refineStrict returns copies of cols mapped for strict mode. In legacy mode
+// it returns cols unchanged.
+func (s *schemaMapper) refineStrict(ctx context.Context, table string, cols []*avroNamedType, key bool) ([]*avroNamedType, error) {
+	if !s.types.strict() {
+		return cols, nil
+	}
+	names := make([]string, len(cols))
+	for i, c := range cols {
+		names[i] = c.Name
+	}
+	infos, err := s.types.columns.lookup(ctx, table, names)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*avroNamedType, len(cols))
+	for i, c := range cols {
+		refined := *c
+		info := infos[c.Name]
+		st := &strictColumn{nullable: info.nullable && !key, columnType: info.columnType}
+		switch {
+		case info.isDecimal() && s.types.config.decimal == typesDecimalString:
+			refined.Type = avro.String
+			st.decimalString = true
+		case info.isDecimal():
+			refined.Type = avro.Double
+		case info.isUnsignedBigint() && s.types.config.bigintUnsigned == typesUnsignedString:
+			refined.Type = avro.String
+			st.unsignedString = true
+		}
+		refined.strict = st
+		out[i] = &refined
+	}
+	return out, nil
 }
 
 func sqlxRowsToAvroCol(rows *sqlx.Rows) ([]*avroNamedType, error) {
@@ -207,6 +265,7 @@ func mysqlSchemaToAvroCol(tableCol mysqlschema.TableColumn) (*avroNamedType, err
 }
 
 func colTypeToAvroField(avroCol *avroNamedType) (*avro.Field, error) {
+	var typ avro.Schema
 	if avroCol.isBit {
 		// Current limitations in the mysql driver that we use don't allow use
 		// to get the N from BIT(N) mysql columns. To track support for this
@@ -217,23 +276,38 @@ func colTypeToAvroField(avroCol *avroNamedType) (*avro.Field, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to create fixed schema for bit column %s: %w", avroCol.Name, err)
 		}
+		typ = fixed
+	} else {
+		typ = avro.NewPrimitiveSchema(avroCol.Type, nil)
+	}
 
-		field, err := avro.NewField(avroCol.Name, fixed)
+	if avroCol.strict == nil {
+		field, err := avro.NewField(avroCol.Name, typ)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create avro field for bit column %s: %w", avroCol.Name, err)
+			return nil, fmt.Errorf("failed to create avro field for column %s: %w", avroCol.Name, err)
 		}
-
 		return field, nil
 	}
 
-	primitive := avro.NewPrimitiveSchema(avroCol.Type, nil)
-
-	nameField, err := avro.NewField(avroCol.Name, primitive)
+	var opts []avro.SchemaOption
+	if avroCol.strict.decimalString || avroCol.strict.unsignedString {
+		// Advisory: precision and scale survive in the registry, but a
+		// processor that re-encodes the record drops properties.
+		opts = append(opts, avro.WithProps(map[string]any{"mysql.type": avroCol.strict.columnType}))
+	}
+	if avroCol.strict.nullable {
+		union, err := avro.NewUnionSchema([]avro.Schema{avro.NewPrimitiveSchema(avro.Null, nil), typ})
+		if err != nil {
+			return nil, fmt.Errorf("failed to create nullable type for column %s: %w", avroCol.Name, err)
+		}
+		typ = union
+		opts = append(opts, avro.WithDefault(nil))
+	}
+	field, err := avro.NewField(avroCol.Name, typ, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create avro field for column %s: %w", avroCol.Name, err)
 	}
-
-	return nameField, nil
+	return field, nil
 }
 
 type schemaSubjectVersion struct {
@@ -245,6 +319,13 @@ func (s *schemaMapper) createPayloadSchema(
 	ctx context.Context, schemaName string, colTypes []*avroNamedType,
 ) (*schemaSubjectVersion, error) {
 	s.table = schemaName
+	if s.schema != nil {
+		return s.schema, nil
+	}
+	colTypes, err := s.refineStrict(ctx, schemaName, colTypes, false)
+	if err != nil {
+		return nil, err
+	}
 	return s.createSchema(ctx, schemaName+"_payload", colTypes)
 }
 
@@ -252,6 +333,13 @@ func (s *schemaMapper) createKeySchema(
 	ctx context.Context, schemaName string, colTypes []*avroNamedType,
 ) (*schemaSubjectVersion, error) {
 	s.table = schemaName
+	if s.schema != nil {
+		return s.schema, nil
+	}
+	colTypes, err := s.refineStrict(ctx, schemaName, colTypes, true)
+	if err != nil {
+		return nil, err
+	}
 	return s.createSchema(ctx, schemaName+"_key", colTypes)
 }
 
@@ -292,8 +380,17 @@ func (s *schemaMapper) createSchema(
 		s.colTypes[colType.Name] = colType
 	}
 
-	schema, err := schema.Create(
-		ctx, schema.TypeAvro, recordSchema.Name(), []byte(recordSchema.String()))
+	// Legacy registers the canonical form, as earlier versions did, so an
+	// upgrade does not register a new schema version. Strict registers the
+	// full form: the canonical one drops field defaults and properties.
+	text := []byte(recordSchema.String())
+	if s.types.strict() {
+		if text, err = json.Marshal(recordSchema); err != nil {
+			return nil, fmt.Errorf("failed to encode payload schema: %w", err)
+		}
+	}
+
+	schema, err := schema.Create(ctx, schema.TypeAvro, recordSchema.Name(), text)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create payload schema: %w", err)
 	}
@@ -313,6 +410,91 @@ func (s *schemaMapper) createSchema(
 // It returns an error, and no value, for a value the column's schema type
 // cannot hold (see CodeUnsignedOverflow). The caller must not emit the record.
 func (s *schemaMapper) formatValue(ctx context.Context, column string, value any) (any, error) {
+	if t, ok := s.colTypes[column]; ok && t.strict != nil {
+		return s.formatStrict(ctx, column, t, value)
+	}
+	return s.formatLegacy(ctx, column, value)
+}
+
+// formatStrict formats a value in strict mode.
+//
+// Invariant 6: a value is emitted exactly or the source stops with a coded
+// error; NULL is null, DECIMAL text is kept, nothing is coerced to a zero
+// value or wrapped.
+func (s *schemaMapper) formatStrict(ctx context.Context, column string, t *avroNamedType, value any) (any, error) {
+	if value == nil {
+		if t.strict.nullable {
+			return nil, nil //nolint:nilnil // a SQL NULL in a nullable column is a nil value
+		}
+		return nil, newError(ErrNullInNotNull, CodeNullInNotNull, "tables",
+			"check the column definition, and that every writer logs full row images (binlog_row_image=FULL)",
+			"column %s.%s is NOT NULL (or part of the key) but a NULL arrived; it was not emitted as a zero value",
+			s.table, column)
+	}
+	notRepresentable := func(why string) error {
+		return newError(ErrValueNotRepresentable, CodeValueNotRepresentable, "tables",
+			"exclude the table, or report the column type and value if the column type is supported",
+			"column %s.%s (%s): %s; the source stopped instead of coercing it", s.table, column, t.strict.columnType, why)
+	}
+	switch {
+	case t.strict.decimalString:
+		switch v := value.(type) {
+		case []byte:
+			return string(v), nil
+		case string:
+			return v, nil
+		}
+		return nil, notRepresentable(fmt.Sprintf("unexpected %T for DECIMAL text", value))
+	case t.strict.unsignedString:
+		switch v := value.(type) {
+		case int64:
+			if v < 0 {
+				return nil, notRepresentable("negative value for BIGINT UNSIGNED")
+			}
+			return strconv.FormatInt(v, 10), nil
+		case uint64:
+			return strconv.FormatUint(v, 10), nil
+		case []byte, string:
+			// []byte from the driver; string when an already formatted value
+			// is formatted again (CDC keys are built from the payload).
+			text := fmt.Sprint(v)
+			if b, ok := v.([]byte); ok {
+				text = string(b)
+			}
+			if _, err := strconv.ParseUint(text, 10, 64); err != nil {
+				return nil, notRepresentable(fmt.Sprintf("BIGINT UNSIGNED text %q does not parse", text))
+			}
+			return text, nil
+		}
+		return nil, notRepresentable(fmt.Sprintf("unexpected %T for BIGINT UNSIGNED", value))
+	}
+
+	out, err := s.formatLegacy(ctx, column, value)
+	if err != nil {
+		return nil, err
+	}
+	// The legacy formatting passes some values on unconverted (out of range,
+	// unparseable); in strict mode that is a halt, not an encoder error later.
+	switch t.Type { //nolint:exhaustive // only these branches can pass a value on unconverted
+	case avro.Int:
+		if _, ok := out.(int32); !ok {
+			return nil, notRepresentable(fmt.Sprintf("%v does not fit an Avro int", value))
+		}
+	case avro.Long:
+		if _, ok := out.(int64); !ok {
+			return nil, notRepresentable(fmt.Sprintf("%v does not fit an Avro long", value))
+		}
+	case avro.Double:
+		if _, ok := out.(float64); !ok {
+			return nil, notRepresentable(fmt.Sprintf("%v does not parse as a double", value))
+		}
+	}
+	return out, nil
+}
+
+// formatLegacy is the formatting of earlier versions, used as is in legacy
+// mode and for non-null values of the types strict mode does not change.
+func (s *schemaMapper) formatLegacy(ctx context.Context, column string, value any) (any, error) {
 	t, found := s.colTypes[column]
 	if !found {
 		// In snapshot mode, this should never happen.
@@ -487,12 +669,7 @@ func (s *schemaMapper) unsignedToLong(column string, v uint64) (any, error) {
 	if v <= math.MaxInt64 {
 		return int64(v), nil
 	}
-	return nil, newError(ErrUnsignedOverflow, CodeUnsignedOverflow, "tables",
-		"exclude the table from `tables` (for example \"*,-^"+s.table+"$\") or bring the column's values to "+
-			"9223372036854775807 or below, then restart. Lossless handling of the full BIGINT UNSIGNED range is "+
-			"tracked in ConduitIO/conduit-connector-mysql#86",
-		"column %s.%s holds %d, which is above the largest value its schema type (Avro long) can hold "+
-			"(9223372036854775807); the source stopped instead of emitting a wrong value", s.table, column, v)
+	return nil, s.types.unsignedOverflowError(s.table, column, v)
 }
 
 func defaultValueForType(t avro.Type) any {

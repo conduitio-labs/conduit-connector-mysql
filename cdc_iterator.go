@@ -68,6 +68,9 @@ type cdcIteratorConfig struct {
 	// coverage is stamped on every CDC record's position; see
 	// common.TableCoverage.
 	coverage *common.TableCoverage
+
+	// types is the resolved type configuration; nil is legacy.
+	types *typeSettings
 }
 
 func newCdcIterator(ctx context.Context, config cdcIteratorConfig) (*cdcIterator, error) {
@@ -122,6 +125,7 @@ func (c *cdcIterator) start(ctx context.Context) error {
 		c.config.tableKeys,
 		startPosition,
 		c.config.coverage,
+		c.config.types,
 	)
 
 	// Set the handler before the goroutine starts: canal.Close reads it, so a
@@ -323,6 +327,7 @@ type cdcEventHandler struct {
 
 	tablePrimaryKeys common.TableKeys
 	coverage         *common.TableCoverage
+	types            *typeSettings
 
 	onRowsChange onRowChangeFn
 }
@@ -335,9 +340,11 @@ func newCdcEventHandler(
 	tablesPrimaryKeys common.TableKeys,
 	startPosition common.CdcPosition,
 	coverage *common.TableCoverage,
+	types *typeSettings,
 ) *cdcEventHandler {
 	h := &cdcEventHandler{
 		coverage:         coverage,
+		types:            types,
 		canal:            canal,
 		canalDoneC:       canalDoneC,
 		parsedRecordsC:   parsedRecordsC,
@@ -438,8 +445,8 @@ func (h *cdcEventHandler) buildRecords(
 	replayFrom common.ReplicationEventPosition,
 	firstIndex int,
 ) ([]opencdc.Record, error) {
-	keySchema := newSchemaMapper()
-	payloadSchema := newSchemaMapper()
+	keySchema := newSchemaMapper(h.types)
+	payloadSchema := newSchemaMapper(h.types)
 
 	metadata, err := h.createMetadata(ctx, e, keySchema, payloadSchema)
 	if err != nil {
@@ -479,7 +486,7 @@ func (h *cdcEventHandler) buildRecords(
 			// second resume skips exactly the rows already delivered.
 			Index:         firstIndex + i,
 			TableCoverage: h.coverage,
-		}.ToSDKPosition()
+		}.ToSDKPositionWithTypes(h.types.stamp())
 
 		// Every record owns its metadata. The SDK middleware writes schema
 		// subjects and versions into it per record, and its batching

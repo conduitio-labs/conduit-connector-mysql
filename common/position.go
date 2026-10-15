@@ -43,12 +43,38 @@ const (
 	// is in progress.
 	SnapshotPositionVersion = 2
 
+	// TypesPositionVersion is stamped on every snapshot and CDC envelope
+	// written in types.mode=strict. Such an envelope carries Types; a build
+	// that predates it refuses the position (ErrPositionVersionUnsupported)
+	// instead of resuming it with legacy record shapes. Positions written in
+	// legacy mode keep versions 1 and 2. See
+	// ConduitIO/conduit docs/design-documents/20261012-mysql-type-semantics.md.
+	TypesPositionVersion = 3
+
 	// CurrentPositionVersion is the highest envelope version this build reads.
 	// Bump it whenever a position-format change is not safely readable by the
 	// previous reader. Absent/0 on read means a legacy pre-version position
 	// (treat as readable, see ParseSDKPosition).
-	CurrentPositionVersion = SnapshotPositionVersion
+	CurrentPositionVersion = TypesPositionVersion
 )
+
+// TypesStamp is the resolved type configuration a position was written
+// under. nil (no "types" object) means legacy. Every setting is listed, so a
+// later version that adds one can tell "the stamp predates it" from a choice.
+type TypesStamp struct {
+	Mode           string `json:"mode"`
+	Decimal        string `json:"decimal"`
+	BigintUnsigned string `json:"bigint_unsigned"`
+}
+
+// Name is the stamp's name as operators see and type it, for example
+// "strict/string/long". nil is "legacy".
+func (t *TypesStamp) Name() string {
+	if t == nil {
+		return "legacy"
+	}
+	return t.Mode + "/" + t.Decimal + "/" + t.BigintUnsigned
+}
 
 // ErrPositionVersionUnsupported is returned by ParseSDKPosition when a persisted
 // position's envelope version is higher than the highest version this connector
@@ -63,7 +89,10 @@ type Position struct {
 	// version greater than CurrentPositionVersion is refused by ParseSDKPosition
 	// (see ErrPositionVersionUnsupported) rather than silently parsed, so that a
 	// future downgrade is detectable.
-	Version          int               `json:"version,omitempty"`
+	Version int `json:"version,omitempty"`
+	// Types is the type configuration the position was written under; nil
+	// for legacy. Only version TypesPositionVersion envelopes carry it.
+	Types            *TypesStamp       `json:"types,omitempty"`
 	SnapshotPosition *SnapshotPosition `json:"snapshot_position,omitempty"`
 	CdcPosition      *CdcPosition      `json:"cdc_position,omitempty"`
 }
@@ -85,7 +114,17 @@ type SnapshotPosition struct {
 // position, when a table's last-read key has a Go type that cannot be encoded
 // type-exactly (see keyvalue.go).
 func (p SnapshotPosition) ToSDKPosition() (opencdc.Position, error) {
-	v, err := json.Marshal(Position{Version: SnapshotPositionVersion, SnapshotPosition: &p})
+	return p.ToSDKPositionWithTypes(nil)
+}
+
+// ToSDKPositionWithTypes marshals the position with a type stamp; a nil
+// stamp writes the legacy envelope (version 2).
+func (p SnapshotPosition) ToSDKPositionWithTypes(types *TypesStamp) (opencdc.Position, error) {
+	version := SnapshotPositionVersion
+	if types != nil {
+		version = TypesPositionVersion
+	}
+	v, err := json.Marshal(Position{Version: version, Types: types, SnapshotPosition: &p})
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal snapshot position: %w", err)
 	}
@@ -129,6 +168,10 @@ func ParseSDKPosition(p opencdc.Position) (Position, error) {
 		return pos, fmt.Errorf("failed to parse position: %w", err)
 	}
 
+	if pos.Version >= TypesPositionVersion && pos.Types == nil {
+		return pos, fmt.Errorf("%w: a version %d position must carry its type stamp and this one has none",
+			ErrPositionVersionUnsupported, pos.Version)
+	}
 	if pos.Version > CurrentPositionVersion {
 		return pos, fmt.Errorf(
 			"%w: position was written with version %d, this connector build supports up to version %d; "+
@@ -230,7 +273,17 @@ func (p ReplicationEventPosition) ToMysqlPos() mysql.Position {
 }
 
 func (p CdcPosition) ToSDKPosition() opencdc.Position {
-	v, err := json.Marshal(Position{Version: CDCPositionVersion, CdcPosition: &p})
+	return p.ToSDKPositionWithTypes(nil)
+}
+
+// ToSDKPositionWithTypes marshals the position with a type stamp; a nil
+// stamp writes the legacy envelope (version 1).
+func (p CdcPosition) ToSDKPositionWithTypes(types *TypesStamp) opencdc.Position {
+	version := CDCPositionVersion
+	if types != nil {
+		version = TypesPositionVersion
+	}
+	v, err := json.Marshal(Position{Version: version, Types: types, CdcPosition: &p})
 	if err != nil {
 		// This should never happen, all Position structs should be valid.
 		panic(err)

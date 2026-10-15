@@ -43,6 +43,8 @@ const (
 	envRun   = "MYSQL_CHAOS_RUN"
 	envTable = "MYSQL_CHAOS_TABLE"
 	envPark  = "MYSQL_CHAOS_PARK"
+	// envTypes is extra source settings, "key=value" pairs separated by ",".
+	envTypes = "MYSQL_CHAOS_TYPES"
 	envDSN   = "MYSQL_TEST_DSN"
 )
 
@@ -112,6 +114,12 @@ func child() error {
 		// snapshot and inside one binlog event.
 		"sdk.batch.size":  "20",
 		"sdk.batch.delay": "100ms",
+	}
+	if extra := os.Getenv(envTypes); extra != "" {
+		for _, kv := range strings.Split(extra, ",") {
+			k, v, _ := strings.Cut(kv, "=")
+			cfg[k] = v
+		}
 	}
 	if err := sdk.Util.ParseConfig(ctx, cfg, src.Config(), mysql.Connector.NewSpecification().SourceParams); err != nil {
 		return fmt.Errorf("configure: %w", err)

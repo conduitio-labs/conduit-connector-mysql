@@ -44,6 +44,47 @@ const (
 	// CodeUnsignedOverflow: a BIGINT UNSIGNED value is above the largest Avro
 	// long (2^63-1). The source stops instead of emitting a wrong value.
 	CodeUnsignedOverflow = "mysql.types.unsigned_overflow"
+
+	// CodeUnsignedOverflowLegacySnapshot: as CodeUnsignedOverflow, for a legacy
+	// pipeline whose position is in the snapshot phase, where the type
+	// configuration cannot be switched in place.
+	CodeUnsignedOverflowLegacySnapshot = "mysql.types.unsigned_overflow_legacy_snapshot"
+
+	// CodeNullInNotNull: a NULL arrived for a NOT NULL column in strict mode
+	// (or for a key column). It is never emitted as a zero value.
+	CodeNullInNotNull = "mysql.types.null_in_not_null"
+
+	// CodeValueNotRepresentable: in strict mode a value does not fit its
+	// column's schema type (an integer out of range, DECIMAL text that does not
+	// parse as a double). It is never coerced.
+	CodeValueNotRepresentable = "mysql.types.value_not_representable"
+
+	// CodeTypesSwitchInSnapshot: the type configuration differs from the one
+	// in a position that is still in the snapshot phase.
+	CodeTypesSwitchInSnapshot = "mysql.types.switch_in_snapshot"
+
+	// CodeTypesStampMismatch: the type configuration differs from the one in
+	// a CDC-phase position, and types.acceptChangeFrom does not name it.
+	CodeTypesStampMismatch = "mysql.types.stamp_mismatch"
+
+	// CodeTypesInvalid: a types.* setting has a value this version does not
+	// support, or the combination is invalid.
+	CodeTypesInvalid = "mysql.config.types_invalid"
+
+	// CodeNullabilityUnavailable: a captured column has no row in
+	// information_schema.columns (permissions, or the table changed), so its
+	// nullability is unknown in strict mode.
+	CodeNullabilityUnavailable = "mysql.schema.nullability_unavailable"
+
+	// CodeBinlogRowImage, CodeBinlogFormat, CodeBinlogRowValueOptions: a
+	// server binlog setting under which row events do not carry full rows.
+	// Refused in strict mode, a warning in legacy mode.
+	CodeBinlogRowImage        = "mysql.config.binlog_row_image"
+	CodeBinlogFormat          = "mysql.config.binlog_format"
+	CodeBinlogRowValueOptions = "mysql.config.binlog_row_value_options"
+
+	// CodeLegacyTypes: the source runs in legacy type mode. Warning only.
+	CodeLegacyTypes = "mysql.types.legacy"
 )
 
 // Error is a user-facing configuration or state error with a stable code, the
@@ -92,3 +133,22 @@ var ErrTableWithoutKey = errors.New("table has no primary key and no sorting col
 
 // ErrUnsignedOverflow is the sentinel for CodeUnsignedOverflow.
 var ErrUnsignedOverflow = errors.New("unsigned value does not fit the column's schema type")
+
+// ErrNullInNotNull is the sentinel for CodeNullInNotNull.
+var ErrNullInNotNull = errors.New("null in a not null column")
+
+// ErrValueNotRepresentable is the sentinel for CodeValueNotRepresentable.
+var ErrValueNotRepresentable = errors.New("value does not fit the column's schema type")
+
+// ErrTypesMismatch is the sentinel for CodeTypesSwitchInSnapshot and
+// CodeTypesStampMismatch.
+var ErrTypesMismatch = errors.New("type configuration differs from the position's")
+
+// ErrTypesInvalid is the sentinel for CodeTypesInvalid.
+var ErrTypesInvalid = errors.New("invalid types configuration")
+
+// ErrNullabilityUnavailable is the sentinel for CodeNullabilityUnavailable.
+var ErrNullabilityUnavailable = errors.New("column nullability unavailable")
+
+// ErrBinlogSettings is the sentinel for the binlog setting codes.
+var ErrBinlogSettings = errors.New("binlog settings do not log full rows")

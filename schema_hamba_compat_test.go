@@ -202,7 +202,7 @@ func compatCases(t *testing.T) []compatCase {
 func compatSchema(t *testing.T, c compatCase) (string, *schemaMapper) {
 	t.Helper()
 	cols := compatCols(t)
-	m := newSchemaMapper()
+	m := newSchemaMapper(nil)
 	avroCols := make([]*avroNamedType, 0, len(c.Cols))
 	for _, n := range c.Cols {
 		avroCols = append(avroCols, cols[n].col)

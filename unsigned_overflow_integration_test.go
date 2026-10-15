@@ -61,7 +61,9 @@ func requireOverflowHalt(t *testing.T, is *is.I, err error, recs []opencdc.Recor
 	is.True(errors.Is(err, ErrUnsignedOverflow)) // the source must halt with the stable error
 	var coded *Error
 	is.True(errors.As(err, &coded))
-	is.Equal(coded.Code, CodeUnsignedOverflow)
+	// Legacy mode names the remedy for the phase a restart reads: the snapshot
+	// code once a snapshot record was acked (see unsignedOverflowError).
+	is.True(coded.Code == CodeUnsignedOverflow || coded.Code == CodeUnsignedOverflowLegacySnapshot)
 	is.True(strings.Contains(coded.Message, table+".u"))
 	is.True(strings.Contains(coded.Message, maxUint64Text))
 

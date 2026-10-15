@@ -312,7 +312,7 @@ func TestSchema_Payload_SQLX_Rows(t *testing.T) {
 	is.NoErr(err)
 
 	// Test payload schema
-	payloadSchemaManager := newSchemaMapper()
+	payloadSchemaManager := newSchemaMapper(nil)
 	_, err = payloadSchemaManager.createPayloadSchema(ctx, tableName, colTypes)
 	is.NoErr(err)
 
@@ -359,7 +359,7 @@ func TestSchema_Payload_canal_RowsEvent(t *testing.T) {
 		avroCols[i] = avroCol
 	}
 
-	payloadSchemaManager := newSchemaMapper()
+	payloadSchemaManager := newSchemaMapper(nil)
 	_, err := payloadSchemaManager.createPayloadSchema(ctx, tableName, avroCols)
 	is.NoErr(err)
 
@@ -401,7 +401,7 @@ func TestSchema_Key(t *testing.T) {
 	colTypes, err := sqlxRowsToAvroCol(rows)
 	is.NoErr(err)
 
-	keySchemaManager := newSchemaMapper()
+	keySchemaManager := newSchemaMapper(nil)
 
 	var f1Col *avroNamedType
 	for _, colType := range colTypes {

@@ -353,7 +353,9 @@ func TestRestart_TableAddedAfterCDC_Pattern_WarnsOnly(t *testing.T) {
 	source2, err := openSource(runCtx2, is, map[string]string{"tables": "^(crash|late)_rows$"}, got[0].Position)
 	is.NoErr(err)
 	t.Cleanup(func() { teardownForCleanup(source2) })
-	is.True(!strings.Contains(logs2.String(), `"level":"warn"`))
+	// Legacy type mode warns on every start; only the coverage warning must
+	// not repeat.
+	is.True(!strings.Contains(logs2.String(), CodeTablesAddedAfterCDC))
 }
 
 // Same rule when snapshot.enabled is switched on for a pipeline that has been

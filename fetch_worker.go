@@ -45,6 +45,7 @@ type fetchWorkerConfig struct {
 	table        string
 	fetchSize    uint64
 	primaryKeys  common.PrimaryKeys
+	types        *typeSettings
 }
 
 func newFetchWorker(ctx context.Context, config fetchWorkerConfig) fetchWorker {
@@ -109,8 +110,8 @@ func newFetchWorkerByKey(
 	return &fetchWorkerSingleKey{
 		primaryKey:    primaryKey,
 		lastPosition:  lastPosition,
-		payloadSchema: newSchemaMapper(),
-		keySchema:     newSchemaMapper(),
+		payloadSchema: newSchemaMapper(config.types),
+		keySchema:     newSchemaMapper(config.types),
 		config:        config,
 	}
 }
@@ -214,11 +215,14 @@ type rowsChunk struct {
 func (w *fetchWorkerSingleKey) selectRowsChunk(
 	ctx context.Context, start any, discardFirst bool,
 ) (_ *rowsChunk, err error) {
+	// Invariant 3: bind keys typed; see typeSettings.bindKey.
+	start = w.config.types.bindKey(w.config.table, w.primaryKey, start)
+	end := w.config.types.bindKey(w.config.table, w.primaryKey, w.end)
 	var whereStart any = squirrel.GtOrEq{w.primaryKey: start}
 	if discardFirst {
 		whereStart = squirrel.Gt{w.primaryKey: start}
 	}
-	whereEnd := squirrel.LtOrEq{w.primaryKey: w.end}
+	whereEnd := squirrel.LtOrEq{w.primaryKey: end}
 
 	query, args, err := squirrel.
 		Select("*").
@@ -360,8 +364,8 @@ type fetchWorkerByKeysConfig struct {
 func newFetchWorkerByKeys(config fetchWorkerByKeysConfig) fetchWorker {
 	return &fetchWorkerMultipleKey{
 		config:        config,
-		payloadSchema: newSchemaMapper(),
-		keySchema:     newSchemaMapper(),
+		payloadSchema: newSchemaMapper(config.types),
+		keySchema:     newSchemaMapper(config.types),
 	}
 }
 
@@ -533,7 +537,13 @@ func (w *fetchWorkerMultipleKey) selectRowsChunk(
 	// that is larger in one column and not larger in another (issue #189).
 	// The first chunk has nothing to seek past: start is only the table minimum.
 	if discardFirst {
-		stmt = stmt.Where(lexicographicAfter(start))
+		// Invariant 3: bind keys typed; see typeSettings.bindKey.
+		bound := make(common.TablePositionMultipleKey, len(start))
+		copy(bound, start)
+		for i := range bound {
+			bound[i].LastRead = w.config.types.bindKey(w.config.table, bound[i].KeyName, bound[i].LastRead)
+		}
+		stmt = stmt.Where(lexicographicAfter(bound))
 	}
 
 	query, args, err := stmt.

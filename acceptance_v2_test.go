@@ -17,6 +17,7 @@ package mysql
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"math/rand"
@@ -45,9 +46,13 @@ import (
 // Claims are only what this test proves. The README (Testing, Acceptance suite
 // v2) says why each capability is or is not claimed.
 func TestAcceptanceV2(t *testing.T) {
+	// The certified configuration is strict type mode (ConduitIO/conduit
+	// design 20261012-mysql-type-semantics, decision 11). Legacy mode is not
+	// covered by this suite.
 	srcCfg := map[string]string{
 		"dsn":             testutils.DSN,
 		"cdc.disableLogs": "true",
+		"types.mode":      "strict",
 	}
 	destCfg := map[string]string{
 		"dsn": testutils.DSN,
@@ -145,7 +150,9 @@ func (d *acceptanceV2Driver) createTable(t *testing.T) {
 			id     BIGINT   NOT NULL PRIMARY KEY,
 			name   LONGTEXT NOT NULL,
 			amount DOUBLE   NOT NULL,
-			qty    INT      NOT NULL
+			qty    INT      NOT NULL,
+			price  DECIMAL(12,2) NOT NULL,
+			note   VARCHAR(32) NULL
 		)`, d.table))
 		is.NoErr(err)
 	})
@@ -172,8 +179,20 @@ func (d *acceptanceV2Driver) record(op opencdc.Operation, name string) opencdc.R
 			"name":   name,
 			"amount": float64(rand.Intn(1_000_000)) / 100,
 			"qty":    rand.Intn(1000),
+			// strict mode: DECIMAL as its exact text, NULL as null
+			"price": fmt.Sprintf("%d.%02d", rand.Intn(1_000_000), rand.Intn(100)),
+			"note":  acceptanceNote(id),
 		}},
 	}
+}
+
+// acceptanceNote is NULL for every other row, so nulls travel through every
+// case.
+func acceptanceNote(id int64) any {
+	if id%2 == 0 {
+		return nil
+	}
+	return fmt.Sprintf("note-%d", id)
 }
 
 func (d *acceptanceV2Driver) GenerateRecord(_ *testing.T, op opencdc.Operation) opencdc.Record {
@@ -205,14 +224,14 @@ func (d *acceptanceV2Driver) WriteToSource(t *testing.T, recs []opencdc.Record) 
 				q    strings.Builder
 				args []any
 			)
-			q.WriteString("INSERT INTO " + d.table + " (id, name, amount, qty) VALUES ")
+			q.WriteString("INSERT INTO " + d.table + " (id, name, amount, qty, price, note) VALUES ")
 			for i, rec := range recs[start:end] {
 				if i > 0 {
 					q.WriteString(", ")
 				}
-				q.WriteString("(?, ?, ?, ?)")
+				q.WriteString("(?, ?, ?, ?, ?, ?)")
 				p := rec.Payload.After.(opencdc.StructuredData)
-				args = append(args, p["id"], p["name"], p["amount"], p["qty"])
+				args = append(args, p["id"], p["name"], p["amount"], p["qty"], p["price"], p["note"])
 			}
 			_, err := db.ExecContext(t.Context(), q.String(), args...)
 			is.NoErr(err)
@@ -232,7 +251,7 @@ func (d *acceptanceV2Driver) ReadAllFromDestination(t *testing.T) []opencdc.Reco
 
 	var out []opencdc.Record
 	d.withDB(t, func(db *sqlx.DB) {
-		rows, err := db.QueryxContext(t.Context(), "SELECT id, name, amount, qty FROM "+d.table+" ORDER BY id")
+		rows, err := db.QueryxContext(t.Context(), "SELECT id, name, amount, qty, price, note FROM "+d.table+" ORDER BY id")
 		is.NoErr(err)
 		defer rows.Close()
 
@@ -242,8 +261,14 @@ func (d *acceptanceV2Driver) ReadAllFromDestination(t *testing.T) []opencdc.Reco
 				name   string
 				amount float64
 				qty    int
+				price  string
+				note   sql.NullString
 			)
-			is.NoErr(rows.Scan(&id, &name, &amount, &qty))
+			is.NoErr(rows.Scan(&id, &name, &amount, &qty, &price, &note))
+			var noteVal any
+			if note.Valid {
+				noteVal = note.String
+			}
 
 			meta := opencdc.Metadata{}
 			meta.SetCollection(d.table)
@@ -252,7 +277,7 @@ func (d *acceptanceV2Driver) ReadAllFromDestination(t *testing.T) []opencdc.Reco
 				Metadata:  meta,
 				Key:       opencdc.StructuredData{"id": id},
 				Payload: opencdc.Change{After: opencdc.StructuredData{
-					"id": id, "name": name, "amount": amount, "qty": qty,
+					"id": id, "name": name, "amount": amount, "qty": qty, "price": price, "note": noteVal,
 				}},
 			})
 		}

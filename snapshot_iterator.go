@@ -89,6 +89,7 @@ type (
 		startPosition    *common.SnapshotPosition
 		database         string
 		serverID         string
+		types            *typeSettings
 	}
 )
 
@@ -157,6 +158,7 @@ func (s *snapshotIterator) setupWorkers(ctx context.Context) error {
 			primaryKeys:  primaryKeys,
 			db:           s.config.db,
 			data:         s.data,
+			types:        s.config.types,
 		})
 
 		isTableEmpty, err := worker.fetchStartEnd(ctx)
@@ -317,7 +319,7 @@ func (s *snapshotIterator) Teardown(ctx context.Context) error {
 func (s *snapshotIterator) buildRecord(d fetchData) (opencdc.Record, error) {
 	s.lastPosition.Snapshots[d.table] = d.position
 
-	pos, err := s.lastPosition.ToSDKPosition()
+	pos, err := s.lastPosition.ToSDKPositionWithTypes(s.config.types.stamp())
 	if err != nil {
 		return opencdc.Record{}, fmt.Errorf("failed to build position for table %q: %w", d.table, err)
 	}

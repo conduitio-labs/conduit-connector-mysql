@@ -35,6 +35,8 @@ type combinedIterator struct {
 	cdcIterator      common.Iterator
 
 	currentIterator common.Iterator
+
+	types *typeSettings
 }
 
 type combinedIteratorConfig struct {
@@ -52,6 +54,9 @@ type combinedIteratorConfig struct {
 
 	// coverage is stamped on CDC positions; see resolveCoverage.
 	coverage *common.TableCoverage
+
+	// types is the resolved type configuration; nil is legacy.
+	types *typeSettings
 }
 
 func newCombinedIterator(
@@ -66,6 +71,7 @@ func newCombinedIterator(
 		db:                  config.db,
 		startPosition:       config.startCdcPosition,
 		coverage:            config.coverage,
+		types:               config.types,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cdc iterator: %w", err)
@@ -81,6 +87,7 @@ func newCombinedIterator(
 		iterator := &combinedIterator{
 			cdcIterator:     cdcIterator,
 			currentIterator: cdcIterator,
+			types:           config.types,
 		}
 
 		return iterator, nil
@@ -93,6 +100,7 @@ func newCombinedIterator(
 		startPosition:    config.startSnapshotPosition,
 		database:         config.database,
 		serverID:         config.serverID,
+		types:            config.types,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create snapshot iterator: %w", err)
@@ -174,12 +182,25 @@ func newCombinedIterator(
 		snapshotIterator: snapshotIterator,
 		cdcIterator:      cdcIterator,
 		currentIterator:  snapshotIterator,
+		types:            config.types,
 	}
 
 	return iterator, nil
 }
 
 func (c *combinedIterator) Ack(ctx context.Context, pos opencdc.Position) error {
+	// The handoff to CDC happens only after every snapshot record is acked,
+	// so an ack that arrives while CDC is current is for a CDC record.
+	phase := phaseSnapshot
+	if c.currentIterator == c.cdcIterator {
+		phase = phaseCDC
+	}
+	if from := c.types.observeAck(phase); from != "" {
+		sdk.Logger(ctx).Info().
+			Str("from", from).
+			Str("to", c.types.config.name()).
+			Msg("a record under the new type configuration was acknowledged; types.acceptChangeFrom can be removed")
+	}
 	//nolint:wrapcheck // error already wrapped in iterator
 	return c.currentIterator.Ack(ctx, pos)
 }

@@ -253,6 +253,8 @@ func (s *snapshotIterator) ReadN(ctx context.Context, n int) ([]opencdc.Record, 
 			// dropped, so release their acks, or the handoff would wait for
 			// acks that never come. Their rows are not acked either, so their
 			// snapshot positions are not persisted and they are read again.
+			// Dropping them is safe only because SDK v0.16 cancels ReadN's
+			// context only on stop, so nothing after them is acked first.
 			_ = s.acks.done(len(recs))
 			//nolint:wrapcheck // no need to wrap canceled error
 			return nil, ctx.Err()

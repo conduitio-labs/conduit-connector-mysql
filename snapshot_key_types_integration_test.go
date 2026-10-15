@@ -41,7 +41,11 @@ func TestSnapshotResume_KeyTypes(t *testing.T) {
 		literals []string
 	}{
 		{"bigint_above_2pow53", "BIGINT", []string{"-9007199254740995", "1", "9007199254740993", "9007199254740996", "9007199254740997", "9223372036854775807"}},
-		{"bigint_unsigned", "BIGINT UNSIGNED", []string{"1", "9007199254740993", "9223372036854775808", "9223372036854775809", "18446744073709551614", "18446744073709551615"}},
+		// Values above 2^63-1 halt the source (CodeUnsignedOverflow, see
+		// unsigned_overflow_integration_test.go), so they cannot be resumed
+		// from. This covers the unsigned path up to the largest value it
+		// emits; the full range needs the lossless mapping of #86.
+		{"bigint_unsigned", "BIGINT UNSIGNED", []string{"1", "9007199254740993", "9007199254740995", "9223372036854775805", "9223372036854775806", "9223372036854775807"}},
 		{"int_negative", "INT", []string{"-2147483648", "-5", "-1", "0", "7", "2147483647"}},
 		{"decimal_negative", "DECIMAL(10,2)", []string{"-300.00", "-200.00", "-100.00", "-50.00", "-1.00", "5.00"}},
 		{"varchar", "VARCHAR(20)", []string{"'a'", "'b'", "'c-1'", "'d'", "'e'", "'z'"}},
@@ -197,7 +201,7 @@ func TestSnapshotPosition_RecordsKeyColumnType(t *testing.T) {
 	}{
 		{"VARCHAR(20)", "'a'", "varchar"},
 		{"DECIMAL(10,2)", "1.50", "decimal"},
-		{"BIGINT UNSIGNED", "18446744073709551615", "bigint"},
+		{"BIGINT UNSIGNED", "9223372036854775807", "bigint"},
 		{"VARBINARY(8)", "X'01'", "varbinary"},
 		{"DATETIME(6)", "'2020-01-01 00:00:00'", "datetime"},
 		{"INT", "7", "int"},

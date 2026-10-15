@@ -248,6 +248,10 @@ func (c *cdcIterator) wrapCanalRunErr() error {
 	if errors.As(err, &skipped) {
 		return skipped
 	}
+	var coded *Error
+	if errors.As(err, &coded) {
+		return coded
+	}
 
 	// canal rejects a PartialUpdateRowsEvent before the handler runs; it is
 	// not a purged binlog either.
@@ -402,22 +406,25 @@ func (h *cdcEventHandler) buildKey(
 	e rowEvent,
 	payload opencdc.StructuredData,
 	keySchema *schemaMapper,
-) opencdc.Data {
+) (opencdc.Data, error) {
 	keyCols := h.tablePrimaryKeys[e.Table.Name]
 
 	if len(keyCols) == 0 {
 		keyVal := fmt.Sprintf("%s_%d", h.canal.SyncedPosition().Name, e.Header.LogPos)
-		return opencdc.RawData(keyVal)
+		return opencdc.RawData(keyVal), nil
 	}
 
 	key := opencdc.StructuredData{}
 
 	for _, keyCol := range keyCols {
-		keyVal := keySchema.formatValue(ctx, keyCol, payload[keyCol])
+		keyVal, err := keySchema.formatValue(ctx, keyCol, payload[keyCol])
+		if err != nil {
+			return nil, err
+		}
 		key[keyCol] = keyVal
 	}
 
-	return key
+	return key, nil
 }
 
 // buildRecords turns the rows of one binlog event into records. firstIndex is
@@ -441,12 +448,23 @@ func (h *cdcEventHandler) buildRecords(
 
 	records := make([]opencdc.Record, 0, len(e.Rows))
 	for i, row := range e.Rows {
-		payloadAfter := h.buildPayload(ctx, payloadSchema, e.Table.Columns, row.after)
-		key := h.buildKey(ctx, e, payloadAfter, keySchema)
+		// Invariant 6: a value the schema cannot hold fails the whole event;
+		// no record of it is emitted (see schemaMapper.formatValue).
+		payloadAfter, err := h.buildPayload(ctx, payloadSchema, e.Table.Columns, row.after)
+		if err != nil {
+			return nil, err
+		}
+		key, err := h.buildKey(ctx, e, payloadAfter, keySchema)
+		if err != nil {
+			return nil, err
+		}
 
 		var payloadBefore opencdc.StructuredData
 		if row.before != nil {
-			payloadBefore = h.buildPayload(ctx, payloadSchema, e.Table.Columns, row.before)
+			payloadBefore, err = h.buildPayload(ctx, payloadSchema, e.Table.Columns, row.before)
+			if err != nil {
+				return nil, err
+			}
 		}
 
 		pos := common.CdcPosition{
@@ -499,12 +517,16 @@ func (h *cdcEventHandler) buildPayload(
 	ctx context.Context,
 	payloadSchema *schemaMapper,
 	columns []schema.TableColumn, rows []any,
-) opencdc.StructuredData {
+) (opencdc.StructuredData, error) {
 	payload := opencdc.StructuredData{}
 	for i, col := range columns {
-		payload[col.Name] = payloadSchema.formatValue(ctx, col.Name, rows[i])
+		v, err := payloadSchema.formatValue(ctx, col.Name, rows[i])
+		if err != nil {
+			return nil, err
+		}
+		payload[col.Name] = v
 	}
-	return payload
+	return payload, nil
 }
 
 // resumePlan is how the CDC iterator restarts from a saved position: where

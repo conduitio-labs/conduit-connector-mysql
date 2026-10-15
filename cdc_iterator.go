@@ -470,22 +470,25 @@ func (h *cdcEventHandler) buildKey(
 	e rowEvent,
 	payload opencdc.StructuredData,
 	keySchema *schemaMapper,
-) opencdc.Data {
+) (opencdc.Data, error) {
 	keyCols := h.tablePrimaryKeys[e.Table.Name]
 
 	if len(keyCols) == 0 {
 		keyVal := fmt.Sprintf("%s_%d", h.canal.SyncedPosition().Name, e.Header.LogPos)
-		return opencdc.RawData(keyVal)
+		return opencdc.RawData(keyVal), nil
 	}
 
 	key := opencdc.StructuredData{}
 
 	for _, keyCol := range keyCols {
-		keyVal := keySchema.formatValue(ctx, keyCol, payload[keyCol])
+		keyVal, err := keySchema.formatValue(ctx, keyCol, payload[keyCol])
+		if err != nil {
+			return nil, err
+		}
 		key[keyCol] = keyVal
 	}
 
-	return key
+	return key, nil
 }
 
 // buildRecords turns the rows of one binlog event into records. firstIndex is
@@ -510,11 +513,16 @@ func (h *cdcEventHandler) buildRecords(
 
 	records := make([]opencdc.Record, 0, len(e.Rows))
 	for i, row := range e.Rows {
+		// Invariant 6: a value the schema cannot hold fails the whole event;
+		// no record of it is emitted (see schemaMapper.formatValue).
 		payloadAfter, err := h.buildPayload(ctx, payloadSchema, e, row.after)
 		if err != nil {
 			return nil, err
 		}
-		key := h.buildKey(ctx, e, payloadAfter, keySchema)
+		key, err := h.buildKey(ctx, e, payloadAfter, keySchema)
+		if err != nil {
+			return nil, err
+		}
 
 		var payloadBefore opencdc.StructuredData
 		if row.before != nil {
@@ -613,7 +621,11 @@ func (h *cdcEventHandler) buildPayload(
 	}
 	payload := opencdc.StructuredData{}
 	for i, col := range columns {
-		payload[col.Name] = payloadSchema.formatValue(ctx, col.Name, values[i])
+		v, err := payloadSchema.formatValue(ctx, col.Name, values[i])
+		if err != nil {
+			return nil, err
+		}
+		payload[col.Name] = v
 	}
 	return payload, nil
 }

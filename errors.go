@@ -59,6 +59,18 @@ const (
 	// CodeUnsupportedOperation: a record carries an operation the destination
 	// does not apply. The write fails instead of dropping the record.
 	CodeUnsupportedOperation = "mysql.destination.unsupported_operation"
+
+	// CodeUnknownColumn: a record has a field the target table has no column
+	// for. The write fails; the destination does not alter tables and does not
+	// drop fields.
+	CodeUnknownColumn = "mysql.destination.unknown_column"
+
+	// CodePayloadNotStructured: a create, update or snapshot record does not
+	// carry structured data in .Payload.After.
+	CodePayloadNotStructured = "mysql.destination.payload_not_structured"
+
+	// CodePayloadEmpty: a create, update or snapshot record has no fields.
+	CodePayloadEmpty = "mysql.destination.payload_empty"
 )
 
 // Error is a user-facing configuration or state error with a stable code, the
@@ -125,3 +137,12 @@ var ErrDeleteWithoutPrimaryKey = errors.New("delete from a table without a prima
 
 // ErrUnsupportedOperation is the sentinel for CodeUnsupportedOperation.
 var ErrUnsupportedOperation = errors.New("unsupported operation")
+
+// ErrUnknownColumn is the sentinel for CodeUnknownColumn.
+var ErrUnknownColumn = errors.New("unknown column")
+
+// ErrPayloadNotStructured is the sentinel for CodePayloadNotStructured.
+var ErrPayloadNotStructured = errors.New("payload is not structured data")
+
+// ErrPayloadEmpty is the sentinel for CodePayloadEmpty.
+var ErrPayloadEmpty = errors.New("payload has no fields")

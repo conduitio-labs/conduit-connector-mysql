@@ -17,7 +17,9 @@ package mysql
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/Masterminds/squirrel"
@@ -104,7 +106,7 @@ func (d *Destination) Write(ctx context.Context, recs []opencdc.Record) (int, er
 		var err error
 		switch batch.kind {
 		case upsertBatchKind:
-			_, err = d.upsertRecords(ctx, tx, batch.table, batch.recs)
+			err = d.upsertRecords(ctx, tx, batch.table, batch.recs)
 		case deleteBatchKind:
 			_, err = d.deleteRecords(ctx, tx, batch.table, batch.recs)
 		}
@@ -132,59 +134,112 @@ func (d *Destination) Teardown(_ context.Context) error {
 	return nil
 }
 
-func (d *Destination) upsertRecords(ctx context.Context, tx *sqlx.Tx, table string, recs []opencdc.Record) (int, error) {
-	if len(recs) == 0 {
-		return 0, nil
+// upsertRecords writes recs with INSERT ... ON DUPLICATE KEY UPDATE.
+//
+// Invariant 6: every record is written with exactly the fields it carries. The
+// records are split into runs of consecutive records that have the same field
+// set, and each run is one statement. Building one column list for the whole
+// batch from its first record silently dropped any field a later record had
+// and the first one lacked (#222). Runs keep the records in their order, so
+// when two records in a batch share a key the later one still wins.
+//
+// A field the table has no column for fails the statement (MySQL error 1054),
+// and with it the whole Write: the destination does not alter tables, and
+// writing the record without the field would lose it. A field the record lacks
+// is not written: an inserted row gets the column default, an updated row keeps
+// the column's current value.
+func (d *Destination) upsertRecords(ctx context.Context, tx *sqlx.Tx, table string, recs []opencdc.Record) error {
+	runs, err := columnRuns(recs)
+	if err != nil {
+		return err
 	}
 
-	firstRec := recs[0]
-	payload, isStructured := firstRec.Payload.After.(opencdc.StructuredData)
-	if !isStructured {
-		return 0, fmt.Errorf("record payload is not structured data")
-	}
-
-	columns := make([]string, 0, len(payload))
-	for col := range payload {
-		columns = append(columns, col)
-	}
-
-	insert := squirrel.Insert(table).Columns(columns...)
-
-	for _, rec := range recs {
-		payload, isStructured := rec.Payload.After.(opencdc.StructuredData)
-		if !isStructured {
-			return 0, fmt.Errorf("record payload is not structured data")
-		}
-
-		values := make([]any, 0, len(columns))
-		for _, col := range columns {
-			colValue, ok := payload[col]
-			if !ok {
-				return 0, fmt.Errorf("column %q not found in record %q", col, string(rec.Key.Bytes()))
+	for _, run := range runs {
+		insert := squirrel.Insert(table).Columns(run.columns...)
+		for _, rec := range run.recs {
+			payload := rec.Payload.After.(opencdc.StructuredData) // checked by columnRuns
+			values := make([]any, 0, len(run.columns))
+			for _, col := range run.columns {
+				values = append(values, payload[col])
 			}
-
-			values = append(values, colValue)
+			insert = insert.Values(values...)
 		}
-		insert = insert.Values(values...)
+
+		updateParts := make([]string, 0, len(run.columns))
+		for _, col := range run.columns {
+			updateParts = append(updateParts, fmt.Sprintf("%s=VALUES(%s)", col, col))
+		}
+		insert = insert.Suffix("ON DUPLICATE KEY UPDATE " + strings.Join(updateParts, ", "))
+
+		sql, args, err := insert.ToSql()
+		if err != nil {
+			return fmt.Errorf("failed to build query: %w", err)
+		}
+
+		if _, err := tx.ExecContext(ctx, sql, args...); err != nil {
+			var myErr *mysql.MySQLError
+			if errors.As(err, &myErr) && myErr.Number == mysqlErrBadFieldError {
+				return newError(ErrUnknownColumn, CodeUnknownColumn, ".Payload.After",
+					"add the column to the table before records with the field arrive (the destination does not alter tables), "+
+						"or remove the field before the destination with a field.exclude processor",
+					"table %q has no column for a field of the records: %s", table, myErr.Message)
+			}
+			return fmt.Errorf("failed to execute batch upsert: %w", err)
+		}
 	}
 
-	updateParts := make([]string, 0, len(payload))
-	for col := range payload {
-		updateParts = append(updateParts, fmt.Sprintf("%s=VALUES(%s)", col, col))
-	}
-	insert = insert.Suffix("ON DUPLICATE KEY UPDATE " + strings.Join(updateParts, ", "))
+	return nil
+}
 
-	sql, args, err := insert.ToSql()
-	if err != nil {
-		return 0, fmt.Errorf("failed to build query: %w", err)
+// keyString renders a record key for error messages. A nil key is valid input
+// and must not panic.
+func keyString(rec opencdc.Record) string {
+	if rec.Key == nil {
+		return ""
 	}
+	return string(rec.Key.Bytes())
+}
 
-	_, err = tx.ExecContext(ctx, sql, args...)
-	if err != nil {
-		return 0, fmt.Errorf("failed to execute batch upsert: %w", err)
+// mysqlErrBadFieldError is ER_BAD_FIELD_ERROR, "Unknown column".
+const mysqlErrBadFieldError = 1054
+
+// upsertRun is a run of consecutive records with the same field set.
+type upsertRun struct {
+	columns []string // sorted field names, shared by every record of the run
+	recs    []opencdc.Record
+}
+
+// columnRuns splits recs into runs of consecutive records with the same field
+// set. It never reorders records. It fails if a record has no structured
+// payload or no fields at all.
+func columnRuns(recs []opencdc.Record) ([]upsertRun, error) {
+	var runs []upsertRun
+	for _, rec := range recs {
+		payload, ok := rec.Payload.After.(opencdc.StructuredData)
+		if !ok {
+			return nil, newError(ErrPayloadNotStructured, CodePayloadNotStructured, ".Payload.After",
+				"decode the payload into structured data before the destination, for JSON with a json.decode processor on .Payload.After",
+				"record %q has a %T payload, the destination writes only structured data", keyString(rec), rec.Payload.After)
+		}
+		if len(payload) == 0 {
+			return nil, newError(ErrPayloadEmpty, CodePayloadEmpty, ".Payload.After",
+				"make sure create, update and snapshot records carry the row in .Payload.After",
+				"record %q has no fields to write", keyString(rec))
+		}
+
+		columns := make([]string, 0, len(payload))
+		for col := range payload {
+			columns = append(columns, col)
+		}
+		slices.Sort(columns)
+
+		if n := len(runs); n > 0 && slices.Equal(runs[n-1].columns, columns) {
+			runs[n-1].recs = append(runs[n-1].recs, rec)
+			continue
+		}
+		runs = append(runs, upsertRun{columns: columns, recs: []opencdc.Record{rec}})
 	}
-
-	return len(recs), nil
+	return runs, nil
 }
 
 func (d *Destination) deleteRecords(ctx context.Context, tx *sqlx.Tx, table string, recs []opencdc.Record) (int, error) {

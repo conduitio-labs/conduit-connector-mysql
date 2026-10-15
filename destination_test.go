@@ -128,3 +128,45 @@ func TestBatchRecords(t *testing.T) {
 		is.True(err != nil)
 	})
 }
+
+func TestColumnRuns(t *testing.T) {
+	rec := func(after opencdc.Data) opencdc.Record {
+		return opencdc.Record{Operation: opencdc.OperationCreate, Payload: opencdc.Change{After: after}}
+	}
+
+	t.Run("consecutive records with the same fields share a run, order is kept", func(t *testing.T) {
+		is := is.New(t)
+		recs := []opencdc.Record{
+			rec(opencdc.StructuredData{"id": 1, "v": "a"}),
+			rec(opencdc.StructuredData{"v": "b", "id": 2}),
+			rec(opencdc.StructuredData{"id": 3, "v": "c", "extra": "x"}),
+			rec(opencdc.StructuredData{"id": 4, "v": "d"}),
+		}
+		runs, err := columnRuns(recs)
+		is.NoErr(err)
+		is.Equal(len(runs), 3)
+		is.Equal(runs[0].columns, []string{"id", "v"})
+		is.Equal(runs[1].columns, []string{"extra", "id", "v"})
+		is.Equal(runs[2].columns, []string{"id", "v"})
+		is.Equal(len(runs[0].recs), 2)
+		var got []any
+		for _, r := range runs {
+			for _, rr := range r.recs {
+				got = append(got, rr.Payload.After.(opencdc.StructuredData)["id"])
+			}
+		}
+		is.Equal(got, []any{1, 2, 3, 4})
+	})
+
+	t.Run("raw payload is refused", func(t *testing.T) {
+		is := is.New(t)
+		_, err := columnRuns([]opencdc.Record{rec(opencdc.RawData(`{"id":1}`))})
+		is.True(errors.Is(err, ErrPayloadNotStructured))
+	})
+
+	t.Run("empty payload is refused", func(t *testing.T) {
+		is := is.New(t)
+		_, err := columnRuns([]opencdc.Record{rec(opencdc.StructuredData{})})
+		is.True(errors.Is(err, ErrPayloadEmpty))
+	})
+}

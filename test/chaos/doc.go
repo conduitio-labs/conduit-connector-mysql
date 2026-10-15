@@ -43,9 +43,17 @@
 //   - Exact resume: no record delivered after a restart is one whose position
 //     was stored before the kill. Records that were appended or acked but whose
 //     position was not stored may come again; they are counted, not failed.
+//   - Exact start: each run's first record is the row right after the
+//     position the child loaded and opened at, so a source that drops rows on
+//     resume fails even when a later run delivers them again.
 //   - Monotonic positions (invariant 2): in the position log, the snapshot
 //     phase never follows the CDC phase, the snapshot key never decreases, and
-//     the CDC (file, offset, row) never decreases.
+//     the CDC (file, offset, row) never decreases. A row inside a compressed
+//     transaction has no offset; it is placed at its transaction's start and
+//     ordered by its rows event's number there.
+//
+// A child exits by itself when the parent test process is gone, or after 15
+// minutes, so it never outlives a killed test run.
 //
 // # What it does not prove
 //

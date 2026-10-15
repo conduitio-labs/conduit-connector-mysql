@@ -550,6 +550,32 @@ pipelines:
 
 Run `make test` to run all tests.
 
+### Acceptance suite v2
+
+`TestAcceptanceV2` runs the Conduit SDK acceptance suite v2 (the revision pinned by the SDK
+version in `go.mod`) against MySQL, and CI keeps its JSON report as the `acceptance-report`
+artifact:
+
+```sh
+rm -f acceptance-report.json
+CONDUIT_ACCEPTANCE_REPORT=acceptance-report.json go test -race -count=1 -run '^TestAcceptanceV2$' .
+```
+
+Set `MYSQL_TEST_DSN` to run against a server other than the compose one. The connector claims
+only what the suite verifies:
+
+| Claim | Status | Why |
+| --- | --- | --- |
+| Source `ExactResume` | claimed | Snapshot positions hold the last key read per table, CDC positions the binlog event and the row inside it, so a restart continues after the last acked record. Exception: a snapshot position written before key types were recorded restarts tables with text, binary or decimal keys from their first row (see Delivery semantics and limits) |
+| Source `OrdersByKey` | not claimed | The snapshot is not read in one transaction with the CDC start position, so CDC can replay an older change of a row after the snapshot delivered its newer state |
+| Source schema evolution | not claimed | DDL on a running pipeline is not handled (see Limits) |
+| Destination idempotence | claimed | Writes are `INSERT ... ON DUPLICATE KEY UPDATE`, so a replayed record overwrites its row. Holds for tables with a primary or unique key; a table without one appends duplicates |
+| Destination `OrdersByKey` | not claimed | An upsert keeps only the last record per key, so the stored data cannot show write order |
+| Destination schema evolution | not claimed | A field without a column fails the write only when it is in the first record of a batch; in a later record it is dropped ([#222](https://github.com/ConduitIO/conduit-connector-mysql/issues/222)) |
+
+The suite drives the connector in process. The source's records are decoded from Avro with the
+schema named in their metadata before the suite compares them, as Conduit's destinations do.
+
 The Docker compose file at `test/docker-compose.yml` can be used to run the required resource locally. It includes [adminer](https://www.adminer.org/) for database management.
 
 Use the `TRACE=true` environment variable to enable trace logs when running tests.

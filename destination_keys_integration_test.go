@@ -766,6 +766,39 @@ func TestDestination_FieldNamesResolveLikeMySQL(t *testing.T) {
 		is.Equal(n, int64(2))
 	})
 
+	for name, field := range map[string]string{
+		"delete: trailing space names no column":                "s ",
+		"delete: trailing space after upper case":               "S ",
+		"delete: capital sharp s is not ß, unlike Go's ToLower": "ẞ",
+	} {
+		t.Run(name, func(t *testing.T) {
+			is := is.New(t)
+			column := "s"
+			if field == "ẞ" {
+				column = "`ß`"
+			}
+			is.NoErr(db.Exec("DROP TABLE IF EXISTS dest_keyfold").Error)
+			is.NoErr(db.Exec("CREATE TABLE dest_keyfold (" + column + " BIGINT PRIMARY KEY)").Error)
+			is.NoErr(db.Exec("INSERT INTO dest_keyfold VALUES (1), (2)").Error)
+			written, err := dest.Write(ctx, []opencdc.Record{keysTestDelete("dest_keyfold", opencdc.StructuredData{field: 1})})
+			is.True(errors.Is(err, ErrKeyColumnMissing))
+			is.Equal(written, 0)
+			var n int64
+			is.NoErr(db.Raw("SELECT COUNT(*) FROM dest_keyfold").Scan(&n).Error)
+			is.Equal(n, int64(2))
+		})
+	}
+
+	t.Run("upsert: capital sharp s does not get the key checks of ß", func(t *testing.T) {
+		is := is.New(t)
+		is.NoErr(db.Exec("DROP TABLE IF EXISTS dest_keyfold").Error)
+		is.NoErr(db.Exec("CREATE TABLE dest_keyfold (id BIGINT PRIMARY KEY, `ß` BIGINT UNIQUE)").Error)
+		// MySQL has no column ẞ: the statement fails as an unknown column,
+		// it is not typed (or written) as ß.
+		_, err := dest.Write(ctx, []opencdc.Record{keysTestUpsert("dest_keyfold", opencdc.StructuredData{"id": 1, "ẞ": 2})})
+		is.True(errors.Is(err, ErrUnknownColumn))
+	})
+
 	t.Run("delete: two fields that name one column", func(t *testing.T) {
 		is := is.New(t)
 		is.NoErr(db.Exec("DROP TABLE IF EXISTS dest_keyfold").Error)

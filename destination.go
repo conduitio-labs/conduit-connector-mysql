@@ -781,6 +781,9 @@ type columnResolver map[string]string
 // ASCII-only nor Unicode case folding: checked on 8.0.39, "K", the Kelvin sign
 // U+212A, "İ" (to i), "É", "Ä", "ǅ" and "Σ" name the lower-case column, while
 // "ſ", "ı", "ẞ", "ς" and "µ" name no column ("ẞ" is "ß" for Go's ToLower).
+// The comparison ignores trailing spaces (a PAD SPACE collation), which a
+// statement does not, so the character lengths are compared too: "s " names
+// no column.
 // Any local folding gets some of these wrong, and a wrong match either skips
 // the key checks (an overwrite through the Kelvin sign) or deletes by a column
 // the record does not name. One query resolves every distinct field.
@@ -801,9 +804,11 @@ func (d *Destination) resolveColumns(ctx context.Context, tx *sqlx.Tx, table str
 	parts := make([]string, len(uniq))
 	args := make([]any, 0, 4*len(uniq))
 	for i, f := range uniq {
+		// The collation pads with spaces, so "s " would equal the column s;
+		// MySQL rejects such a name in a statement, so the lengths must match.
 		parts[i] = "SELECT ? AS FIELD, COLUMN_NAME FROM information_schema.columns " +
-			"WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?"
-		args = append(args, f, database, name, f)
+			"WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ? AND CHAR_LENGTH(COLUMN_NAME) = CHAR_LENGTH(?)"
+		args = append(args, f, database, name, f, f)
 	}
 	var rows []struct {
 		Field  string `db:"FIELD"`

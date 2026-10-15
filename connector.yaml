@@ -152,6 +152,23 @@ specification:
 
     If a unique key is not present in the target table, the record will be simply appended.
 
+    ### Columns and schema changes
+
+    Each record is written with exactly the fields in its `.Payload.After`, whatever the other records in the batch contain:
+
+    - A field the table has no column for fails the write with `mysql.destination.unknown_column`. The destination does not create or alter tables, and it never drops a field. Add the column first, or remove the field with a processor.
+    - A field the record does not have is not written. An inserted row gets the column's default; an existing row keeps the column's current value. A field set to `null` writes `NULL`.
+
+    Table and column names are quoted, so reserved words work. A collection of the form `db.table` writes to `table` in database `db`.
+
+    ### Deletes
+
+    Delete records are matched on the target table's primary key, so the table must have one: a delete for a table without a primary key fails with `mysql.destination.delete_without_primary_key` instead of removing rows. The record key must hold every primary-key column (`mysql.destination.key_column_missing` otherwise), either as structured data or as a JSON object. Integer key values are matched exactly. A record whose operation is not create, update, delete or snapshot fails with `mysql.destination.unsupported_operation`.
+
+    ### Atomicity and acknowledgements
+
+    Each write is a single transaction. If any record in the write fails, nothing from that write is stored and none of its records are acknowledged; the records are redelivered after the pipeline recovers. Upserts on a primary or unique key make the redelivery idempotent; a table without one gets duplicate rows.
+
     ## Delivery semantics and limits
 
     The source connector is in beta. This section states what it guarantees and what it does not.

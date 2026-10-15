@@ -16,12 +16,15 @@ package common
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -42,7 +45,7 @@ import (
 // float64 key is refused on read (see decodeTagged). Times are within MySQL's
 // DATETIME range, years 1000 to 9999, which RFC 3339 can represent.
 func genKey(t *rapid.T, label string) (in, want any) {
-	switch rapid.IntRange(0, 15).Draw(t, label+" type") {
+	switch rapid.IntRange(0, 16).Draw(t, label+" type") {
 	case 0:
 		return nil, nil
 	case 1:
@@ -93,9 +96,12 @@ func genKey(t *rapid.T, label string) (in, want any) {
 	case 14:
 		v := genTime(t, label)
 		return v, v
-	default:
+	case 15:
 		v := rapid.Bool().Draw(t, label)
 		return v, v
+	default:
+		v := rapid.Uint16().Draw(t, label)
+		return v, uint64(v)
 	}
 }
 
@@ -154,8 +160,10 @@ func genSnapshotPosition(t *rapid.T) (in, want SnapshotPosition) {
 	return in, want
 }
 
-// genBinlogPos draws a binlog position: a file name with MySQL's fixed-width
-// sequence number, and an offset.
+// genBinlogPos draws a binlog position: a file name with a six-digit sequence
+// number, and an offset. MySQL pads the number to at least six digits and
+// keeps counting past 999999 (seven digits and more); those names are left
+// out because Compare orders them wrongly (ConduitIO/conduit-connector-mysql#238).
 func genBinlogPos(t *rapid.T, label string) ReplicationEventPosition {
 	return ReplicationEventPosition{
 		Name: fmt.Sprintf("mysql-bin.%06d", rapid.IntRange(1, 999999).Draw(t, label+" file")),
@@ -183,14 +191,32 @@ func genCdcPosition(t *rapid.T) CdcPosition {
 		}
 	}
 	if rapid.Bool().Draw(t, "coverage") {
-		p.TableCoverage = genCoverage(t)
+		p.TableCoverage, _ = genCoverage(t)
 	}
 	return p
 }
 
-// genCoverage draws a table coverage, in list form or, for more than
-// MaxListedTables tables, in hash form.
-func genCoverage(t *rapid.T) *TableCoverage {
+// genCoverage draws a table coverage and the table set it covers. It comes
+// in three forms:
+//
+//   - list form, from NewTableCoverage, for up to MaxListedTables tables;
+//   - hash form, from NewTableCoverage, for more;
+//   - legacy hash form, as builds before hashVersion 1 wrote it: no
+//     HashVersion, and a SHA-256 of the sorted names joined with "\n". It is
+//     built here because no current code writes it.
+//
+// Names may contain any character, newline included, which is what makes
+// the legacy hash ambiguous.
+func genCoverage(t *rapid.T) (*TableCoverage, []string) {
+	if rapid.IntRange(0, 3).Draw(t, "legacy hash form") == 0 {
+		set := sortedSet(genTableSet(t, "legacy covered"))
+		sum := sha256.Sum256([]byte(strings.Join(set, "\n")))
+		return &TableCoverage{
+			Hash:          hex.EncodeToString(sum[:]),
+			Count:         len(set),
+			HasUnverified: rapid.Bool().Draw(t, "has unverified"),
+		}, set
+	}
 	union := genTableSet(t, "covered")
 	var snap, unver, cdcOnly []string
 	for _, table := range union {
@@ -203,12 +229,11 @@ func genCoverage(t *rapid.T) *TableCoverage {
 			cdcOnly = append(cdcOnly, table)
 		}
 	}
-	return NewTableCoverage(snap, unver, cdcOnly)
+	return NewTableCoverage(snap, unver, cdcOnly), sortedSet(union)
 }
 
 // genTableSet draws distinct table names, sometimes more than
-// MaxListedTables so the coverage takes its hash form. Names may contain
-// any character, newline included.
+// MaxListedTables so the coverage takes its hash form.
 func genTableSet(t *rapid.T, label string) []string {
 	if rapid.IntRange(0, 4).Draw(t, label+" large") == 0 {
 		n := rapid.IntRange(MaxListedTables+1, MaxListedTables+20).Draw(t, label+" count")
@@ -271,10 +296,16 @@ func TestCdcPosition_PropertyRoundTrip(t *testing.T) {
 	})
 }
 
-// TestCdcPosition_PropertyOrderSurvivesSerialization: Compare orders binlog
-// positions as the binlog does (file sequence, then offset), and the order
-// of two positions read back is the order of the two written. The CDC
+// TestCdcPosition_PropertyOrderSurvivesSerialization: for binlog file names
+// with six-digit sequence numbers (mysql-bin.000001 to mysql-bin.999999),
+// Compare orders positions as the binlog does (file sequence, then offset),
+// is antisymmetric, and gives the same answer after a round trip. The CDC
 // iterator compares these to decide what a restart skips (invariant 3).
+//
+// It does not cover names past .999999: MySQL keeps counting with seven or
+// more digits, and Compare, which compares names as strings, orders those
+// wrongly. That is ConduitIO/conduit-connector-mysql#238; widen the range to
+// 1<<31-1 when it is fixed.
 func TestCdcPosition_PropertyOrderSurvivesSerialization(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		aSeq := rapid.IntRange(1, 999999).Draw(t, "a file")
@@ -343,63 +374,66 @@ func TestPosition_PropertyVersionGate(t *testing.T) {
 // TestTableCoverage_PropertyNoMissedTable: after the coverage is written
 // into a CDC position and read back, it never reports "nothing added" for a
 // configuration that has a table it did not cover. A missed table would have
-// its existing rows silently skipped (invariant 3). In list form the added
-// tables are exactly the new ones; in hash form any change is reported.
+// its existing rows silently skipped (invariant 3).
+//
+//   - List form: the added tables are exactly the new ones.
+//   - Hash form: any change to the set is reported.
+//   - Legacy hash form: "unchanged" only when the set is the same and no name
+//     contains a newline (the only case the legacy hash can prove);
+//     otherwise changed, the safe answer.
 func TestTableCoverage_PropertyNoMissedTable(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
-		cov := genCoverage(t)
+		cov, covered := genCoverage(t)
 		p := genCdcPosition(t)
 		p.TableCoverage = cov
 		read := parseCDC(t, p.ToSDKPosition()).TableCoverage
 		if read == nil {
 			t.Fatal("coverage lost in a round trip")
 		}
+		if diff := cmp.Diff(cov, read, cmpopts.EquateEmpty()); diff != "" {
+			t.Fatalf("coverage changed in a round trip (-want +got):\n%s", diff)
+		}
 
-		current := genCurrent(t, cov)
+		current := genCurrent(t, covered)
 		added, changed := read.Added(current)
 
-		if read.Hashed() {
-			if changed != !sameSet(current, hashedSet(cov)) {
-				t.Fatalf("hash form: changed = %v for current %d tables, covered %d", changed, len(current), read.Count)
+		switch {
+		case read.Hashed() && read.HashVersion == 0:
+			provable := sameSet(current, covered) && !slices.ContainsFunc(current, func(s string) bool {
+				return strings.Contains(s, "\n")
+			})
+			if changed != !provable || added != nil {
+				t.Fatalf("legacy hash form: Added = %q, %v; want changed = %v (current %q, covered %q)",
+					added, changed, !provable, current, covered)
 			}
-			return
-		}
-		var want []string
-		for _, table := range sortedSet(current) {
-			if !slices.Contains(cov.Known(), table) {
-				want = append(want, table)
+		case read.Hashed():
+			if changed != !sameSet(current, covered) || added != nil {
+				t.Fatalf("hash form: Added = %q, %v for current %d tables, covered %d", added, changed, len(current), read.Count)
 			}
-		}
-		if diff := cmp.Diff(want, added, cmpopts.EquateEmpty()); diff != "" || changed != (len(want) > 0) {
-			t.Fatalf("list form: Added(%q) = %q, %v; want %q (-want +got):\n%s", current, added, changed, want, diff)
+		default:
+			var want []string
+			for _, table := range sortedSet(current) {
+				if !slices.Contains(covered, table) {
+					want = append(want, table)
+				}
+			}
+			if diff := cmp.Diff(want, added, cmpopts.EquateEmpty()); diff != "" || changed != (len(want) > 0) {
+				t.Fatalf("list form: Added(%q) = %q, %v; want %q (-want +got):\n%s", current, added, changed, want, diff)
+			}
 		}
 	})
 }
 
 // genCurrent draws the table set a restart runs with: the covered set with
 // some tables removed and some added.
-func genCurrent(t *rapid.T, cov *TableCoverage) []string {
-	base := cov.Known()
-	if cov.Hashed() {
-		base = hashedSet(cov)
-	}
+func genCurrent(t *rapid.T, covered []string) []string {
 	var current []string
-	for _, table := range base {
+	for _, table := range covered {
 		if rapid.IntRange(0, 9).Draw(t, "drop table") != 0 {
 			current = append(current, table)
 		}
 	}
 	return append(current, rapid.SliceOfN(rapid.String(), 0, 3).Draw(t, "new tables")...)
-}
-
-// hashedSet returns the set a hash-form coverage was built from. genCoverage
-// builds hash form only from "t0".."tN", so the set is determined by Count.
-func hashedSet(cov *TableCoverage) []string {
-	set := make([]string, cov.Count)
-	for i := range set {
-		set[i] = "t" + strconv.Itoa(i)
-	}
-	return sortedSet(set)
 }
 
 func sameSet(a, b []string) bool {

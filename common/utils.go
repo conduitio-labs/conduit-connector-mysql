@@ -20,6 +20,7 @@ import (
 	"io"
 	"log/slog"
 	"strconv"
+	"strings"
 
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/go-mysql-org/go-mysql/canal"
@@ -156,7 +157,14 @@ func (t *TableKeyFetcher) GetKeys(tx *sqlx.Tx, table string) (PrimaryKeys, error
 		return keys, nil
 	}
 
-	keys, err := GetPrimaryKeys(tx, t.database, table)
+	// A qualified name, db.table, names a table in another database (the
+	// destination writes it that way, see quoteTable).
+	database, name := t.database, table
+	if schema, rest, ok := strings.Cut(table, "."); ok {
+		database, name = schema, rest
+	}
+
+	keys, err := GetPrimaryKeys(tx, database, name)
 	if err != nil {
 		return nil, err
 	}

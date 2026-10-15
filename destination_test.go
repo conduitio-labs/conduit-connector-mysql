@@ -170,3 +170,13 @@ func TestColumnRuns(t *testing.T) {
 		is.True(errors.Is(err, ErrPayloadEmpty))
 	})
 }
+
+func TestQuoteIdentifiers(t *testing.T) {
+	is := is.New(t)
+	is.Equal(quoteIdent("order"), "`order`")
+	is.Equal(quoteIdent("we`ird"), "`we``ird`")
+	is.Equal(quoteIdent("a`) DROP"), "`a``) DROP`")
+	is.Equal(quoteTable("t"), "`t`")
+	is.Equal(quoteTable("db.t"), "`db`.`t`")
+	is.Equal(quoteTable("db.t.x"), "`db`.`t.x`")
+}

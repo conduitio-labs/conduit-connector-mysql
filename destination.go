@@ -155,7 +155,11 @@ func (d *Destination) upsertRecords(ctx context.Context, tx *sqlx.Tx, table stri
 	}
 
 	for _, run := range runs {
-		insert := squirrel.Insert(table).Columns(run.columns...)
+		quoted := make([]string, len(run.columns))
+		for i, col := range run.columns {
+			quoted[i] = quoteIdent(col)
+		}
+		insert := squirrel.Insert(quoteTable(table)).Columns(quoted...)
 		for _, rec := range run.recs {
 			payload := rec.Payload.After.(opencdc.StructuredData) // checked by columnRuns
 			values := make([]any, 0, len(run.columns))
@@ -165,8 +169,8 @@ func (d *Destination) upsertRecords(ctx context.Context, tx *sqlx.Tx, table stri
 			insert = insert.Values(values...)
 		}
 
-		updateParts := make([]string, 0, len(run.columns))
-		for _, col := range run.columns {
+		updateParts := make([]string, 0, len(quoted))
+		for _, col := range quoted {
 			updateParts = append(updateParts, fmt.Sprintf("%s=VALUES(%s)", col, col))
 		}
 		insert = insert.Suffix("ON DUPLICATE KEY UPDATE " + strings.Join(updateParts, ", "))
@@ -189,6 +193,25 @@ func (d *Destination) upsertRecords(ctx context.Context, tx *sqlx.Tx, table stri
 	}
 
 	return nil
+}
+
+// quoteIdent quotes a MySQL identifier: it wraps the name in backticks and
+// doubles any backtick inside it. Table and column names come from records
+// (opencdc.collection and payload field names), so they are never put into the
+// SQL text unquoted: a reserved word as a column name would break the
+// statement, and a crafted field name would change it.
+func quoteIdent(name string) string {
+	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
+}
+
+// quoteTable quotes a table name from opencdc.collection. A name with a dot,
+// db.table, names a table in another database, as it did before names were
+// quoted, so the part before the first dot and the rest are quoted on their own.
+func quoteTable(name string) string {
+	if schema, table, ok := strings.Cut(name, "."); ok {
+		return quoteIdent(schema) + "." + quoteIdent(table)
+	}
+	return quoteIdent(name)
 }
 
 // keyString renders a record key for error messages. A nil key is valid input
@@ -274,8 +297,8 @@ func (d *Destination) deleteRecords(ctx context.Context, tx *sqlx.Tx, table stri
 		}
 
 		query := squirrel.
-			Delete(table).
-			Where(squirrel.Eq{keyName: values})
+			Delete(quoteTable(table)).
+			Where(squirrel.Eq{quoteIdent(keyName): values})
 
 		sql, args, err := query.ToSql()
 		if err != nil {
@@ -300,12 +323,12 @@ func (d *Destination) deleteRecords(ctx context.Context, tx *sqlx.Tx, table stri
 			if err != nil {
 				return 0, fmt.Errorf("failed to parse key: %w", err)
 			}
-			andConditions = append(andConditions, squirrel.Eq{keyName: val})
+			andConditions = append(andConditions, squirrel.Eq{quoteIdent(keyName): val})
 		}
 		orConditions = append(orConditions, andConditions)
 	}
 
-	query := squirrel.Delete(table).Where(orConditions)
+	query := squirrel.Delete(quoteTable(table)).Where(orConditions)
 	sql, args, err := query.ToSql()
 	if err != nil {
 		return 0, fmt.Errorf("failed to build query: %w", err)

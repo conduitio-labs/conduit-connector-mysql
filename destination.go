@@ -229,8 +229,19 @@ func (d *Destination) Teardown(_ context.Context) error {
 // writing the record without the field would lose it. A field the record lacks
 // is not written: an inserted row gets the column default, an updated row keeps
 // the column's current value.
+//
+// Invariant 6: the values of columns in a unique index (the primary key and
+// UNIQUE keys) decide which row ON DUPLICATE KEY UPDATE overwrites, so they go
+// through the same checks as delete keys (typeKeyValue). MySQL converts on
+// assignment: {"id":1.5} into a BIGINT key became 2 and overwrote row 2. A null
+// value in such a column is passed on (an AUTO_INCREMENT key generates a new
+// id; other keys reject it).
 func (d *Destination) upsertRecords(ctx context.Context, tx *sqlx.Tx, table string, recs []opencdc.Record) error {
 	runs, err := columnRuns(recs)
+	if err != nil {
+		return err
+	}
+	uniqueCols, err := d.uniqueColumns(ctx, tx, table)
 	if err != nil {
 		return err
 	}
@@ -244,7 +255,13 @@ func (d *Destination) upsertRecords(ctx context.Context, tx *sqlx.Tx, table stri
 		for _, payload := range run.payloads {
 			values := make([]any, 0, len(run.columns))
 			for _, col := range run.columns {
-				values = append(values, payload[col])
+				v := payload[col]
+				if kc, ok := uniqueCols[col]; ok && v != nil {
+					if v, err = typeKeyValue(kc, v, ".Payload.After"); err != nil {
+						return err
+					}
+				}
+				values = append(values, v)
 			}
 			insert = insert.Values(values...)
 		}
@@ -359,6 +376,13 @@ func (d *Destination) deleteRecords(ctx context.Context, tx *sqlx.Tx, table stri
 		return 0, err
 	}
 	if len(keyCols) == 0 {
+		if exists, err := d.tableExists(ctx, tx, table); err != nil {
+			return 0, err
+		} else if !exists {
+			return 0, newError(ErrTableNotFound, CodeTableNotFound, collectionPath,
+				"create the table, or fix the record's collection; table names are case-sensitive unless the server sets lower_case_table_names",
+				"table %q does not exist", table)
+		}
 		// Without this check the empty key list builds a predicate that matches
 		// every row, and the delete wipes the table.
 		return 0, newError(ErrDeleteWithoutPrimaryKey, CodeDeleteWithoutPrimaryKey, collectionPath,
@@ -414,10 +438,7 @@ type keyColumn struct {
 // primaryKeyColumns returns the primary-key columns of table in key order. A
 // table of the form db.table is looked up in database db.
 func (d *Destination) primaryKeyColumns(ctx context.Context, tx *sqlx.Tx, table string) ([]keyColumn, error) {
-	database, name := d.config.MysqlCfg().DBName, table
-	if schema, rest, ok := strings.Cut(table, "."); ok {
-		database, name = schema, rest
-	}
+	database, name := d.splitTable(table)
 	var cols []keyColumn
 	if err := tx.SelectContext(ctx, &cols, `
 		SELECT k.COLUMN_NAME, c.DATA_TYPE, c.COLUMN_TYPE
@@ -478,29 +499,58 @@ func parseRecordKey(col keyColumn, keyVal opencdc.Data) (any, error) {
 			"make sure the record key holds a non-null value for every primary-key column of the table, for example with a processor that sets .Key",
 			"the record key has no value for the primary-key column %q", col.Name)
 	}
+	return typeKeyValue(col, val, ".Key")
+}
+
+// typeKeyValue checks a non-null value for the key column col and converts it
+// to the form MySQL compares and stores exactly in that column. path is the
+// record field the value comes from, for the error.
+func typeKeyValue(col keyColumn, val any, path string) (any, error) {
 	if _, isBytes := val.([]byte); !isBytes {
 		switch reflect.ValueOf(val).Kind() {
 		case reflect.Slice, reflect.Array, reflect.Map:
-			return nil, newError(ErrKeyValueNotScalar, CodeKeyValueNotScalar, ".Key",
-				"send one scalar value per primary-key column in the record key",
-				"the record key has a %T value for the primary-key column %q, which would match several rows or none", val, col.Name)
+			return nil, newError(ErrKeyValueNotScalar, CodeKeyValueNotScalar, path,
+				"send one scalar value per key column",
+				"the record has a %T value for the key column %q, which would match several rows or none", val, col.Name)
 		default:
 		}
 	}
 
 	mismatch := func(why string) error {
-		return newError(ErrKeyValueTypeMismatch, CodeKeyValueTypeMismatch, ".Key",
-			"send key values that fit the primary-key column's type",
-			"the record key has %v (%T) for the %s primary-key column %q: %s", val, val, col.ColumnType, col.Name, why)
+		return newError(ErrKeyValueTypeMismatch, CodeKeyValueTypeMismatch, path,
+			"send key values that fit the key column's type",
+			"the record has %v (%T) for the %s key column %q: %s", val, val, col.ColumnType, col.Name, why)
 	}
 
 	switch {
+	case col.DataType == dataTypeEnum || col.DataType == dataTypeSet:
+		// A number is compared with the member's index, a string with its
+		// value; only the value is unambiguous.
+		s, ok := val.(string)
+		if !ok {
+			if b, isBytes := val.([]byte); isBytes {
+				return string(b), nil
+			}
+			return nil, mismatch("an ENUM or SET column needs the member's name as a string")
+		}
+		return s, nil
 	case stringTypes[col.DataType]:
 		s, ok := stringKeyValue(val)
 		if !ok {
-			return nil, mismatch("a string column needs a string or a number")
+			return nil, mismatch("a string column needs a string, an integer, or a whole float below 1e15")
 		}
 		return s, nil
+	case col.DataType == dataTypeBit:
+		n, ok := keyInteger(val)
+		if !ok {
+			return nil, mismatch("not a whole number")
+		}
+		bits := bitWidth(col.ColumnType)
+		hi := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), bits), big.NewInt(1))
+		if n.Sign() < 0 || n.Cmp(hi) > 0 {
+			return nil, mismatch(fmt.Sprintf("outside the column's range 0..%s", hi))
+		}
+		return n.Uint64(), nil
 	case integerTypes[col.DataType] != nil:
 		n, ok := keyInteger(val)
 		if !ok {
@@ -526,13 +576,75 @@ func parseRecordKey(col keyColumn, keyVal opencdc.Data) (any, error) {
 	}
 }
 
+// DATA_TYPE values with their own key rules in typeKeyValue.
+const (
+	dataTypeEnum = "enum"
+	dataTypeSet  = "set"
+	dataTypeBit  = "bit"
+)
+
+// bitWidth returns M of a bit(M) COLUMN_TYPE (1 if absent).
+func bitWidth(columnType string) uint {
+	_, rest, ok := strings.Cut(columnType, "(")
+	if !ok {
+		return 1
+	}
+	m, err := strconv.Atoi(strings.TrimSuffix(rest, ")"))
+	if err != nil || m < 1 || m > 64 {
+		return 64
+	}
+	return uint(m)
+}
+
+// uniqueColumns returns the columns of every unique index of table (the
+// primary key and UNIQUE keys) with their types, read in this transaction.
+func (d *Destination) uniqueColumns(ctx context.Context, tx *sqlx.Tx, table string) (map[string]keyColumn, error) {
+	database, name := d.splitTable(table)
+	var cols []keyColumn
+	if err := tx.SelectContext(ctx, &cols, `
+		SELECT DISTINCT s.COLUMN_NAME, c.DATA_TYPE, c.COLUMN_TYPE
+		FROM information_schema.statistics s
+		JOIN information_schema.columns c
+			ON c.TABLE_SCHEMA = s.TABLE_SCHEMA AND c.TABLE_NAME = s.TABLE_NAME AND c.COLUMN_NAME = s.COLUMN_NAME
+		WHERE s.NON_UNIQUE = 0 AND s.TABLE_SCHEMA = ? AND s.TABLE_NAME = ?`, database, name); err != nil {
+		return nil, fmt.Errorf("failed to get the unique-key columns of table %s: %w", table, err)
+	}
+	out := make(map[string]keyColumn, len(cols))
+	for _, c := range cols {
+		c.DataType, c.ColumnType = strings.ToLower(c.DataType), strings.ToLower(c.ColumnType)
+		out[c.Name] = c
+	}
+	return out, nil
+}
+
+// tableExists reports whether table exists, looked up like primaryKeyColumns.
+func (d *Destination) tableExists(ctx context.Context, tx *sqlx.Tx, table string) (bool, error) {
+	database, name := d.splitTable(table)
+	var n int
+	if err := tx.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM information_schema.tables WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?",
+		database, name).Scan(&n); err != nil {
+		return false, fmt.Errorf("failed to check whether table %s exists: %w", table, err)
+	}
+	return n > 0, nil
+}
+
+// splitTable returns the database and table name of a collection: db.table, or
+// the DSN's database.
+func (d *Destination) splitTable(table string) (string, string) {
+	if schema, rest, ok := strings.Cut(table, "."); ok {
+		return schema, rest
+	}
+	return d.config.MysqlCfg().DBName, table
+}
+
 // stringTypes are the DATA_TYPE values of columns compared as strings. ENUM and
-// SET compare a number with their index, a string with their value.
+// SET are handled separately: they take only member names.
 //
 //nolint:goconst // MySQL DATA_TYPE names
 var stringTypes = map[string]bool{
 	"char": true, "varchar": true, "tinytext": true, "text": true, "mediumtext": true, "longtext": true,
-	"binary": true, "varbinary": true, "enum": true, "set": true,
+	"binary": true, "varbinary": true,
 }
 
 // intRange is the signed range and the unsigned maximum of an integer type.
@@ -557,7 +669,10 @@ var integerTypes = map[string]*intRange{
 }
 
 // stringKeyValue renders a key value for a string column: strings as they are,
-// numbers as their decimal text (a raw JSON number as its literal).
+// integers as their decimal text, a raw JSON number as its literal, and a
+// float only when it is whole and below 1e15, where MySQL's text for the double
+// is the plain integer (from 1e15 on MySQL writes 1e15, and Go's text would not
+// match a row stored by MySQL). Other floats are refused.
 func stringKeyValue(v any) (string, bool) {
 	switch v := v.(type) {
 	case string:
@@ -569,9 +684,9 @@ func stringKeyValue(v any) (string, bool) {
 	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
 		return fmt.Sprint(v), true
 	case float32:
-		return strconv.FormatFloat(float64(v), 'f', -1, 32), true
+		return plainWholeFloat(float64(v))
 	case float64:
-		return strconv.FormatFloat(v, 'f', -1, 64), true
+		return plainWholeFloat(v)
 	default:
 		return "", false // bool and anything else has no single string form
 	}
@@ -622,6 +737,13 @@ func keyInteger(v any) (*big.Int, bool) {
 	default:
 		return nil, false
 	}
+}
+
+func plainWholeFloat(f float64) (string, bool) {
+	if math.IsInf(f, 0) || math.IsNaN(f) || f != math.Trunc(f) || math.Abs(f) >= 1e15 {
+		return "", false
+	}
+	return strconv.FormatFloat(f, 'f', -1, 64), true
 }
 
 func wholeFloat(f float64) (*big.Int, bool) {

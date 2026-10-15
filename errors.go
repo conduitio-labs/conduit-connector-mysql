@@ -88,6 +88,10 @@ const (
 	// CodeKeyValueTypeMismatch: a record key holds a value for an integer
 	// primary-key column that is not a whole number.
 	CodeKeyValueTypeMismatch = "mysql.destination.key_value_type_mismatch"
+
+	// CodeTableNotFound: a delete record's collection names a table that does
+	// not exist.
+	CodeTableNotFound = "mysql.destination.table_not_found"
 )
 
 // Error is a user-facing configuration or state error with a stable code, the
@@ -175,3 +179,6 @@ var ErrKeyValueNotScalar = errors.New("record key value is not a scalar")
 
 // ErrKeyValueTypeMismatch is the sentinel for CodeKeyValueTypeMismatch.
 var ErrKeyValueTypeMismatch = errors.New("record key value does not fit the key column type")
+
+// ErrTableNotFound is the sentinel for CodeTableNotFound.
+var ErrTableNotFound = errors.New("table not found")

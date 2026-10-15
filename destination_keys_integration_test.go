@@ -373,3 +373,188 @@ func TestDestination_Delete_IntegerKeyOutOfRange(t *testing.T) {
 		})
 	}
 }
+
+func keysTestUpsert(table string, after opencdc.StructuredData) opencdc.Record {
+	metadata := opencdc.Metadata{}
+	metadata.SetCollection(table)
+	return opencdc.Record{Operation: opencdc.OperationCreate, Metadata: metadata, Payload: opencdc.Change{After: after}}
+}
+
+// Values of unique-index columns decide which row ON DUPLICATE KEY UPDATE
+// overwrites, and MySQL converts on assignment: {"id":1.5} into a BIGINT key
+// became 2 and overwrote row 2. They get the same checks as delete keys.
+func TestDestination_Upsert_KeyValuesAreTyped(t *testing.T) {
+	ctx := testutils.TestContext(t)
+	is := is.New(t)
+	db := testutils.NewDB(t)
+	t.Cleanup(func() { db.Exec("DROP TABLE IF EXISTS dest_upkey") })
+
+	dest, cleanup := testDestination(ctx, is)
+	defer cleanup()
+
+	for name, tc := range map[string]struct {
+		ddl, row string
+		after    opencdc.StructuredData
+		code     error
+	}{
+		"fraction into bigint primary key": {
+			"(id BIGINT PRIMARY KEY, v VARCHAR(10))", "(2, 'orig')",
+			opencdc.StructuredData{"id": 1.5, "v": "new"},
+			ErrKeyValueTypeMismatch,
+		},
+		"fraction into unique column": {
+			"(id INT AUTO_INCREMENT PRIMARY KEY, ext BIGINT UNIQUE, v VARCHAR(10))", "(1, 2, 'orig')",
+			opencdc.StructuredData{"ext": 1.5, "v": "new"},
+			ErrKeyValueTypeMismatch,
+		},
+		"list into primary key": {
+			"(id BIGINT PRIMARY KEY, v VARCHAR(10))", "(2, 'orig')",
+			opencdc.StructuredData{"id": []any{2}, "v": "new"},
+			ErrKeyValueNotScalar,
+		},
+		"float 1e15 into varchar primary key": {
+			"(id VARCHAR(30) PRIMARY KEY, v VARCHAR(10))", "('1e15', 'orig')",
+			opencdc.StructuredData{"id": float64(1e15), "v": "new"},
+			ErrKeyValueTypeMismatch,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			is := is.New(t)
+			is.NoErr(db.Exec("DROP TABLE IF EXISTS dest_upkey").Error)
+			is.NoErr(db.Exec("CREATE TABLE dest_upkey " + tc.ddl).Error)
+			is.NoErr(db.Exec("INSERT INTO dest_upkey VALUES " + tc.row).Error)
+
+			written, err := dest.Write(ctx, []opencdc.Record{keysTestUpsert("dest_upkey", tc.after)})
+			is.True(errors.Is(err, tc.code))
+			is.Equal(written, 0)
+
+			var v []string
+			is.NoErr(db.Raw("SELECT v FROM dest_upkey").Scan(&v).Error)
+			is.Equal(v, []string{"orig"}) // nothing overwritten, nothing added
+		})
+	}
+
+	t.Run("number into varchar primary key is stored as its text", func(t *testing.T) {
+		is := is.New(t)
+		is.NoErr(db.Exec("DROP TABLE IF EXISTS dest_upkey").Error)
+		is.NoErr(db.Exec("CREATE TABLE dest_upkey (id VARCHAR(30) PRIMARY KEY, v VARCHAR(10))").Error)
+		written, err := dest.Write(ctx, []opencdc.Record{
+			keysTestUpsert("dest_upkey", opencdc.StructuredData{"id": float64(1000), "v": "a"}),
+			keysTestUpsert("dest_upkey", opencdc.StructuredData{"id": int64(1000), "v": "b"}),
+		})
+		is.NoErr(err)
+		is.Equal(written, 2)
+		var rows []struct{ ID, V string }
+		is.NoErr(db.Raw("SELECT id, v FROM dest_upkey").Scan(&rows).Error)
+		is.Equal(len(rows), 1)
+		is.Equal(rows[0].ID, "1000")
+		is.Equal(rows[0].V, "b")
+	})
+}
+
+// Floats on string key columns are only sent when MySQL's text for them is the
+// plain integer (whole and below 1e15); 1e21 used to be sent as
+// "1000000000000000000000" while MySQL stores '1e21', an acked no-op.
+func TestDestination_Delete_FloatOnStringKey(t *testing.T) {
+	ctx := testutils.TestContext(t)
+	is := is.New(t)
+	db := testutils.NewDB(t)
+
+	is.NoErr(db.Exec("DROP TABLE IF EXISTS dest_keyfloat").Error)
+	is.NoErr(db.Exec("CREATE TABLE dest_keyfloat (id VARCHAR(30) PRIMARY KEY)").Error)
+	t.Cleanup(func() { db.Exec("DROP TABLE IF EXISTS dest_keyfloat") })
+	is.NoErr(db.Exec("INSERT INTO dest_keyfloat VALUES ('1e21'), ('1e15'), ('1.5'), ('100')").Error)
+
+	dest, cleanup := testDestination(ctx, is)
+	defer cleanup()
+
+	for _, f := range []float64{1e21, 1e15, 1.5} {
+		_, err := dest.Write(ctx, []opencdc.Record{keysTestDelete("dest_keyfloat", opencdc.StructuredData{"id": f})})
+		is.True(errors.Is(err, ErrKeyValueTypeMismatch))
+	}
+	written, err := dest.Write(ctx, []opencdc.Record{keysTestDelete("dest_keyfloat", opencdc.StructuredData{"id": float64(100)})})
+	is.NoErr(err)
+	is.Equal(written, 1)
+	var count int64
+	is.NoErr(db.Raw("SELECT COUNT(*) FROM dest_keyfloat").Scan(&count).Error)
+	is.Equal(count, int64(3))
+}
+
+// An ENUM key compares a number with the member's index and a BIT key rounds
+// a fraction, so both used to be acked no-ops. ENUM and SET take member names
+// only; BIT takes whole numbers within its width.
+func TestDestination_Delete_EnumAndBitKeys(t *testing.T) {
+	ctx := testutils.TestContext(t)
+	is := is.New(t)
+	db := testutils.NewDB(t)
+	t.Cleanup(func() {
+		db.Exec("DROP TABLE IF EXISTS dest_keyenum")
+		db.Exec("DROP TABLE IF EXISTS dest_keybit")
+	})
+	is.NoErr(db.Exec("DROP TABLE IF EXISTS dest_keyenum").Error)
+	is.NoErr(db.Exec("CREATE TABLE dest_keyenum (id ENUM('a','b','c') PRIMARY KEY)").Error)
+	is.NoErr(db.Exec("INSERT INTO dest_keyenum VALUES ('a'), ('b')").Error)
+	is.NoErr(db.Exec("DROP TABLE IF EXISTS dest_keybit").Error)
+	is.NoErr(db.Exec("CREATE TABLE dest_keybit (id BIT(8) PRIMARY KEY)").Error)
+	is.NoErr(db.Exec("INSERT INTO dest_keybit VALUES (b'00000001'), (b'00000101')").Error)
+
+	dest, cleanup := testDestination(ctx, is)
+	defer cleanup()
+
+	for name, tc := range map[string]struct {
+		table string
+		key   opencdc.Data
+	}{
+		"enum structured number": {"dest_keyenum", opencdc.StructuredData{"id": 1}},
+		"enum raw number":        {"dest_keyenum", opencdc.RawData(`{"id":1}`)},
+		"bit fraction":           {"dest_keybit", opencdc.RawData(`{"id":1.5}`)},
+		"bit over width":         {"dest_keybit", opencdc.StructuredData{"id": 256}},
+		"bit negative":           {"dest_keybit", opencdc.StructuredData{"id": -1}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			is := is.New(t)
+			_, err := dest.Write(ctx, []opencdc.Record{keysTestDelete(tc.table, tc.key)})
+			is.True(errors.Is(err, ErrKeyValueTypeMismatch))
+		})
+	}
+
+	written, err := dest.Write(ctx, []opencdc.Record{
+		keysTestDelete("dest_keyenum", opencdc.StructuredData{"id": "a"}),
+		keysTestDelete("dest_keybit", opencdc.RawData(`{"id":5}`)),
+	})
+	is.NoErr(err)
+	is.Equal(written, 2)
+	var n int64
+	is.NoErr(db.Raw("SELECT COUNT(*) FROM dest_keyenum").Scan(&n).Error)
+	is.Equal(n, int64(1))
+	is.NoErr(db.Raw("SELECT COUNT(*) FROM dest_keybit").Scan(&n).Error)
+	is.Equal(n, int64(1))
+}
+
+// A delete for a table that does not exist (dropped, or a name in the wrong
+// case where table names are case-sensitive) said the table had no primary
+// key. It has its own code now.
+func TestDestination_Delete_TableNotFound(t *testing.T) {
+	ctx := testutils.TestContext(t)
+	is := is.New(t)
+	db := testutils.NewDB(t)
+
+	is.NoErr(db.Exec("DROP TABLE IF EXISTS dest_nosuchtable").Error)
+	is.NoErr(db.Exec("DROP TABLE IF EXISTS DestMixedCase").Error)
+	is.NoErr(db.Exec("CREATE TABLE DestMixedCase (id BIGINT PRIMARY KEY)").Error)
+	t.Cleanup(func() { db.Exec("DROP TABLE IF EXISTS DestMixedCase") })
+	var lctn int
+	is.NoErr(db.Raw("SELECT @@lower_case_table_names").Scan(&lctn).Error)
+
+	dest, cleanup := testDestination(ctx, is)
+	defer cleanup()
+
+	tables := []string{"dest_nosuchtable", "otherdb_that_does_not_exist.t"}
+	if lctn == 0 {
+		tables = append(tables, "destmixedcase") // case-sensitive names
+	}
+	for _, table := range tables {
+		_, err := dest.Write(ctx, []opencdc.Record{keysTestDelete(table, opencdc.StructuredData{"id": 1})})
+		is.True(errors.Is(err, ErrTableNotFound))
+	}
+}

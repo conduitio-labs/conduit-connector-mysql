@@ -19,8 +19,10 @@ import (
 	"errors"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/conduitio/conduit-commons/opencdc"
+	"github.com/go-sql-driver/mysql"
 	"github.com/matryer/is"
 )
 
@@ -204,4 +206,25 @@ func TestExactNumber_HugeExponentIsCheap(t *testing.T) {
 	is.Equal(got, any("1e1000000"))
 	allocated := after.TotalAlloc - before.TotalAlloc
 	is.True(allocated < 64<<10) // bytes allocated to classify one huge literal
+}
+
+func TestWithSessionTimeout(t *testing.T) {
+	is := is.New(t)
+
+	dsn, idle, err := withSessionTimeout("u:p@tcp(h:3306)/db")
+	is.NoErr(err)
+	cfg, err := mysql.ParseDSN(dsn)
+	is.NoErr(err)
+	is.Equal(cfg.Params["wait_timeout"], "60")
+	is.Equal(idle, 30*time.Second)
+
+	dsn, idle, err = withSessionTimeout("u:p@tcp(h:3306)/db?wait_timeout=20")
+	is.NoErr(err)
+	cfg, err = mysql.ParseDSN(dsn)
+	is.NoErr(err)
+	is.Equal(cfg.Params["wait_timeout"], "20") // the user's value is kept
+	is.Equal(idle, 10*time.Second)
+
+	_, _, err = withSessionTimeout("u:p@tcp(h:3306)/db?wait_timeout=0")
+	is.True(err != nil)
 }

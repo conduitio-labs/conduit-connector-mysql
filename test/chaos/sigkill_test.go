@@ -18,6 +18,7 @@ package chaos
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"database/sql"
 	"fmt"
@@ -37,7 +38,7 @@ import (
 
 func TestMain(m *testing.M) {
 	if os.Getenv(envChild) == "1" {
-		os.Exit(runChild())
+		os.Exit(RunChild())
 	}
 	os.Exit(m.Run())
 }
@@ -55,6 +56,8 @@ type harness struct {
 	table string
 	db    *sql.DB
 	run   int
+	// batch is the children's SDK batch size; "" for the default.
+	batch string
 }
 
 type childProc struct {
@@ -63,14 +66,25 @@ type childProc struct {
 	log  *bytes.Buffer
 }
 
-// start launches the next child, parking at park ("" for none).
+// start launches the next child from this build, parking at park ("" for
+// none).
 func (h *harness) start(park string) *childProc {
+	h.t.Helper()
+	return h.startBinary("", park)
+}
+
+// startBinary launches the next child from the program at bin (a build of
+// cmd/chaos-child), or from this test binary when bin is "".
+func (h *harness) startBinary(bin, park string) *childProc {
 	h.t.Helper()
 	h.run++
 	_ = os.Remove(filepath.Join(h.dir, parkedFile))
 	_ = os.Remove(filepath.Join(h.dir, openedFile))
 
 	cmd := exec.CommandContext(context.Background(), os.Args[0], "-test.run=^$")
+	if bin != "" {
+		cmd = exec.CommandContext(context.Background(), bin)
+	}
 	// A fixed environment: never the parent's, which can hold credentials.
 	cmd.Env = []string{
 		"PATH=" + os.Getenv("PATH"),
@@ -82,6 +96,7 @@ func (h *harness) start(park string) *childProc {
 		envTable + "=" + h.table,
 		envPark + "=" + park,
 		envDSN + "=" + testDSN(),
+		envBatch + "=" + h.batch,
 	}
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
@@ -96,7 +111,7 @@ func (h *harness) start(park string) *childProc {
 			<-c.done
 		}
 	})
-	h.t.Logf("run %d: started child pid %d, park %q", h.run, cmd.Process.Pid, park)
+	h.t.Logf("run %d: started child pid %d (%s), park %q", h.run, cmd.Process.Pid, cmp.Or(bin, "this build"), park)
 	return c
 }
 
@@ -141,9 +156,9 @@ func (h *harness) kill(c *childProc) {
 	h.t.Logf("run %d: killed (SIGKILL)", h.run)
 }
 
-func (h *harness) exec(q string, args ...any) {
+func (h *harness) exec(q string) {
 	h.t.Helper()
-	if _, err := h.db.ExecContext(context.Background(), q, args...); err != nil {
+	if _, err := h.db.ExecContext(context.Background(), q); err != nil {
 		h.t.Fatalf("%s: %v", q, err)
 	}
 }

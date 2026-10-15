@@ -1,0 +1,67 @@
+name: chaos-upgrade
+
+# Upgrade and downgrade under SIGKILL with real binaries: the last release's
+# source and this one run as separate processes against the same stored
+# positions (test/chaos/upgrade_test.go). Nightly, on demand, and on pull
+# requests that touch the harness. Not a required check.
+on:
+  schedule:
+    - cron: '17 4 * * *'
+  workflow_dispatch:
+    inputs:
+      base_ref:
+        description: 'Release tag or commit to upgrade from (default: the latest release tag)'
+        required: false
+  pull_request:
+    paths:
+      - 'test/chaos/**'
+      - '.github/workflows/chaos-upgrade.yml'
+
+jobs:
+  upgrade-downgrade:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0.39
+        env:
+          MYSQL_DATABASE: meroxadb
+          MYSQL_USER: meroxauser
+          MYSQL_PASSWORD: meroxapass
+          MYSQL_ROOT_PASSWORD: meroxaadmin
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost"
+          --health-interval=1s
+          --health-timeout=20s
+          --health-retries=30
+          --health-start-period=10s
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+
+      # The child is built from the release's source with this harness copied
+      # in; it only uses the connector's public API (mysql.NewSource,
+      # mysql.Connector), which the releases share.
+      - name: Build the release's child
+        env:
+          BASE_REF: ${{ inputs.base_ref }}
+        run: |
+          base="${BASE_REF:-$(git tag --list 'v*' --sort=-v:refname | head -n 1)}"
+          echo "upgrading from $base"
+          git worktree add "$RUNNER_TEMP/base" "$base"
+          mkdir -p "$RUNNER_TEMP/base/test/chaos"
+          cp test/chaos/child.go test/chaos/store.go test/chaos/doc.go "$RUNNER_TEMP/base/test/chaos/"
+          cp -r test/chaos/cmd "$RUNNER_TEMP/base/test/chaos/"
+          go -C "$RUNNER_TEMP/base" build -tags chaos -o "$RUNNER_TEMP/base-child" ./test/chaos/cmd/chaos-child
+
+      - name: Upgrade and downgrade
+        env:
+          MYSQL_CHAOS_BASE_CHILD: ${{ runner.temp }}/base-child
+        run: go test -v -race -count=1 -tags chaos -run 'TestSIGKILL_UpgradeDowngrade' ./test/chaos/

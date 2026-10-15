@@ -44,6 +44,8 @@ const (
 	envTable = "MYSQL_CHAOS_TABLE"
 	envPark  = "MYSQL_CHAOS_PARK"
 	envDSN   = "MYSQL_TEST_DSN"
+	// envBatch is the SDK batch size; 1 stores a position after every record.
+	envBatch = "MYSQL_CHAOS_BATCH"
 )
 
 // parkPoint is where a child stops and waits to be killed:
@@ -76,9 +78,13 @@ func parsePark(s string) (parkPoint, error) {
 	return parkPoint{kind: kind, n: n}, nil
 }
 
-// runChild is the child process: a real source, the ledger and the position
-// file, in the engine's order. It returns the process exit code.
-func runChild() int {
+// RunChild is the child process: a real source, the ledger and the position
+// file, in the engine's order. It returns the process exit code. The test
+// binary runs it from TestMain; cmd/chaos-child runs it as a plain program,
+// so that a child can be built from an older release of the connector for the
+// upgrade and downgrade test (see upgrade_test.go). It reads its whole setup
+// from the environment the parent passes.
+func RunChild() int {
 	if err := child(); err != nil {
 		fmt.Fprintf(os.Stderr, "chaos child: %v\n", err)
 		return 2
@@ -112,7 +118,7 @@ func child() error {
 		"cdc.disableLogs":    "true",
 		// Small batches, so kills land between stored positions inside the
 		// snapshot and inside one binlog event.
-		"sdk.batch.size":  "20",
+		"sdk.batch.size":  batchSize(),
 		"sdk.batch.delay": "100ms",
 	}
 	if err := sdk.Util.ParseConfig(ctx, cfg, src.Config(), mysql.Connector.NewSpecification().SourceParams); err != nil {
@@ -201,6 +207,14 @@ func child() error {
 			parkForever(dir, run)
 		}
 	}
+}
+
+// batchSize is the SDK batch size the parent asked for, 20 by default.
+func batchSize() string {
+	if b := os.Getenv(envBatch); b != "" {
+		return b
+	}
+	return "20"
 }
 
 // recordID decodes the record key with the schema in its metadata and returns

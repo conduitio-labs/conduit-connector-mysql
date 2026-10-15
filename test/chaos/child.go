@@ -97,6 +97,8 @@ func child() error {
 		return err
 	}
 
+	watchParent()
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM)
 	defer stop()
 	logger := zerolog.New(os.Stderr).Level(zerolog.WarnLevel).With().Timestamp().Logger()
@@ -118,6 +120,11 @@ func child() error {
 	}
 	pos, err := loadPosition(dir)
 	if err != nil {
+		return err
+	}
+	// Record where this run starts, before opening: verify checks that the
+	// run's first record is the one right after it.
+	if err := appendLog(filepath.Join(dir, opensLogFile), []entry{{Run: run, Pos: string(pos)}}); err != nil {
 		return err
 	}
 	if err := src.Open(ctx, pos); err != nil {
@@ -223,10 +230,34 @@ func recordID(ctx context.Context, r opencdc.Record) (int64, error) {
 }
 
 // parkForever tells the parent where the child stopped and blocks until it is
-// killed.
+// killed (or watchParent ends the process).
 func parkForever(dir string, run int) {
 	_ = os.WriteFile(filepath.Join(dir, parkedFile), []byte(strconv.Itoa(run)), 0o600) //nolint:gosec // harness temp dir
 	for {
 		time.Sleep(time.Hour)
 	}
+}
+
+// childLifetime bounds a child, parked or not, in case nobody kills it.
+const childLifetime = 15 * time.Minute
+
+// watchParent ends the child when the parent test process is gone (the child
+// is re-parented, so its parent pid changes) or after childLifetime, so a
+// child never outlives a killed or crashed test run.
+func watchParent() {
+	parent := os.Getppid()
+	deadline := time.Now().Add(childLifetime)
+	go func() {
+		for {
+			time.Sleep(500 * time.Millisecond)
+			if os.Getppid() != parent {
+				fmt.Fprintln(os.Stderr, "chaos child: parent is gone, exiting")
+				os.Exit(3)
+			}
+			if time.Now().After(deadline) {
+				fmt.Fprintf(os.Stderr, "chaos child: still running after %s, exiting\n", childLifetime)
+				os.Exit(4)
+			}
+		}
+	}()
 }

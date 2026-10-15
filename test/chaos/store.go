@@ -31,6 +31,9 @@ const (
 	positionFile    = "position"
 	parkedFile      = "parked"
 	openedFile      = "opened"
+	// opensLogFile records, per run, the position the child loaded and
+	// opened the source at ("" for none).
+	opensLogFile = "opens.jsonl"
 )
 
 // entry is one line of the ledger or of the position log.

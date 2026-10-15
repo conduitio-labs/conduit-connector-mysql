@@ -272,6 +272,12 @@ func TestSIGKILL_ResumeWithoutLossOrRedelivery(t *testing.T) {
 	h.waitParked(c)
 	h.kill(c)
 
+	// A position stored in the middle of the event with nothing appended
+	// after it: the next run must start at the very next row.
+	c = h.start("store_id:" + strconv.Itoa(marker+400))
+	h.waitParked(c)
+	h.kill(c)
+
 	// A kill at an instant nobody chose, once the child is delivering.
 	before := len(h.ledger())
 	c = h.start("")
@@ -380,6 +386,47 @@ func verify(t *testing.T, dir, table string, rows int64) {
 		}
 	}
 	t.Logf("%d ledger entries for %d rows; %d entries are records delivered more than once (appended or acked, position not stored)", len(ledger), rows, redelivered)
+
+	// Exact start: each run's first record is the one right after the
+	// position it opened at (row 1 when it opened at none). The opened-at
+	// position is the one the child loaded, not the last one in the position
+	// log: the position file is written before the log, so a kill between the
+	// two leaves the log one position behind. Rows are inserted in ascending
+	// id order, and the snapshot reads by key, so "right after" is id+1. This
+	// catches a source that drops rows on resume: the gap check alone does not,
+	// because a later run can deliver a dropped row again.
+	opens, err := readLog(filepath.Join(dir, opensLogFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	idOfPos := map[string]int64{}
+	firstOfRun := map[int]int64{}
+	for _, e := range ledger {
+		if _, ok := idOfPos[e.Pos]; !ok {
+			idOfPos[e.Pos] = e.ID
+		}
+		if _, ok := firstOfRun[e.Run]; !ok {
+			firstOfRun[e.Run] = e.ID
+		}
+	}
+	for _, o := range opens {
+		first, ok := firstOfRun[o.Run]
+		if !ok {
+			continue // delivered nothing
+		}
+		want := int64(1)
+		if o.Pos != "" {
+			id, ok := idOfPos[o.Pos]
+			if !ok {
+				t.Errorf("run %d opened at a position that no record in the ledger carries", o.Run)
+				continue
+			}
+			want = id + 1
+		}
+		if first != want {
+			t.Errorf("run %d started at row %d, want row %d, the one after the position it opened at", o.Run, first, want)
+		}
+	}
 
 	// Monotonic positions (invariant 2).
 	inCDC := false

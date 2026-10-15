@@ -162,8 +162,7 @@ func (d *Destination) upsertRecords(ctx context.Context, tx *sqlx.Tx, table stri
 			quoted[i] = quoteIdent(col)
 		}
 		insert := squirrel.Insert(quoteTable(table)).Columns(quoted...)
-		for _, rec := range run.recs {
-			payload := rec.Payload.After.(opencdc.StructuredData) // checked by columnRuns
+		for _, payload := range run.payloads {
 			values := make([]any, 0, len(run.columns))
 			for _, col := range run.columns {
 				values = append(values, payload[col])
@@ -230,8 +229,8 @@ const mysqlErrBadFieldError = 1054
 
 // upsertRun is a run of consecutive records with the same field set.
 type upsertRun struct {
-	columns []string // sorted field names, shared by every record of the run
-	recs    []opencdc.Record
+	columns  []string // sorted field names, shared by every record of the run
+	payloads []opencdc.StructuredData
 }
 
 // columnRuns splits recs into runs of consecutive records with the same field
@@ -259,10 +258,10 @@ func columnRuns(recs []opencdc.Record) ([]upsertRun, error) {
 		slices.Sort(columns)
 
 		if n := len(runs); n > 0 && slices.Equal(runs[n-1].columns, columns) {
-			runs[n-1].recs = append(runs[n-1].recs, rec)
+			runs[n-1].payloads = append(runs[n-1].payloads, payload)
 			continue
 		}
-		runs = append(runs, upsertRun{columns: columns, recs: []opencdc.Record{rec}})
+		runs = append(runs, upsertRun{columns: columns, payloads: []opencdc.StructuredData{payload}})
 	}
 	return runs, nil
 }

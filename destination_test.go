@@ -148,11 +148,11 @@ func TestColumnRuns(t *testing.T) {
 		is.Equal(runs[0].columns, []string{"id", "v"})
 		is.Equal(runs[1].columns, []string{"extra", "id", "v"})
 		is.Equal(runs[2].columns, []string{"id", "v"})
-		is.Equal(len(runs[0].recs), 2)
+		is.Equal(len(runs[0].payloads), 2)
 		var got []any
 		for _, r := range runs {
-			for _, rr := range r.recs {
-				got = append(got, rr.Payload.After.(opencdc.StructuredData)["id"])
+			for _, p := range r.payloads {
+				got = append(got, p["id"])
 			}
 		}
 		is.Equal(got, []any{1, 2, 3, 4})

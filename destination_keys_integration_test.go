@@ -687,12 +687,13 @@ func TestDestination_Upsert_RecordMustBeIdempotent(t *testing.T) {
 	}
 }
 
-// MySQL folds only ASCII letters in column names. strings.EqualFold equated
-// "ſ" (long s) with "s", so the delete key {"ſ":1} deleted the row s=1, and
-// strings.ToLower equates "İ" with "i" and the Kelvin sign with "k". None of
-// them names the column; each delete is refused and deletes nothing. ASCII case
-// still matches.
-func TestDestination_Delete_KeyFieldUnicodeFolding(t *testing.T) {
+// Field names name columns as MySQL resolves identifiers, which is neither
+// ASCII-only nor Go's case folding. Checked on 8.0.39: the Kelvin sign, "İ",
+// "Ä" and "É" name the columns k, i, ä and é, and "ſ" names no column (not s).
+// An ASCII-only match let {"id":5, Kelvin:19.5} skip the key checks and
+// overwrite row 1 through the UNIQUE column k; strings.EqualFold let the delete
+// key {"ſ":1} delete row s=1.
+func TestDestination_FieldNamesResolveLikeMySQL(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
 	db := testutils.NewDB(t)
@@ -701,38 +702,75 @@ func TestDestination_Delete_KeyFieldUnicodeFolding(t *testing.T) {
 	dest, cleanup := testDestination(ctx, is)
 	defer cleanup()
 
-	t.Run("ASCII case matches", func(t *testing.T) {
+	kelvin := "\u212a"
+	for name, tc := range map[string]struct {
+		column string
+		field  string
+	}{
+		"Kelvin sign names k": {"k", kelvin},
+		"İ names i":           {"i", "İ"},
+		"Ä names ä":           {"`ä`", "Ä"},
+		"É names é":           {"`é`", "É"},
+	} {
+		t.Run("upsert: "+name, func(t *testing.T) {
+			is := is.New(t)
+			is.NoErr(db.Exec("DROP TABLE IF EXISTS dest_keyfold").Error)
+			is.NoErr(db.Exec("CREATE TABLE dest_keyfold (id BIGINT PRIMARY KEY, " + tc.column + " BIGINT UNIQUE, v VARCHAR(10))").Error)
+			is.NoErr(db.Exec("INSERT INTO dest_keyfold VALUES (1, 2, 'orig')").Error)
+
+			// 1.5 into the BIGINT UNIQUE column would round to 2 and overwrite
+			// row 1 under the new id 5; the field must get the key checks.
+			written, err := dest.Write(ctx, []opencdc.Record{keysTestUpsert("dest_keyfold",
+				opencdc.StructuredData{"id": 5, tc.field: 1.5, "v": "new"})})
+			is.True(errors.Is(err, ErrKeyValueTypeMismatch))
+			is.Equal(written, 0)
+
+			var rows []string
+			is.NoErr(db.Raw("SELECT CONCAT(id, ':', v) FROM dest_keyfold").Scan(&rows).Error)
+			is.Equal(rows, []string{"1:orig"})
+		})
+	}
+
+	t.Run("upsert: two fields that name one column", func(t *testing.T) {
+		is := is.New(t)
+		is.NoErr(db.Exec("DROP TABLE IF EXISTS dest_keyfold").Error)
+		is.NoErr(db.Exec("CREATE TABLE dest_keyfold (id BIGINT PRIMARY KEY, k BIGINT)").Error)
+		_, err := dest.Write(ctx, []opencdc.Record{keysTestUpsert("dest_keyfold",
+			opencdc.StructuredData{"id": 1, "k": 1, kelvin: 2})})
+		is.True(errors.Is(err, ErrDuplicateColumn))
+	})
+
+	t.Run("delete: Kelvin sign names k", func(t *testing.T) {
+		is := is.New(t)
+		is.NoErr(db.Exec("DROP TABLE IF EXISTS dest_keyfold").Error)
+		is.NoErr(db.Exec("CREATE TABLE dest_keyfold (k BIGINT PRIMARY KEY)").Error)
+		is.NoErr(db.Exec("INSERT INTO dest_keyfold VALUES (1), (2)").Error)
+		written, err := dest.Write(ctx, []opencdc.Record{keysTestDelete("dest_keyfold", opencdc.StructuredData{kelvin: 1})})
+		is.NoErr(err)
+		is.Equal(written, 1)
+		var n int64
+		is.NoErr(db.Raw("SELECT COUNT(*) FROM dest_keyfold").Scan(&n).Error)
+		is.Equal(n, int64(1))
+	})
+
+	t.Run("delete: ſ names no column", func(t *testing.T) {
 		is := is.New(t)
 		is.NoErr(db.Exec("DROP TABLE IF EXISTS dest_keyfold").Error)
 		is.NoErr(db.Exec("CREATE TABLE dest_keyfold (s BIGINT PRIMARY KEY)").Error)
 		is.NoErr(db.Exec("INSERT INTO dest_keyfold VALUES (1), (2)").Error)
-		written, err := dest.Write(ctx, []opencdc.Record{keysTestDelete("dest_keyfold", opencdc.StructuredData{"S": 1})})
-		is.NoErr(err)
-		is.Equal(written, 1)
+		written, err := dest.Write(ctx, []opencdc.Record{keysTestDelete("dest_keyfold", opencdc.StructuredData{"ſ": 1})})
+		is.True(errors.Is(err, ErrKeyColumnMissing))
+		is.Equal(written, 0)
+		var n int64
+		is.NoErr(db.Raw("SELECT COUNT(*) FROM dest_keyfold").Scan(&n).Error)
+		is.Equal(n, int64(2))
 	})
 
-	for name, tc := range map[string]struct {
-		column string
-		key    opencdc.StructuredData
-	}{
-		"long s is not s":           {"s", opencdc.StructuredData{"ſ": 1}},
-		"dotted capital I is not i": {"i", opencdc.StructuredData{"İ": 1}},
-		"Kelvin sign is not k":      {"k", opencdc.StructuredData{"\u212a": 1}},
-		"non-ASCII case differs":    {"`é`", opencdc.StructuredData{"É": 1}},
-	} {
-		t.Run(name, func(t *testing.T) {
-			is := is.New(t)
-			is.NoErr(db.Exec("DROP TABLE IF EXISTS dest_keyfold").Error)
-			is.NoErr(db.Exec("CREATE TABLE dest_keyfold (" + tc.column + " BIGINT PRIMARY KEY)").Error)
-			is.NoErr(db.Exec("INSERT INTO dest_keyfold VALUES (1), (2)").Error)
-
-			written, err := dest.Write(ctx, []opencdc.Record{keysTestDelete("dest_keyfold", tc.key)})
-			is.True(errors.Is(err, ErrKeyColumnMissing))
-			is.Equal(written, 0)
-
-			var n int64
-			is.NoErr(db.Raw("SELECT COUNT(*) FROM dest_keyfold").Scan(&n).Error)
-			is.Equal(n, int64(2)) // nothing deleted
-		})
-	}
+	t.Run("delete: two fields that name one column", func(t *testing.T) {
+		is := is.New(t)
+		is.NoErr(db.Exec("DROP TABLE IF EXISTS dest_keyfold").Error)
+		is.NoErr(db.Exec("CREATE TABLE dest_keyfold (k BIGINT PRIMARY KEY)").Error)
+		_, err := dest.Write(ctx, []opencdc.Record{keysTestDelete("dest_keyfold", opencdc.StructuredData{"k": 1, kelvin: 2})})
+		is.True(errors.Is(err, ErrDuplicateColumn))
+	})
 }

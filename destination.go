@@ -235,8 +235,9 @@ func (d *Destination) Teardown(_ context.Context) error {
 // UNIQUE keys) decide which row ON DUPLICATE KEY UPDATE overwrites, so they go
 // through the same checks as delete keys (typeKeyValue). MySQL converts on
 // assignment: {"id":1.5} into a BIGINT key became 2 and overwrote row 2.
-// Column names are matched as MySQL matches them, ignoring the case of ASCII
-// letters only ("ID" is column id, see foldColumn).
+// Field names are resolved to columns by MySQL itself (resolveColumns): "ID",
+// "İd" and the Kelvin sign all name a column the way a statement would, and
+// two fields that name one column are refused.
 //
 // A record must also be idempotent under redelivery (at-least-once): some
 // unique index of the table must be fully non-null in it, otherwise every
@@ -255,21 +256,32 @@ func (d *Destination) upsertRecords(ctx context.Context, tx *sqlx.Tx, table stri
 	if err != nil {
 		return err
 	}
+	var fields []string
+	for _, run := range runs {
+		fields = append(fields, run.columns...)
+	}
+	resolved, err := d.resolveColumns(ctx, tx, table, fields)
+	if err != nil {
+		return err
+	}
 
 	for _, run := range runs {
+		if err := resolved.checkDistinct(run.columns, ".Payload.After"); err != nil {
+			return err
+		}
 		quoted := make([]string, len(run.columns))
 		for i, col := range run.columns {
 			quoted[i] = quoteIdent(col)
 		}
 		insert := squirrel.Insert(quoteTable(table)).Columns(quoted...)
 		for _, payload := range run.payloads {
-			if err := uniq.checkIdempotent(table, payload); err != nil {
+			if err := uniq.checkIdempotent(table, payload, resolved); err != nil {
 				return err
 			}
 			values := make([]any, 0, len(run.columns))
 			for _, col := range run.columns {
 				v := payload[col]
-				if kc, ok := uniq.cols[foldColumn(col)]; ok && v != nil {
+				if kc, ok := uniq.cols[resolved[col]]; ok && v != nil {
 					if v, err = typeKeyValue(kc, v, ".Payload.After"); err != nil {
 						return err
 					}
@@ -361,16 +373,7 @@ func columnRuns(recs []opencdc.Record) ([]upsertRun, error) {
 		}
 
 		columns := make([]string, 0, len(payload))
-		folded := make(map[string]string, len(payload))
 		for col := range payload {
-			// MySQL column names are case-insensitive: "id" and "ID" are one
-			// column, and which value lands is not up to the record.
-			if other, dup := folded[foldColumn(col)]; dup {
-				return nil, newError(ErrDuplicateColumn, CodeDuplicateColumn, ".Payload.After",
-					"send each column once; MySQL column names are case-insensitive",
-					"record %q has the fields %q and %q, which name the same column", keyString(rec), other, col)
-			}
-			folded[foldColumn(col)] = col
 			columns = append(columns, col)
 		}
 		slices.Sort(columns)
@@ -412,12 +415,27 @@ func (d *Destination) deleteRecords(ctx context.Context, tx *sqlx.Tx, table stri
 			"cannot delete from table %q: it has no primary key, so a delete record cannot be matched to a row", table)
 	}
 
+	keys := make([]map[string]any, len(recs))
+	var fields []string
+	for i, rec := range recs {
+		if keys[i], err = decodeRecordKey(rec.Key); err != nil {
+			return 0, fmt.Errorf("failed to parse key: %w", err)
+		}
+		for f := range keys[i] {
+			fields = append(fields, f)
+		}
+	}
+	resolved, err := d.resolveColumns(ctx, tx, table, fields)
+	if err != nil {
+		return 0, err
+	}
+
 	var where squirrel.Sqlizer
 	if len(keyCols) == 1 {
 		col := keyCols[0]
 		values := make([]any, 0, len(recs))
-		for _, rec := range recs {
-			val, err := parseRecordKey(col, rec.Key)
+		for _, key := range keys {
+			val, err := keyValue(col, key, resolved)
 			if err != nil {
 				return 0, fmt.Errorf("failed to parse key: %w", err)
 			}
@@ -426,10 +444,10 @@ func (d *Destination) deleteRecords(ctx context.Context, tx *sqlx.Tx, table stri
 		where = squirrel.Eq{quoteIdent(col.Name): values}
 	} else {
 		orConditions := squirrel.Or{}
-		for _, rec := range recs {
+		for _, key := range keys {
 			andConditions := squirrel.And{}
 			for _, col := range keyCols {
-				val, err := parseRecordKey(col, rec.Key)
+				val, err := keyValue(col, key, resolved)
 				if err != nil {
 					return 0, fmt.Errorf("failed to parse key: %w", err)
 				}
@@ -478,8 +496,8 @@ func (d *Destination) primaryKeyColumns(ctx context.Context, tx *sqlx.Tx, table 
 	return cols, nil
 }
 
-// parseRecordKey returns the value of the key column col from a record key,
-// in the form MySQL compares exactly with that column.
+// decodeRecordKey returns the fields of a record key. The checks below are
+// applied per key column by keyValue and typeKeyValue.
 //
 // Invariant 6: a key value matches exactly the row it names.
 //   - A structured key is used as is. A raw key must be one JSON object; its
@@ -493,7 +511,7 @@ func (d *Destination) primaryKeyColumns(ctx context.Context, tx *sqlx.Tx, table 
 //   - Integer columns get a whole number within the column's range. A fraction
 //     or an out-of-range value matches nothing (an acked no-op), and a
 //     non-numeric string is compared as a double ("abc" matches 0).
-func parseRecordKey(col keyColumn, keyVal opencdc.Data) (any, error) {
+func decodeRecordKey(keyVal opencdc.Data) (map[string]any, error) {
 	var fields map[string]any
 	switch key := keyVal.(type) {
 	case opencdc.StructuredData:
@@ -512,14 +530,29 @@ func parseRecordKey(col keyColumn, keyVal opencdc.Data) (any, error) {
 				"the record key %q is not a JSON object: %v", string(key), err)
 		}
 	}
+	return fields, nil
+}
 
-	val, ok, dup := foldLookup(fields, col.Name)
-	if dup != "" {
-		return nil, newError(ErrDuplicateColumn, CodeDuplicateColumn, ".Key",
-			"send each key column once; MySQL column names are case-insensitive",
-			"the record key has the fields %q and %q, which both name the column %q", dup, col.Name, col.Name)
+// keyValue returns the value the decoded record key holds for the key column
+// col, typed for that column (typeKeyValue). Fields are matched to the column
+// as MySQL resolves them (resolved, see resolveColumns).
+func keyValue(col keyColumn, key map[string]any, resolved columnResolver) (any, error) {
+	var (
+		val   any
+		found string
+	)
+	for field, v := range key {
+		if resolved[field] != col.Name {
+			continue
+		}
+		if found != "" {
+			return nil, newError(ErrDuplicateColumn, CodeDuplicateColumn, ".Key",
+				"send each key column once; MySQL resolves both field names to the same column",
+				"the record key has the fields %q and %q, which both name the column %q", found, field, col.Name)
+		}
+		val, found = v, field
 	}
-	if !ok || val == nil {
+	if found == "" || val == nil {
 		// A null value never matches a primary-key column, so the delete
 		// would do nothing and still be acked.
 		return nil, newError(ErrKeyColumnMissing, CodeKeyColumnMissing, ".Key",
@@ -624,8 +657,7 @@ func bitWidth(columnType string) uint {
 }
 
 // uniqueInfo describes the unique indexes of a table (the primary key and
-// UNIQUE keys). Column names are lower case: MySQL column names are
-// case-insensitive.
+// UNIQUE keys). Column names are as stored in the table.
 type uniqueInfo struct {
 	cols       map[string]keyColumn // every plain column of a unique index
 	indexes    [][]string           // the plain columns of each index without a functional part
@@ -667,8 +699,8 @@ func (d *Destination) uniqueIndexes(ctx context.Context, tx *sqlx.Tx, table stri
 			info.functional = true
 			continue
 		}
-		col := foldColumn(p.Column.String)
-		info.cols[col] = keyColumn{Name: p.Column.String, DataType: strings.ToLower(p.DataType), ColumnType: strings.ToLower(p.ColumnType)}
+		col := p.Column.String // as stored; fields are resolved to it by resolveColumns
+		info.cols[col] = keyColumn{Name: col, DataType: strings.ToLower(p.DataType), ColumnType: strings.ToLower(p.ColumnType)}
 		byIndex[p.Index] = append(byIndex[p.Index], col)
 		if p.Index == "PRIMARY" && strings.Contains(strings.ToLower(p.Extra), "auto_increment") {
 			info.autoIncPK = col
@@ -688,13 +720,15 @@ func (d *Destination) uniqueIndexes(ctx context.Context, tx *sqlx.Tx, table stri
 // checkIdempotent fails if no unique index is fully non-null in payload, so a
 // redelivery of the record would insert another row. See upsertRecords for the
 // allowed cases.
-func (u *uniqueInfo) checkIdempotent(table string, payload opencdc.StructuredData) error {
+func (u *uniqueInfo) checkIdempotent(table string, payload opencdc.StructuredData, resolved columnResolver) error {
 	if len(u.indexes) == 0 || u.functional {
 		return nil // no unique index (appends, documented) or one the destination cannot evaluate
 	}
 	values := make(map[string]any, len(payload))
 	for field, v := range payload {
-		values[foldColumn(field)] = v
+		if col, ok := resolved[field]; ok {
+			values[col] = v
+		}
 	}
 	for _, idx := range u.indexes {
 		covered := true
@@ -737,37 +771,69 @@ func (d *Destination) splitTable(table string) (string, string) {
 	return d.config.MysqlCfg().DBName, table
 }
 
-// foldLookup returns the field of fields that names column, compared with
-// foldColumn as MySQL compares column names. dup is set when more than one
-// field names the column.
-func foldLookup(fields map[string]any, column string) (val any, ok bool, dup string) {
-	want := foldColumn(column)
-	for name, v := range fields {
-		if foldColumn(name) != want {
-			continue
+// columnResolver maps record field names to the names of the columns they
+// name, as stored in the table. A field that names no column is absent.
+type columnResolver map[string]string
+
+// resolveColumns resolves field names to table columns the way MySQL resolves
+// identifiers in a statement, by asking MySQL: information_schema compares
+// COLUMN_NAME with the server's own column-name rules. Those rules are neither
+// ASCII-only nor Unicode case folding: checked on 8.0.39, "K", the Kelvin sign
+// U+212A, "İ" (to i), "É", "Ä", "ǅ" and "Σ" name the lower-case column, while
+// "ſ", "ı", "ẞ", "ς" and "µ" name no column ("ẞ" is "ß" for Go's ToLower).
+// Any local folding gets some of these wrong, and a wrong match either skips
+// the key checks (an overwrite through the Kelvin sign) or deletes by a column
+// the record does not name. One query resolves every distinct field.
+func (d *Destination) resolveColumns(ctx context.Context, tx *sqlx.Tx, table string, fields []string) (columnResolver, error) {
+	seen := make(map[string]bool, len(fields))
+	var uniq []string
+	for _, f := range fields {
+		if !seen[f] {
+			seen[f] = true
+			uniq = append(uniq, f)
 		}
-		if ok {
-			return nil, false, name
-		}
-		val, ok = v, true
 	}
-	return val, ok, ""
+	out := make(columnResolver, len(uniq))
+	if len(uniq) == 0 {
+		return out, nil
+	}
+	database, name := d.splitTable(table)
+	parts := make([]string, len(uniq))
+	args := make([]any, 0, 4*len(uniq))
+	for i, f := range uniq {
+		parts[i] = "SELECT ? AS FIELD, COLUMN_NAME FROM information_schema.columns " +
+			"WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?"
+		args = append(args, f, database, name, f)
+	}
+	var rows []struct {
+		Field  string `db:"FIELD"`
+		Column string `db:"COLUMN_NAME"`
+	}
+	if err := tx.SelectContext(ctx, &rows, strings.Join(parts, " UNION ALL "), args...); err != nil {
+		return nil, fmt.Errorf("failed to resolve the field names of table %s: %w", table, err)
+	}
+	for _, r := range rows {
+		out[r.Field] = r.Column
+	}
+	return out, nil
 }
 
-// foldColumn folds a column name the way MySQL compares column names: ASCII
-// letters only. MySQL 8.0 treats "a" and "A" as one column, but "ä" and "Ä",
-// "ſ" and "s", the Kelvin sign and "k", "İ" and "i" as different names, checked
-// against MySQL 8.0.39. Neither strings.EqualFold nor strings.ToLower may be
-// used here: both fold those pairs, so a delete key {"ſ":1} (EqualFold) or
-// {"İ":1} (ToLower) deleted the row of another column.
-func foldColumn(name string) string {
-	b := []byte(name)
-	for i, c := range b {
-		if 'A' <= c && c <= 'Z' {
-			b[i] = c + ('a' - 'A')
+// checkDistinct fails if two of fields name the same column.
+func (r columnResolver) checkDistinct(fields []string, path string) error {
+	byColumn := make(map[string]string, len(fields))
+	for _, f := range fields {
+		col, ok := r[f]
+		if !ok {
+			continue // names no column: the statement fails with unknown_column
 		}
+		if other, dup := byColumn[col]; dup {
+			return newError(ErrDuplicateColumn, CodeDuplicateColumn, path,
+				"send each column once; MySQL resolves both field names to the same column",
+				"the record has the fields %q and %q, which both name the column %q", other, f, col)
+		}
+		byColumn[col] = f
 	}
-	return string(b)
+	return nil
 }
 
 // stringTypes are the DATA_TYPE values of columns compared as strings. ENUM and

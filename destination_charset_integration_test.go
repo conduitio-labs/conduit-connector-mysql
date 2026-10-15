@@ -20,7 +20,9 @@ import (
 	"testing"
 
 	testutils "github.com/conduitio-labs/conduit-connector-mysql/test"
+	"github.com/conduitio/conduit-commons/opencdc"
 	sdk "github.com/conduitio/conduit-connector-sdk"
+	"github.com/go-sql-driver/mysql"
 	"github.com/matryer/is"
 )
 
@@ -71,4 +73,44 @@ func TestDestination_Open_RefusesUnsafeConnectionCharset(t *testing.T) {
 	dest.config.DSN = withDSNParam(testutils.DSN, "character_set_client=sjis") // Validate is bypassed on purpose
 	err := dest.Open(ctx)
 	is.True(errors.Is(err, ErrUnsafeCharset))
+}
+
+// Open checks one pooled connection. A connection opened later can come up
+// with another character set (here: init_connect changed after Open, which
+// applies to users without SUPER), so every Write checks its own transaction.
+func TestDestination_Write_RefusesUnsafeCharsetOnNewConnection(t *testing.T) {
+	ctx := testutils.TestContext(t)
+	is := is.New(t)
+	db := testutils.NewDB(t)
+
+	cfg, err := mysql.ParseDSN(testutils.DSN)
+	is.NoErr(err)
+	is.NoErr(db.Exec("CREATE USER IF NOT EXISTS 'dest_plain'@'%' IDENTIFIED BY 'plainpass'").Error)
+	is.NoErr(db.Exec("GRANT ALL ON " + cfg.DBName + ".* TO 'dest_plain'@'%'").Error)
+	t.Cleanup(func() { db.Exec("DROP USER IF EXISTS 'dest_plain'@'%'") })
+
+	is.NoErr(db.Exec("DROP TABLE IF EXISTS dest_cs").Error)
+	is.NoErr(db.Exec("CREATE TABLE dest_cs (id BIGINT PRIMARY KEY, v VARCHAR(10))").Error)
+	t.Cleanup(func() { db.Exec("DROP TABLE IF EXISTS dest_cs") })
+
+	plain := *cfg
+	plain.User, plain.Passwd = "dest_plain", "plainpass"
+	dest := &Destination{}
+	is.NoErr(sdk.Util.ParseConfig(ctx, map[string]string{"dsn": plain.FormatDSN()},
+		dest.Config(), Connector.NewSpecification().DestinationParams))
+	is.NoErr(dest.Open(ctx))
+	t.Cleanup(func() { _ = dest.Teardown(ctx) })
+
+	is.NoErr(db.Exec("SET GLOBAL init_connect='SET NAMES sjis'").Error)
+	t.Cleanup(func() { db.Exec("SET GLOBAL init_connect=''") })
+	dest.db.SetMaxIdleConns(0) // drop the checked connection; the next one runs init_connect
+
+	written, err := dest.Write(ctx, []opencdc.Record{
+		columnsTestRecord("dest_cs", opencdc.StructuredData{"id": 1, "v": "a"}),
+	})
+	is.True(errors.Is(err, ErrUnsafeCharset))
+	is.Equal(written, 0)
+	var count int64
+	is.NoErr(db.Raw("SELECT COUNT(*) FROM dest_cs").Scan(&count).Error)
+	is.Equal(count, int64(0))
 }

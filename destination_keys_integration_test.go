@@ -127,3 +127,115 @@ func TestDestination_Delete_PrimaryKeyAddedLater(t *testing.T) {
 	is.NoErr(db.Raw("SELECT id FROM dest_pklater ORDER BY id").Scan(&ids).Error)
 	is.Equal(ids, []int64{2})
 }
+
+// squirrel turns a slice into IN (...): {"a":1,"id":[1,2,3]} deleted three
+// rows and {"a":1,"id":[]} was an acked no-op. Key values must be scalars, on
+// the single-key and the composite-key path.
+func TestDestination_Delete_NonScalarKeyValueFails(t *testing.T) {
+	ctx := testutils.TestContext(t)
+	is := is.New(t)
+	db := testutils.NewDB(t)
+
+	is.NoErr(db.Exec("DROP TABLE IF EXISTS dest_keylist").Error)
+	is.NoErr(db.Exec("CREATE TABLE dest_keylist (a BIGINT, id BIGINT, PRIMARY KEY (a, id))").Error)
+	is.NoErr(db.Exec("DROP TABLE IF EXISTS dest_keylist1").Error)
+	is.NoErr(db.Exec("CREATE TABLE dest_keylist1 (id BIGINT PRIMARY KEY)").Error)
+	t.Cleanup(func() {
+		db.Exec("DROP TABLE IF EXISTS dest_keylist")
+		db.Exec("DROP TABLE IF EXISTS dest_keylist1")
+	})
+
+	dest, cleanup := testDestination(ctx, is)
+	defer cleanup()
+
+	for name, tc := range map[string]struct {
+		table string
+		key   opencdc.Data
+	}{
+		"composite raw list":        {"dest_keylist", opencdc.RawData(`{"a":1,"id":[1,2,3]}`)},
+		"composite empty list":      {"dest_keylist", opencdc.RawData(`{"a":1,"id":[]}`)},
+		"composite structured list": {"dest_keylist", opencdc.StructuredData{"a": 1, "id": []any{1, 2, 3}}},
+		"composite typed list":      {"dest_keylist", opencdc.StructuredData{"a": 1, "id": []int64{1, 2}}},
+		"composite object":          {"dest_keylist", opencdc.RawData(`{"a":1,"id":{"x":1}}`)},
+		"single raw list":           {"dest_keylist1", opencdc.RawData(`{"id":[1,2]}`)},
+		"single structured list":    {"dest_keylist1", opencdc.StructuredData{"id": []any{1, 2}}},
+		"single empty list":         {"dest_keylist1", opencdc.RawData(`{"id":[]}`)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			is := is.New(t)
+			is.NoErr(db.Exec("DELETE FROM dest_keylist").Error)
+			is.NoErr(db.Exec("INSERT INTO dest_keylist VALUES (1, 1), (1, 2), (1, 3)").Error)
+			is.NoErr(db.Exec("DELETE FROM dest_keylist1").Error)
+			is.NoErr(db.Exec("INSERT INTO dest_keylist1 VALUES (1), (2), (3)").Error)
+
+			written, err := dest.Write(ctx, []opencdc.Record{keysTestDelete(tc.table, tc.key)})
+			is.True(errors.Is(err, ErrKeyValueNotScalar))
+			is.Equal(written, 0)
+
+			var count int64
+			is.NoErr(db.Raw("SELECT COUNT(*) FROM " + tc.table).Scan(&count).Error)
+			is.Equal(count, int64(3))
+		})
+	}
+}
+
+// A fraction or a non-numeric string against an integer key column is compared
+// as a double: 1.5 matched nothing (an acked no-op) and "abc" would match 0.
+// Whole numbers in any form, integer strings and booleans (TINYINT(1) keys)
+// still delete their row.
+func TestDestination_Delete_IntegerKeyNeedsWholeNumber(t *testing.T) {
+	ctx := testutils.TestContext(t)
+	is := is.New(t)
+	db := testutils.NewDB(t)
+
+	is.NoErr(db.Exec("DROP TABLE IF EXISTS dest_keyfrac").Error)
+	is.NoErr(db.Exec("CREATE TABLE dest_keyfrac (id BIGINT PRIMARY KEY, v VARCHAR(10))").Error)
+	t.Cleanup(func() { db.Exec("DROP TABLE IF EXISTS dest_keyfrac") })
+
+	dest, cleanup := testDestination(ctx, is)
+	defer cleanup()
+
+	reset := func(t *testing.T) {
+		is := is.New(t)
+		is.NoErr(db.Exec("DELETE FROM dest_keyfrac").Error)
+		is.NoErr(db.Exec("INSERT INTO dest_keyfrac VALUES (0, 'zero'), (1, 'one'), (5, 'five')").Error)
+	}
+	count := func(t *testing.T) int64 {
+		var n int64
+		is.New(t).NoErr(db.Raw("SELECT COUNT(*) FROM dest_keyfrac").Scan(&n).Error)
+		return n
+	}
+
+	for name, key := range map[string]opencdc.Data{
+		"raw fraction":        opencdc.RawData(`{"id":1.5}`),
+		"structured fraction": opencdc.StructuredData{"id": 1.5},
+		"string fraction":     opencdc.StructuredData{"id": "9007199254740993.5"},
+		"non-numeric string":  opencdc.StructuredData{"id": "abc"},
+		"numeric prefix":      opencdc.StructuredData{"id": "1abc"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			is := is.New(t)
+			reset(t)
+			written, err := dest.Write(ctx, []opencdc.Record{keysTestDelete("dest_keyfrac", key)})
+			is.True(errors.Is(err, ErrKeyValueTypeMismatch))
+			is.Equal(written, 0)
+			is.Equal(count(t), int64(3))
+		})
+	}
+
+	for name, key := range map[string]opencdc.Data{
+		"whole float":    opencdc.StructuredData{"id": float64(5)},
+		"raw exponent":   opencdc.RawData(`{"id":5e0}`),
+		"integer string": opencdc.StructuredData{"id": "5"},
+		"bool":           opencdc.StructuredData{"id": true}, // MySQL: true is 1
+	} {
+		t.Run(name, func(t *testing.T) {
+			is := is.New(t)
+			reset(t)
+			written, err := dest.Write(ctx, []opencdc.Record{keysTestDelete("dest_keyfrac", key)})
+			is.NoErr(err)
+			is.Equal(written, 1)
+			is.Equal(count(t), int64(2))
+		})
+	}
+}

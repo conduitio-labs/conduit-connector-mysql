@@ -20,8 +20,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"net/url"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -73,6 +75,10 @@ type Destination struct {
 	sdk.UnimplementedDestination
 	db     *sqlx.DB
 	config DestinationConfig
+
+	// keyTypes caches the DATA_TYPE of each table's primary-key columns.
+	// Write is called serially, so it needs no lock.
+	keyTypes map[string]map[string]string
 }
 
 func NewDestination() sdk.Destination {
@@ -168,6 +174,20 @@ func (d *Destination) Write(ctx context.Context, recs []opencdc.Record) (int, er
 
 	//nolint:errcheck // will always error if committed, no need to check
 	defer tx.Rollback()
+
+	// quoteIdent is only sound if this connection's character set cannot end
+	// a character in a backtick byte. Open checked one pooled connection, but
+	// a new connection can come up differently (init_connect changed after
+	// Open), so every transaction checks its own before any statement runs.
+	var cs string
+	if err := tx.QueryRowContext(ctx, "SELECT @@character_set_client").Scan(&cs); err != nil {
+		return 0, fmt.Errorf("failed to read the connection character set: %w", err)
+	}
+	if unsafeCharsets[strings.ToLower(cs)] {
+		return 0, newError(ErrUnsafeCharset, CodeUnsafeCharset, "dsn",
+			"use utf8mb4 for the connection (set charset=utf8mb4 in the DSN, or fix the server's init_connect)",
+			"the connection uses the %s character set, under which table and column names cannot be quoted safely", cs)
+	}
 
 	batches, err := batchRecords(recs)
 	if err != nil {
@@ -352,6 +372,10 @@ func (d *Destination) deleteRecords(ctx context.Context, tx *sqlx.Tx, table stri
 			"add a primary key to the table, or drop delete records before the destination (a filter processor on .Operation)",
 			"cannot delete from table %q: it has no primary key, so a delete record cannot be matched to a row", table)
 	}
+	keyTypes, err := d.keyColumnTypes(tx, table, primaryKeys)
+	if err != nil {
+		return 0, err
+	}
 
 	if len(primaryKeys) == 1 {
 		// single key
@@ -360,7 +384,7 @@ func (d *Destination) deleteRecords(ctx context.Context, tx *sqlx.Tx, table stri
 
 		values := make([]any, 0, len(recs))
 		for _, rec := range recs {
-			val, err := d.parseRecordKey(keyName, rec.Key)
+			val, err := d.parseRecordKey(keyName, keyTypes[keyName], rec.Key)
 			if err != nil {
 				return 0, fmt.Errorf("failed to parse key: %w", err)
 			}
@@ -390,7 +414,7 @@ func (d *Destination) deleteRecords(ctx context.Context, tx *sqlx.Tx, table stri
 	for _, rec := range recs {
 		andConditions := squirrel.And{}
 		for _, keyName := range primaryKeys {
-			val, err := d.parseRecordKey(keyName, rec.Key)
+			val, err := d.parseRecordKey(keyName, keyTypes[keyName], rec.Key)
 			if err != nil {
 				return 0, fmt.Errorf("failed to parse key: %w", err)
 			}
@@ -420,7 +444,13 @@ func (d *Destination) deleteRecords(ctx context.Context, tx *sqlx.Tx, table stri
 // through float64: before, every key was round-tripped through JSON into
 // float64, which rounds integers above 2^53, so a delete for id
 // 9007199254740993 removed the row 9007199254740992 instead.
-func (d *Destination) parseRecordKey(keyName string, keyVal opencdc.Data) (any, error) {
+//
+// A key value must be one scalar: squirrel turns a slice into IN (...), so
+// {"a":1,"id":[1,2,3]} deleted three rows and {"a":1,"id":[]} became an acked
+// no-op. For an integer column the value must be a whole number: MySQL
+// compares a fraction or a non-numeric string with an integer column as a
+// double, so 1.5 matches nothing (an acked no-op) and "abc" matches 0.
+func (d *Destination) parseRecordKey(keyName, dataType string, keyVal opencdc.Data) (any, error) {
 	var fields map[string]any
 	switch key := keyVal.(type) {
 	case opencdc.StructuredData:
@@ -449,23 +479,108 @@ func (d *Destination) parseRecordKey(keyName string, keyVal opencdc.Data) (any, 
 			"the record key has no value for the primary-key column %q", keyName)
 	}
 	if n, ok := val.(json.Number); ok {
-		return exactNumber(n), nil
+		val = exactNumber(n)
+	}
+	if _, isBytes := val.([]byte); !isBytes {
+		switch reflect.ValueOf(val).Kind() {
+		case reflect.Slice, reflect.Array, reflect.Map:
+			return nil, newError(ErrKeyValueNotScalar, CodeKeyValueNotScalar, ".Key",
+				"send one scalar value per primary-key column in the record key",
+				"the record key has a %T value for the primary-key column %q, which would match several rows or none", val, keyName)
+		default:
+		}
+	}
+	if integerTypes[dataType] && !isWholeNumber(val) {
+		return nil, newError(ErrKeyValueTypeMismatch, CodeKeyValueTypeMismatch, ".Key",
+			"send whole numbers for integer primary-key columns",
+			"the record key has %v (%T) for the %s primary-key column %q, which is not a whole number", val, val, dataType, keyName)
 	}
 	return val, nil
+}
+
+// integerTypes are the MySQL DATA_TYPE values of integer columns.
+var integerTypes = map[string]bool{
+	//nolint:goconst // MySQL DATA_TYPE names, as in legacy_keys.go
+	"tinyint": true, "smallint": true, "mediumint": true, "int": true, "integer": true, "bigint": true,
+}
+
+// isWholeNumber reports whether v is a whole number that MySQL compares with an
+// integer column without rounding. Booleans count (true is 1, as in MySQL).
+func isWholeNumber(v any) bool {
+	switch v := v.(type) {
+	case bool, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+		return true
+	case float32:
+		f := float64(v)
+		return !math.IsInf(f, 0) && !math.IsNaN(f) && f == math.Trunc(f)
+	case float64:
+		return !math.IsInf(v, 0) && !math.IsNaN(v) && v == math.Trunc(v)
+	case string:
+		return isIntegerLiteral(v)
+	case []byte:
+		return isIntegerLiteral(string(v))
+	default:
+		return false
+	}
+}
+
+func isIntegerLiteral(s string) bool {
+	if _, err := strconv.ParseInt(s, 10, 64); err == nil {
+		return true
+	}
+	_, err := strconv.ParseUint(s, 10, 64)
+	return err == nil
+}
+
+// keyColumnTypes returns the DATA_TYPE of the primary-key columns of table,
+// cached per table like the key names.
+func (d *Destination) keyColumnTypes(tx *sqlx.Tx, table string, keys common.PrimaryKeys) (map[string]string, error) {
+	if types, ok := d.keyTypes[table]; ok {
+		return types, nil
+	}
+	database, name := d.config.MysqlCfg().DBName, table
+	if schema, rest, ok := strings.Cut(table, "."); ok {
+		database, name = schema, rest
+	}
+	var cols []struct {
+		Name     string `db:"COLUMN_NAME"`
+		DataType string `db:"DATA_TYPE"`
+	}
+	if err := tx.Select(&cols, `
+		SELECT COLUMN_NAME, DATA_TYPE
+		FROM information_schema.columns
+		WHERE table_schema = ? AND table_name = ?`, database, name); err != nil {
+		return nil, fmt.Errorf("failed to get the key column types of table %s: %w", table, err)
+	}
+	types := make(map[string]string, len(keys))
+	for _, c := range cols {
+		if slices.Contains(keys, c.Name) {
+			types[c.Name] = strings.ToLower(c.DataType)
+		}
+	}
+	if d.keyTypes == nil {
+		d.keyTypes = make(map[string]map[string]string)
+	}
+	d.keyTypes[table] = types
+	return types, nil
 }
 
 // exactNumber converts a JSON number so that it is compared exactly: a whole
 // value in any form (9007199254740993, 9.007199254740993e15,
 // 9007199254740993.0) becomes an int64 or uint64, anything else stays the
-// literal string. MySQL compares a string with a numeric column exactly for
-// such literals, while a float64 would be rounded to the nearest double and
-// match a different row.
+// literal string. A float64 would be rounded to the nearest double and match a
+// different row. A non-whole literal against an integer column is refused by
+// parseRecordKey; against a DECIMAL column MySQL compares the string as a
+// double, which is no worse than the float64 used before.
 func exactNumber(n json.Number) any {
 	if i, err := n.Int64(); err == nil {
 		return i
 	}
 	if u, err := strconv.ParseUint(n.String(), 10, 64); err == nil {
 		return u
+	}
+	if !smallExponent(n.String()) {
+		return n.String()
 	}
 	if r, ok := new(big.Rat).SetString(n.String()); ok && r.IsInt() {
 		if num := r.Num(); num.IsInt64() {
@@ -567,4 +682,17 @@ func batchRecords(recs []opencdc.Record) ([]recordBatch, error) {
 	batches = append(batches, currBatch)
 
 	return batches, nil
+}
+
+// smallExponent reports whether the exponent of a JSON number literal is small
+// enough to evaluate exactly: no int64 or uint64 needs more than 20 digits, and
+// big.Rat would otherwise build a number with as many digits as the exponent
+// (1e1000000 takes milliseconds and hundreds of kilobytes per value).
+func smallExponent(lit string) bool {
+	i := strings.IndexAny(lit, "eE")
+	if i < 0 {
+		return true
+	}
+	exp, err := strconv.Atoi(strings.TrimPrefix(lit[i+1:], "+"))
+	return err == nil && exp >= -400 && exp <= 400
 }

@@ -80,6 +80,14 @@ const (
 	// character set (sjis, cp932, gbk, gb18030, big5) under which identifiers
 	// cannot be quoted safely.
 	CodeUnsafeCharset = "mysql.destination.unsafe_charset"
+
+	// CodeKeyValueNotScalar: a record key holds a list or an object for a
+	// primary-key column.
+	CodeKeyValueNotScalar = "mysql.destination.key_value_not_scalar"
+
+	// CodeKeyValueTypeMismatch: a record key holds a value for an integer
+	// primary-key column that is not a whole number.
+	CodeKeyValueTypeMismatch = "mysql.destination.key_value_type_mismatch"
 )
 
 // Error is a user-facing configuration or state error with a stable code, the
@@ -161,3 +169,9 @@ var ErrKeyColumnMissing = errors.New("record key is missing a primary-key column
 
 // ErrUnsafeCharset is the sentinel for CodeUnsafeCharset.
 var ErrUnsafeCharset = errors.New("unsafe connection character set")
+
+// ErrKeyValueNotScalar is the sentinel for CodeKeyValueNotScalar.
+var ErrKeyValueNotScalar = errors.New("record key value is not a scalar")
+
+// ErrKeyValueTypeMismatch is the sentinel for CodeKeyValueTypeMismatch.
+var ErrKeyValueTypeMismatch = errors.New("record key value does not fit the key column type")

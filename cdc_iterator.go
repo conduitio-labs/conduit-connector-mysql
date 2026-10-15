@@ -869,7 +869,13 @@ func (h *cdcEventHandler) OnRow(e *canal.RowsEvent) error {
 
 	// A row image wider or narrower than the cached columns may only mean
 	// the cache is stale; re-read it once before deciding to halt.
-	h.refreshStaleTable(h.logCtx, e)
+	refreshMismatch := h.refreshStaleTable(h.logCtx, e)
+
+	// Invariant 6: a row image with the right number of values may still have
+	// been written under other columns; see checkTableMap.
+	if err := h.checkTableMap(e, refreshMismatch); err != nil {
+		return err
+	}
 
 	// Invariant 6: halt before building any record if the row image left a
 	// column out; see checkSkippedColumns.

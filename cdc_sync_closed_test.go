@@ -46,6 +46,12 @@ func TestIsSyncClosed(t *testing.T) {
 	is.True(isSyncClosed(replication.ErrSyncClosed))                            // bare sentinel
 	is.True(isSyncClosed(fmt.Errorf("wrapped: %w", replication.ErrSyncClosed))) // errors.Is form
 	is.True(isSyncClosed(startSyncFormatted))                                   // %v string form
-	is.True(!isSyncClosed(nil))                                                 // nil is not sync-closed
-	is.True(!isSyncClosed(errors.New("some other canal failure")))              // unrelated error
+	// The form the syncer fails its stream with when Close cancels it while an
+	// event is being handed over (replication/binlogsyncer.go, onStream); no
+	// sentinel exists. Reported a clean Teardown as "failed to stop canal".
+	beingClosed := errors.New("sync is being closed...") //nolint:revive // go-mysql's exact text
+	is.True(isSyncClosed(beingClosed))
+	is.True(isSyncClosed(fmt.Errorf("traced: %w", beingClosed)))
+	is.True(!isSyncClosed(nil))                                    // nil is not sync-closed
+	is.True(!isSyncClosed(errors.New("some other canal failure"))) // unrelated error
 }

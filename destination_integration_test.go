@@ -16,6 +16,7 @@ package mysql
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	testutils "github.com/conduitio-labs/conduit-connector-mysql/test"
@@ -386,7 +387,11 @@ func TestDestination_Delete_TableWithoutPrimaryKey(t *testing.T) {
 	written, err := dest.Write(ctx, []opencdc.Record{
 		destinationTestRecord("dest_nopk", opencdc.OperationDelete, 1),
 	})
-	is.True(err != nil)
+	is.True(errors.Is(err, ErrDeleteWithoutPrimaryKey))
+	var coded *Error
+	is.True(errors.As(err, &coded))
+	is.Equal(coded.Code, CodeDeleteWithoutPrimaryKey)
+	is.Equal(coded.ConfigPath, collectionPath)
 	is.Equal(written, 0)
 
 	var count int64

@@ -50,6 +50,15 @@ const (
 	// position names was not where the position says. Nothing after it is
 	// delivered, because what was delivered before is unknown.
 	CodeResumeEventNotFound = "mysql.cdc.resume_event_not_found"
+
+	// CodeDeleteWithoutPrimaryKey: a delete record targets a table without a
+	// primary key, so it cannot be matched to a row. The write fails instead of
+	// deleting every row.
+	CodeDeleteWithoutPrimaryKey = "mysql.destination.delete_without_primary_key"
+
+	// CodeUnsupportedOperation: a record carries an operation the destination
+	// does not apply. The write fails instead of dropping the record.
+	CodeUnsupportedOperation = "mysql.destination.unsupported_operation"
 )
 
 // Error is a user-facing configuration or state error with a stable code, the
@@ -110,3 +119,9 @@ const resumeFix = "this is a connector bug; please report it with the position f
 func errResumeEventNotFound(format string, args ...any) *Error {
 	return newError(ErrResumeEventNotFound, CodeResumeEventNotFound, "position", resumeFix, format, args...)
 }
+
+// ErrDeleteWithoutPrimaryKey is the sentinel for CodeDeleteWithoutPrimaryKey.
+var ErrDeleteWithoutPrimaryKey = errors.New("delete from a table without a primary key")
+
+// ErrUnsupportedOperation is the sentinel for CodeUnsupportedOperation.
+var ErrUnsupportedOperation = errors.New("unsupported operation")

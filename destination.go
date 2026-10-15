@@ -199,9 +199,9 @@ func (d *Destination) deleteRecords(ctx context.Context, tx *sqlx.Tx, table stri
 	if len(primaryKeys) == 0 {
 		// Without this check the empty key list builds a predicate that matches
 		// every row, and the delete wipes the table.
-		return 0, fmt.Errorf(
-			"cannot delete from table %q: it has no primary key, so a delete record cannot be matched to a row; "+
-				"add a primary key to the table or remove delete records from the pipeline", table)
+		return 0, newError(ErrDeleteWithoutPrimaryKey, CodeDeleteWithoutPrimaryKey, collectionPath,
+			"add a primary key to the table, or drop delete records before the destination (a filter processor on .Operation)",
+			"cannot delete from table %q: it has no primary key, so a delete record cannot be matched to a row", table)
 	}
 
 	if len(primaryKeys) == 1 {
@@ -278,6 +278,11 @@ func (d *Destination) parseRecordKey(keyName string, keyVal opencdc.Data) (any, 
 	return val, nil
 }
 
+// collectionPath is the record field that names the target table. Destination
+// errors about a table report it as their path: the destination has no table
+// setting, the table comes from each record.
+const collectionPath = `.Metadata["opencdc.collection"]`
+
 type recordBatchKind string
 
 const (
@@ -301,7 +306,9 @@ func newRecordKind(op opencdc.Operation) recordBatchKind {
 func recordKind(rec opencdc.Record) (recordBatchKind, error) {
 	kind := newRecordKind(rec.Operation)
 	if kind == "" {
-		return "", fmt.Errorf("unsupported operation %q", rec.Operation)
+		return "", newError(ErrUnsupportedOperation, CodeUnsupportedOperation, ".Operation",
+			"send only create, update, delete or snapshot records to this destination",
+			"the destination does not apply records with operation %q", rec.Operation)
 	}
 	return kind, nil
 }

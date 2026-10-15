@@ -16,6 +16,7 @@ package mysql
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/conduitio/conduit-commons/opencdc"
@@ -110,10 +111,13 @@ func TestBatchRecords(t *testing.T) {
 			testRec("table1", opencdc.OperationCreate),
 			testRec("table1", opencdc.Operation(0)),
 		})
-		is.True(err != nil)
+		is.True(errors.Is(err, ErrUnsupportedOperation))
+		var coded *Error
+		is.True(errors.As(err, &coded))
+		is.Equal(coded.Code, CodeUnsupportedOperation)
 
 		_, err = batchRecords([]opencdc.Record{testRec("table1", opencdc.Operation(0))})
-		is.True(err != nil)
+		is.True(errors.Is(err, ErrUnsupportedOperation))
 	})
 
 	t.Run("error when collection metadata is missing", func(t *testing.T) {

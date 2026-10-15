@@ -208,7 +208,7 @@ func genCdcPosition(t *rapid.T) CdcPosition {
 // Names may contain any character, newline included, which is what makes
 // the legacy hash ambiguous.
 func genCoverage(t *rapid.T) (*TableCoverage, []string) {
-	if rapid.IntRange(0, 3).Draw(t, "legacy hash form") == 0 {
+	if rapid.IntRange(0, 1).Draw(t, "legacy hash form") == 0 {
 		set := sortedSet(genTableSet(t, "legacy covered"))
 		sum := sha256.Sum256([]byte(strings.Join(set, "\n")))
 		return &TableCoverage{
@@ -243,8 +243,19 @@ func genTableSet(t *rapid.T, label string) []string {
 		}
 		return set
 	}
-	return rapid.SliceOfNDistinct(rapid.String(), 0, 8, rapid.ID[string]).Draw(t, label)
+	return rapid.SliceOfNDistinct(tableName, 0, 8, rapid.ID[string]).Draw(t, label)
 }
+
+// tableName draws a table name: often one of a few fixed names, some with a
+// newline (the separator the legacy coverage hash joined names with, see
+// legacyHashMatches), otherwise any string. The fixed names make a newline
+// name, and sets that share names, common enough that 100 checks exercise
+// them; rapid.String alone produces a newline in about 1 case in 1000.
+var tableName = rapid.OneOf(
+	rapid.SampledFrom([]string{"a", "b", "a\nb", "orders\n", "\n"}),
+	rapid.SampledFrom([]string{"a\nb", "orders\n", "\n"}),
+	rapid.String(),
+)
 
 func parseCDC(t *rapid.T, raw []byte) CdcPosition {
 	pos, err := ParseSDKPosition(raw)
@@ -433,7 +444,7 @@ func genCurrent(t *rapid.T, covered []string) []string {
 			current = append(current, table)
 		}
 	}
-	return append(current, rapid.SliceOfN(rapid.String(), 0, 3).Draw(t, "new tables")...)
+	return append(current, rapid.SliceOfN(tableName, 0, 3).Draw(t, "new tables")...)
 }
 
 func sameSet(a, b []string) bool {

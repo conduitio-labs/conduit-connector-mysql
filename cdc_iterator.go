@@ -343,6 +343,9 @@ type cdcEventHandler struct {
 
 	onRowsChange onRowChangeFn
 
+	// logCtx carries the logger for canal's callbacks, which get no context.
+	logCtx context.Context //nolint:containedctx // only for logging from canal's callbacks
+
 	// The fields below are only used on canal's goroutine (OnRow, OnGTID and
 	// OnPosSynced for events of the stream). canal.Close calls OnPosSynced
 	// from the goroutine that tears down, with a nil header; that call
@@ -391,6 +394,7 @@ func newCdcEventHandler(
 		skipRows:         plan.skipRows,
 		prevPosition:     plan.prev,
 	}
+	h.logCtx = ctx
 	h.onRowsChange = func(e rowEvent) ([]opencdc.Record, error) { return h.onRows(ctx, e) }
 
 	return h
@@ -581,6 +585,8 @@ func findKeyColType(avroCols []*avroNamedType, keyCol string) (*avroNamedType, b
 // Which column each value belongs to is unknown in all of these, so this
 // halts with CodeRowColumnsMismatch instead of guessing. Generated (virtual or
 // stored) and INVISIBLE columns are both logged and listed, so they match.
+// A cached column list that is only out of date (canal skips DDL it cannot
+// parse) is re-read in OnRow before this runs; see refreshStaleTable.
 func (h *cdcEventHandler) buildPayload(
 	ctx context.Context,
 	payloadSchema *schemaMapper,
@@ -590,17 +596,18 @@ func (h *cdcEventHandler) buildPayload(
 	columns := e.Table.Columns
 	if len(values) != len(columns) {
 		cause := "a column was added after the event was written"
-		fix := ""
+		hidden := ""
 		if len(values) > len(columns) {
 			cause = "a column was dropped after the event was written, or the connector's user cannot see every column " +
-				"(column privileges, or a generated invisible primary key with " +
-				"show_gipk_in_create_table_and_information_schema=OFF)"
-			fix = "If columns are hidden from the connector's user, make them visible and restart; that is enough. Otherwise "
+				"(column privileges, or a generated invisible primary key hidden by " +
+				"show_gipk_in_create_table_and_information_schema=OFF, which halts by design)"
+			hidden = "If columns are hidden from the connector's user, make them visible first (grant SELECT on every " +
+				"column; SET PERSIST show_gipk_in_create_table_and_information_schema = ON). "
 		}
 		return nil, newError(ErrRowColumnsMismatch, CodeRowColumnsMismatch, "tables",
-			fix+"reset the pipeline's position to snapshot again (expect duplicates; see the README on recovery). Restarting "+
-				"alone does not help: the connector decodes every binlog event with the table's current columns, so this event "+
-				"fails the same way on every restart",
+			hidden+"Restart the pipeline first: the connector re-reads the table's columns, which resolves a column list "+
+				"that was out of date or hidden. If it halts again on the same event, the event was written under another "+
+				"schema: reset the pipeline's position to snapshot again (expect duplicates; see the README on recovery)",
 			"a binlog event for table %s.%s in %s (event end offset %d) has %d values, but the table now has %d columns: %s",
 			e.Table.Schema, e.Table.Name, h.canal.SyncedPosition().Name, e.Header.LogPos, len(values), len(columns), cause)
 	}
@@ -859,6 +866,10 @@ func (h *cdcEventHandler) OnRow(e *canal.RowsEvent) error {
 	if e.Header != nil && e.Header.LogPos == 0 {
 		h.compressedSeen++
 	}
+
+	// A row image wider or narrower than the cached columns may only mean
+	// the cache is stale; re-read it once before deciding to halt.
+	h.refreshStaleTable(h.logCtx, e)
 
 	// Invariant 6: halt before building any record if the row image left a
 	// column out; see checkSkippedColumns.

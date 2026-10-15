@@ -315,13 +315,15 @@ specification:
 
     Two more CDC halts are resolved by resetting the position, so the recovery below (deletes) applies to them too:
 
-    - `mysql.cdc.row_columns_mismatch`: a binlog event has a different number of values than its table now has
-      columns. The connector decodes events with the table's current columns, so an event written before an
-      `ADD COLUMN` or `DROP COLUMN` and read after it (the connector was stopped or lagging across the DDL)
-      cannot be mapped. It also happens when the connector's user cannot see every column (column privileges,
-      or a generated invisible primary key with `show_gipk_in_create_table_and_information_schema=OFF`); make
-      the columns visible and restart. Otherwise restarting does not help: the event fails the same way every
-      time. Reset the position to snapshot again.
+    - `mysql.cdc.row_columns_mismatch`: a binlog event has a different number of values than its table has
+      columns, even after the connector re-read the table's columns (it does that once on a mismatch, because its
+      cached column list can be out of date after a DDL its parser skips, such as `ADD COLUMN ... INVISIBLE`).
+      The connector decodes events with the table's current columns, so an event written before an `ADD COLUMN`
+      or `DROP COLUMN` and read after it (the connector was stopped or lagging across the DDL) cannot be mapped.
+      It also happens when the connector's user cannot see every column: column privileges, or a generated
+      invisible primary key hidden by `show_gipk_in_create_table_and_information_schema=OFF`, which halts by
+      design. Make hidden columns visible first. Then restart the pipeline; if it halts again on the same event,
+      reset the position to snapshot again.
     - `mysql.cdc.resume_event_not_found`: on a restart, the binlog event the saved position names was not where
       the position says. This should not happen; report it with the logged position, and reset the position to
       continue.

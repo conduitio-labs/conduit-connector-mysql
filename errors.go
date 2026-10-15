@@ -71,6 +71,10 @@ const (
 
 	// CodePayloadEmpty: a create, update or snapshot record has no fields.
 	CodePayloadEmpty = "mysql.destination.payload_empty"
+
+	// CodeKeyColumnMissing: a delete record's key does not hold a value for a
+	// primary-key column of the table, or is not a JSON object.
+	CodeKeyColumnMissing = "mysql.destination.key_column_missing"
 )
 
 // Error is a user-facing configuration or state error with a stable code, the
@@ -146,3 +150,6 @@ var ErrPayloadNotStructured = errors.New("payload is not structured data")
 
 // ErrPayloadEmpty is the sentinel for CodePayloadEmpty.
 var ErrPayloadEmpty = errors.New("payload has no fields")
+
+// ErrKeyColumnMissing is the sentinel for CodeKeyColumnMissing.
+var ErrKeyColumnMissing = errors.New("record key is missing a primary-key column")

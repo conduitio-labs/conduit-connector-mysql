@@ -15,11 +15,13 @@
 package mysql
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/Masterminds/squirrel"
@@ -342,18 +344,54 @@ func (d *Destination) deleteRecords(ctx context.Context, tx *sqlx.Tx, table stri
 	return len(recs), nil
 }
 
+// parseRecordKey returns the value of the key column keyName from a record key.
+//
+// Invariant 6: key values are matched exactly. A structured key is used as is.
+// A raw key must be a JSON object, and its numbers are decoded without going
+// through float64: before, every key was round-tripped through JSON into
+// float64, which rounds integers above 2^53, so a delete for id
+// 9007199254740993 removed the row 9007199254740992 instead.
 func (d *Destination) parseRecordKey(keyName string, keyVal opencdc.Data) (any, error) {
-	data := make(opencdc.StructuredData)
-	if err := json.Unmarshal(keyVal.Bytes(), &data); err != nil {
-		return nil, fmt.Errorf("failed to parse key: %w", err)
+	var fields map[string]any
+	switch key := keyVal.(type) {
+	case opencdc.StructuredData:
+		fields = key
+	case opencdc.RawData:
+		dec := json.NewDecoder(bytes.NewReader(key))
+		dec.UseNumber()
+		if err := dec.Decode(&fields); err != nil {
+			return nil, newError(ErrKeyColumnMissing, CodeKeyColumnMissing, ".Key",
+				"send delete records with a structured key or a JSON object key that holds the table's primary-key columns",
+				"the record key %q is not a JSON object: %v", string(key), err)
+		}
 	}
 
-	val, ok := data[keyName]
+	val, ok := fields[keyName]
 	if !ok {
-		return nil, fmt.Errorf("primary key not found")
+		return nil, newError(ErrKeyColumnMissing, CodeKeyColumnMissing, ".Key",
+			"make sure the record key holds every primary-key column of the table, for example with a processor that sets .Key",
+			"the record key has no value for the primary-key column %q", keyName)
 	}
-
+	if n, ok := val.(json.Number); ok {
+		return exactNumber(n), nil
+	}
 	return val, nil
+}
+
+// exactNumber converts a JSON number to an int64 or uint64 when it is an
+// integer in range, so it is compared exactly. Other numbers become float64, as
+// before.
+func exactNumber(n json.Number) any {
+	if i, err := n.Int64(); err == nil {
+		return i
+	}
+	if u, err := strconv.ParseUint(n.String(), 10, 64); err == nil {
+		return u
+	}
+	if f, err := n.Float64(); err == nil {
+		return f
+	}
+	return n.String()
 }
 
 // collectionPath is the record field that names the target table. Destination

@@ -180,3 +180,11 @@ func TestQuoteIdentifiers(t *testing.T) {
 	is.Equal(quoteTable("db.t"), "`db`.`t`")
 	is.Equal(quoteTable("db.t.x"), "`db`.`t.x`")
 }
+
+func TestExactNumber(t *testing.T) {
+	is := is.New(t)
+	is.Equal(exactNumber("9007199254740993"), any(int64(9007199254740993)))
+	is.Equal(exactNumber("18446744073709551615"), any(uint64(18446744073709551615)))
+	is.Equal(exactNumber("-1"), any(int64(-1)))
+	is.Equal(exactNumber("1.5"), any(1.5))
+}

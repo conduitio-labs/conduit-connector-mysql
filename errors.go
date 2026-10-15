@@ -75,6 +75,11 @@ const (
 	// CodeKeyColumnMissing: a delete record's key does not hold a value for a
 	// primary-key column of the table, or is not a JSON object.
 	CodeKeyColumnMissing = "mysql.destination.key_column_missing"
+
+	// CodeUnsafeCharset: the destination connection uses a multibyte
+	// character set (sjis, cp932, gbk, gb18030, big5) under which identifiers
+	// cannot be quoted safely.
+	CodeUnsafeCharset = "mysql.destination.unsafe_charset"
 )
 
 // Error is a user-facing configuration or state error with a stable code, the
@@ -153,3 +158,6 @@ var ErrPayloadEmpty = errors.New("payload has no fields")
 
 // ErrKeyColumnMissing is the sentinel for CodeKeyColumnMissing.
 var ErrKeyColumnMissing = errors.New("record key is missing a primary-key column")
+
+// ErrUnsafeCharset is the sentinel for CodeUnsafeCharset.
+var ErrUnsafeCharset = errors.New("unsafe connection character set")

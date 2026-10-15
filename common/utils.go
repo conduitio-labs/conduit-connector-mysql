@@ -169,7 +169,11 @@ func (t *TableKeyFetcher) GetKeys(tx *sqlx.Tx, table string) (PrimaryKeys, error
 		return nil, err
 	}
 
-	t.cache[table] = keys
+	// An empty result is not cached: a primary key added to the table later
+	// must be seen by the next delete instead of failing it until a restart.
+	if len(keys) > 0 {
+		t.cache[table] = keys
+	}
 
 	return keys, nil
 }

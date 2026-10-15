@@ -159,9 +159,11 @@ Each record is written with exactly the fields in its `.Payload.After`, whatever
 
 Table and column names are quoted, so reserved words work. A collection of the form `db.table` writes to `table` in database `db`.
 
+**Security.** Table and column names come from the records. Quoting keeps them from changing the SQL, but a record's collection can name any database the DSN user can write to, through `db.table`. Grant the destination's user access only to the databases it should write. Quoting is only sound in character sets where no character can end in a backtick byte, so a connection using `sjis`, `cp932`, `gbk`, `gb18030` or `big5` is refused with `mysql.destination.unsafe_charset` (checked in the DSN and on the connection). Use `utf8mb4`, the driver's default.
+
 ### Deletes
 
-Delete records are matched on the target table's primary key, so the table must have one: a delete for a table without a primary key fails with `mysql.destination.delete_without_primary_key` instead of removing rows. The record key must hold every primary-key column (`mysql.destination.key_column_missing` otherwise), either as structured data or as a JSON object. Integer key values are matched exactly. A record whose operation is not create, update, delete or snapshot fails with `mysql.destination.unsupported_operation`.
+Delete records are matched on the target table's primary key, so the table must have one: a delete for a table without a primary key fails with `mysql.destination.delete_without_primary_key` instead of removing rows. The record key must hold a non-null value for every primary-key column (`mysql.destination.key_column_missing` otherwise), either as structured data or as a single JSON object. Integer values in a raw JSON key are matched exactly. Structured keys that reach a standalone connector over the plugin protocol have already passed through a double, so integers above 2^53 sent that way are rounded before the destination sees them ([ConduitIO/conduit#3100](https://github.com/ConduitIO/conduit/issues/3100)). A record whose operation is not create, update, delete or snapshot fails with `mysql.destination.unsupported_operation`.
 
 ### Atomicity and acknowledgements
 

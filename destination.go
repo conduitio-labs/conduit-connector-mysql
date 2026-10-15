@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -55,6 +56,12 @@ func (d *DestinationConfig) Validate(context.Context) error {
 		return fmt.Errorf("failed to parse DSN: %w", err)
 	}
 
+	if cs := unsafeDSNCharset(mysqlCfg); cs != "" {
+		return newError(ErrUnsafeCharset, CodeUnsafeCharset, "dsn",
+			"use utf8mb4 (the default when the DSN sets no charset) or another charset that cannot hide a backtick",
+			"the DSN selects the %s character set, under which table and column names cannot be quoted safely", cs)
+	}
+
 	d.mysqlCfg = mysqlCfg
 	d.tableKeyFetcher = common.NewTableKeyFetcher(mysqlCfg.DBName)
 
@@ -75,13 +82,75 @@ func (d *Destination) Config() sdk.DestinationConfig {
 	return &d.config
 }
 
-func (d *Destination) Open(_ context.Context) (err error) {
+func (d *Destination) Open(ctx context.Context) (err error) {
 	d.db, err = sqlx.Open("mysql", d.config.DSN)
 	if err != nil {
 		return fmt.Errorf("failed to connect to mysql: %w", err)
 	}
 
+	// The DSN is not the only way to pick the session character set (a
+	// character_set_client parameter, the server's init_connect), so the
+	// connection itself is asked. quoteIdent is only sound when no multibyte
+	// character can end in a backtick byte.
+	var cs string
+	if err := d.db.QueryRowContext(ctx, "SELECT @@character_set_client").Scan(&cs); err != nil {
+		_ = d.db.Close()
+		return fmt.Errorf("failed to read the connection character set: %w", err)
+	}
+	if unsafeCharsets[strings.ToLower(cs)] {
+		_ = d.db.Close()
+		return newError(ErrUnsafeCharset, CodeUnsafeCharset, "dsn",
+			"use utf8mb4 for the connection (set charset=utf8mb4 in the DSN, or fix the server's init_connect)",
+			"the connection uses the %s character set, under which table and column names cannot be quoted safely", cs)
+	}
+
 	return nil
+}
+
+// unsafeCharsets are the multibyte character sets in which a valid character
+// can end with the byte 0x60 (a backtick), for example 0x81 0x60 in sjis. In
+// them, quoteIdent's doubled backtick can be read as part of the preceding
+// character, which ends the quoted name early: the escaping problem MySQL
+// documents for these character sets.
+var unsafeCharsets = map[string]bool{
+	"big5":    true,
+	"cp932":   true,
+	"gb18030": true,
+	"gbk":     true,
+	"sjis":    true,
+}
+
+// unsafeDSNCharset returns the unsafe character set a DSN selects through its
+// charset, collation or character_set_* parameters, or "".
+func unsafeDSNCharset(cfg *mysql.Config) string {
+	var candidates []string
+	if cfg.Collation != "" {
+		cs, _, _ := strings.Cut(cfg.Collation, "_")
+		candidates = append(candidates, cs)
+	}
+	// Session variables (character_set_client=...) are sent as SET statements
+	// and kept in Params, with their quotes.
+	for name, value := range cfg.Params {
+		if strings.HasPrefix(strings.ToLower(name), "character_set_") {
+			candidates = append(candidates, value)
+		}
+	}
+	// The driver does not export the charset parameter; read it back from the
+	// formatted DSN.
+	if _, query, ok := strings.Cut(cfg.FormatDSN(), "?"); ok {
+		if values, err := url.ParseQuery(query); err == nil {
+			for _, v := range values["charset"] {
+				candidates = append(candidates, strings.Split(v, ",")...)
+			}
+		}
+	}
+	for _, cs := range candidates {
+		cs = strings.ToLower(strings.Trim(cs, "'\"` "))
+		if unsafeCharsets[cs] {
+			return cs
+		}
+	}
+	return ""
 }
 
 // Write applies recs in a single transaction.
@@ -358,7 +427,12 @@ func (d *Destination) parseRecordKey(keyName string, keyVal opencdc.Data) (any, 
 	case opencdc.RawData:
 		dec := json.NewDecoder(bytes.NewReader(key))
 		dec.UseNumber()
-		if err := dec.Decode(&fields); err != nil {
+		err := dec.Decode(&fields)
+		if err == nil && dec.More() {
+			// {"id":1} {"id":2} would otherwise delete id 1 and ignore the rest.
+			err = errors.New("trailing data after the JSON object")
+		}
+		if err != nil {
 			return nil, newError(ErrKeyColumnMissing, CodeKeyColumnMissing, ".Key",
 				"send delete records with a structured key or a JSON object key that holds the table's primary-key columns",
 				"the record key %q is not a JSON object: %v", string(key), err)
@@ -366,9 +440,11 @@ func (d *Destination) parseRecordKey(keyName string, keyVal opencdc.Data) (any, 
 	}
 
 	val, ok := fields[keyName]
-	if !ok {
+	if !ok || val == nil {
+		// A null value never matches a primary-key column, so the delete
+		// would do nothing and still be acked.
 		return nil, newError(ErrKeyColumnMissing, CodeKeyColumnMissing, ".Key",
-			"make sure the record key holds every primary-key column of the table, for example with a processor that sets .Key",
+			"make sure the record key holds a non-null value for every primary-key column of the table, for example with a processor that sets .Key",
 			"the record key has no value for the primary-key column %q", keyName)
 	}
 	if n, ok := val.(json.Number); ok {
@@ -379,7 +455,8 @@ func (d *Destination) parseRecordKey(keyName string, keyVal opencdc.Data) (any, 
 
 // exactNumber converts a JSON number to an int64 or uint64 when it is an
 // integer in range, so it is compared exactly. Other numbers become float64, as
-// before.
+// before: MySQL compares a string with a DECIMAL column as double precision
+// too, so keeping the literal would not make such a key match more exactly.
 func exactNumber(n json.Number) any {
 	if i, err := n.Int64(); err == nil {
 		return i

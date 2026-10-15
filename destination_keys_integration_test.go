@@ -79,6 +79,9 @@ func TestDestination_Delete_KeyWithoutPrimaryKeyColumn(t *testing.T) {
 		"nil key":            nil,
 		"other column":       opencdc.StructuredData{"v": "a"},
 		"raw key not object": opencdc.RawData(`1`),
+		"trailing data":      opencdc.RawData(`{"id":1} {"id":2}`),
+		"null value":         opencdc.StructuredData{"id": nil},
+		"raw null value":     opencdc.RawData(`{"id":null}`),
 	} {
 		t.Run(name, func(t *testing.T) {
 			is := is.New(t)
@@ -91,4 +94,33 @@ func TestDestination_Delete_KeyWithoutPrimaryKeyColumn(t *testing.T) {
 			is.Equal(count, int64(1))
 		})
 	}
+}
+
+// A delete on a table without a primary key fails; once the key is added the
+// same destination must see it instead of the cached empty key list.
+func TestDestination_Delete_PrimaryKeyAddedLater(t *testing.T) {
+	ctx := testutils.TestContext(t)
+	is := is.New(t)
+	db := testutils.NewDB(t)
+
+	is.NoErr(db.Exec("DROP TABLE IF EXISTS dest_pklater").Error)
+	is.NoErr(db.Exec("CREATE TABLE dest_pklater (id BIGINT NOT NULL, v VARCHAR(10))").Error)
+	t.Cleanup(func() { db.Exec("DROP TABLE IF EXISTS dest_pklater") })
+	is.NoErr(db.Exec("INSERT INTO dest_pklater VALUES (1, 'a'), (2, 'b')").Error)
+
+	dest, cleanup := testDestination(ctx, is)
+	defer cleanup()
+
+	del := keysTestDelete("dest_pklater", opencdc.StructuredData{"id": 1})
+	_, err := dest.Write(ctx, []opencdc.Record{del})
+	is.True(errors.Is(err, ErrDeleteWithoutPrimaryKey))
+
+	is.NoErr(db.Exec("ALTER TABLE dest_pklater ADD PRIMARY KEY (id)").Error)
+	written, err := dest.Write(ctx, []opencdc.Record{del})
+	is.NoErr(err)
+	is.Equal(written, 1)
+
+	var ids []int64
+	is.NoErr(db.Raw("SELECT id FROM dest_pklater ORDER BY id").Scan(&ids).Error)
+	is.Equal(ids, []int64{2})
 }

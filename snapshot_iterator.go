@@ -249,6 +249,11 @@ func (s *snapshotIterator) ReadN(ctx context.Context, n int) ([]opencdc.Record, 
 			s.acks.add(1)
 			recs = append(recs, rec)
 		case <-ctx.Done():
+			// As in the error branch above: the records built so far are
+			// dropped, so release their acks, or the handoff would wait for
+			// acks that never come. Their rows are not acked either, so their
+			// snapshot positions are not persisted and they are read again.
+			_ = s.acks.done(len(recs))
 			//nolint:wrapcheck // no need to wrap canceled error
 			return nil, ctx.Err()
 		default:

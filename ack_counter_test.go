@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -180,4 +181,89 @@ func TestAckCounter(t *testing.T) {
 		wg.Wait()
 		is.NoErr(c.wait(context.Background()))
 	})
+}
+
+// endlessWorker hands the snapshot iterator rows until it is stopped. The
+// data channel is unbuffered, so sent counts the rows ReadN received.
+type endlessWorker struct {
+	data chan fetchData
+	sent *atomic.Int64
+}
+
+func (w endlessWorker) table() string { return "users" }
+
+func (w endlessWorker) fetchStartEnd(context.Context) (bool, error) { return false, nil }
+
+func (w endlessWorker) run(ctx context.Context) error {
+	for i := int64(1); ; i++ {
+		select {
+		case w.data <- fetchData{
+			table:         "users",
+			key:           opencdc.StructuredData{"id": i},
+			payload:       opencdc.StructuredData{"id": i},
+			position:      common.TablePosition{SingleKey: &common.TablePositionSingleKey{LastRead: i, SnapshotEnd: int64(1 << 40)}},
+			payloadSchema: &schemaSubjectVersion{subject: "users_payload", version: 1},
+			keySchema:     &schemaSubjectVersion{subject: "users_key", version: 1},
+		}:
+			w.sent.Add(1)
+		case <-ctx.Done():
+			return nil
+		}
+	}
+}
+
+// Regression test (#224 review): a ReadN whose context ended while it was
+// filling a batch dropped the records it had built, but not their acks. The
+// count of pending acks then never returned to zero, and the snapshot-to-CDC
+// handoff, which waits for it, could not complete. Which select case runs is
+// random when both are ready, so the case is repeated until it is hit.
+func TestSnapshotIterator_CancelledReadNReleasesDroppedAcks(t *testing.T) {
+	is := is.New(t)
+	ctx := context.Background()
+	hit := 0
+	for attempt := 0; attempt < 2000 && hit < 20; attempt++ {
+		it, err := newSnapshotIterator(snapshotIteratorConfig{
+			tablePrimaryKeys: common.TableKeys{"users": {"id"}},
+			database:         "meroxadb",
+			serverID:         "1",
+		})
+		is.NoErr(err)
+		it.setCDCStart(&common.CdcPosition{
+			ReplicationEventPosition: common.ReplicationEventPosition{Name: "binlog.000001", Pos: 4},
+		})
+		var sent atomic.Int64
+		it.workers = []fetchWorker{endlessWorker{data: it.data, sent: &sent}}
+		it.start(ctx)
+
+		// One record first, so the worker is running and about to offer the
+		// next one when the cancelled ReadN starts.
+		first, err := it.ReadN(ctx, 1)
+		is.NoErr(err)
+		is.NoErr(it.Ack(ctx, first[0].Position))
+		sent.Store(0)
+
+		cancelled, cancel := context.WithCancel(ctx)
+		cancel()
+		recs, err := it.ReadN(cancelled, 50)
+		it.acks.mu.Lock()
+		pending := it.acks.pending
+		it.acks.mu.Unlock()
+		// Stop the worker before reading sent: a send in flight completes
+		// only with a receive, and nothing receives now.
+		it.t.Kill(nil)
+		_ = it.t.Wait()
+
+		if err != nil {
+			is.Equal(len(recs), 0)
+			if pending != 0 {
+				t.Fatalf("attempt %d: ReadN dropped its records but left %d acks pending", attempt, pending)
+			}
+		} else {
+			is.Equal(pending, len(recs)) // delivered, waiting for their acks
+		}
+		if err != nil && sent.Load() > 0 {
+			hit++ // records were received, then dropped on the cancelled context
+		}
+	}
+	is.True(hit > 0) // the cancelled fill path ran at least once
 }

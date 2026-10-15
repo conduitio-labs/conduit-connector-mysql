@@ -286,8 +286,8 @@ specification:
 
     - `mysql.cdc.row_columns_mismatch`: a binlog event has fewer values than its table now has columns. The
       connector decodes events with the table's current columns, so an event written before an `ADD COLUMN` and
-      read after it (the connector was stopped or lagging across the DDL) cannot be mapped. Reset the position to
-      snapshot again.
+      read after it (the connector was stopped or lagging across the DDL) cannot be mapped. Restarting does not
+      help: the event fails the same way every time. Reset the position to snapshot again.
     - `mysql.cdc.resume_event_not_found`: on a restart, the binlog event the saved position names was not where
       the position says. This should not happen; report it with the logged position, and reset the position to
       continue.

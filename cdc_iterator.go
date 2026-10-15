@@ -224,13 +224,24 @@ func (c *cdcIterator) ReadN(ctx context.Context, n int) ([]opencdc.Record, error
 // err) (canal/sync.go), which formats the cause with %v and breaks the Unwrap
 // chain, so only a string match catches it. The message is a stable sentinel in
 // the pinned go-mysql v1.14.0 (replication.ErrSyncClosed = "Sync was closed").
+//
+// A Close that lands while the syncer is handing an event to the streamer
+// fails that stream with a third form, a plain errors.New("sync is being
+// closed...") with no sentinel (replication/binlogsyncer.go, onStream), which
+// canal returns from RunFrom as is. It only happens when the syncer's context
+// was cancelled, which only Close does, so it is the same benign stop.
 func isSyncClosed(err error) bool {
 	if err == nil {
 		return false
 	}
 	return errors.Is(err, replication.ErrSyncClosed) ||
-		strings.Contains(err.Error(), replication.ErrSyncClosed.Error())
+		strings.Contains(err.Error(), replication.ErrSyncClosed.Error()) ||
+		strings.Contains(err.Error(), syncBeingClosedMsg)
 }
+
+// syncBeingClosedMsg is the text of go-mysql's unexported "closing" error; see
+// isSyncClosed.
+const syncBeingClosedMsg = "sync is being closed"
 
 // wrapCanalRunErr turns canal.RunFrom's return value into a stable, actionable
 // error. A graceful Teardown-triggered close is reported as such; any other
@@ -573,8 +584,9 @@ func (h *cdcEventHandler) buildPayload(
 	columns := e.Table.Columns
 	if len(values) < len(columns) {
 		return nil, newError(ErrRowColumnsMismatch, CodeRowColumnsMismatch, "tables",
-			"reset the pipeline's position to snapshot again (expect duplicates; see the README on recovery). The connector reads the "+
-				"table's current columns, so a binlog event written before a column was added cannot be decoded",
+			"reset the pipeline's position to snapshot again (expect duplicates; see the README on recovery). There is no "+
+				"lighter fix: restarting does not help, because the connector decodes every binlog event with the table's current "+
+				"columns, so this event fails the same way on every restart",
 			"a binlog event for table %s.%s in %s (event end offset %d) has %d values, but the table now has %d columns: "+
 				"its schema changed after the event was written",
 			e.Table.Schema, e.Table.Name, h.canal.SyncedPosition().Name, e.Header.LogPos, len(values), len(columns))

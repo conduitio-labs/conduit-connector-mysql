@@ -16,6 +16,7 @@ package mysql
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -111,18 +112,26 @@ func TestCDCIterator_ResumeMidEventKeepsRowIndex(t *testing.T) {
 	}
 }
 
-// readIDs reads and acks until n records arrived or the source has been quiet
-// for two seconds, and returns the user ids in delivery order.
+// readIDs reads and acks until n records arrived, and returns the user ids in
+// delivery order. It waits up to readIDsDeadline for them: a restart from an
+// older position re-reads its binlog file from the start, which on a grown
+// file takes longer than any quiet period would allow, and a short quiet
+// window made such tests see nothing. It returns early, with what it has, if
+// the iterator fails. To check that nothing else follows, use assertNoMoreIDs.
 func readIDs(ctx context.Context, is *is.I, it common.Iterator, n int) ([]int64, opencdc.Position) {
 	is.Helper()
 	var ids []int64
 	var last opencdc.Position
-	for len(ids) < n {
-		readCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	deadline := time.Now().Add(readIDsDeadline)
+	for len(ids) < n && time.Now().Before(deadline) {
+		readCtx, cancel := context.WithTimeout(ctx, time.Second)
 		recs, err := it.ReadN(readCtx, n-len(ids))
 		cancel()
+		if errors.Is(err, context.DeadlineExceeded) {
+			continue // nothing yet
+		}
 		if err != nil {
-			break // quiet: nothing more arrived
+			break
 		}
 		for _, r := range recs {
 			is.NoErr(it.Ack(ctx, r.Position))
@@ -131,6 +140,27 @@ func readIDs(ctx context.Context, is *is.I, it common.Iterator, n int) ([]int64,
 		}
 	}
 	return ids, last
+}
+
+const readIDsDeadline = 60 * time.Second
+
+// assertNoMoreIDs checks that nothing else is delivered within a short settle
+// period, after the expected records arrived.
+func assertNoMoreIDs(ctx context.Context, t *testing.T, it common.Iterator) {
+	t.Helper()
+	readCtx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+	defer cancel()
+	recs, err := it.ReadN(readCtx, 100)
+	if len(recs) > 0 {
+		var extra []any
+		for _, r := range recs {
+			extra = append(extra, r.Key)
+		}
+		t.Fatalf("unexpected records after the expected ones: %v", extra)
+	}
+	if err != nil && !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("iterator failed while settling: %v", err)
+	}
 }
 
 func idRange(from, to int64) []int64 {
@@ -180,6 +210,7 @@ func TestCDCIterator_SecondResumeMidEventLosesNothing(t *testing.T) {
 	if diff := cmp.Diff(idRange(8, 15), ids); diff != "" {
 		t.Fatalf("second resume delivered the wrong rows (-want +got):\n%s", diff)
 	}
+	assertNoMoreIDs(ctx, t, iterator)
 }
 
 // A large INSERT is logged as one Table_map event followed by several rows
@@ -215,6 +246,7 @@ func TestCDCIterator_ResumeInsideLaterRowsEventOfOneStatement(t *testing.T) {
 	if diff := cmp.Diff(idRange(2501, n), ids); diff != "" {
 		t.Fatalf("resume delivered the wrong rows (-want +got):\n%s", diff)
 	}
+	assertNoMoreIDs(ctx, t, iterator)
 }
 
 // Upgrade test: positions written before ReplayFrom existed still resume
@@ -265,6 +297,7 @@ func TestCDCIterator_ResumeFromPositionsOfOlderVersions(t *testing.T) {
 		if diff := cmp.Diff(idRange(5, 12), got); diff != "" {
 			t.Fatalf("(-want +got):\n%s", diff)
 		}
+		assertNoMoreIDs(ctx, t, it)
 	})
 
 	t.Run("position written after a mid-event resume by an older version", func(t *testing.T) {
@@ -280,5 +313,6 @@ func TestCDCIterator_ResumeFromPositionsOfOlderVersions(t *testing.T) {
 		if diff := cmp.Diff(idRange(1, 12), got); diff != "" {
 			t.Fatalf("(-want +got):\n%s", diff)
 		}
+		assertNoMoreIDs(ctx, t, it)
 	})
 }

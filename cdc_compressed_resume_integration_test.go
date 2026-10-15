@@ -109,10 +109,11 @@ func TestCDCIterator_ResumeInsideCompressedTransaction(t *testing.T) {
 
 			iterator, teardown = testCdcIteratorAtPosition(ctx, t, is, pos)
 			defer teardown()
-			got, _ := readIDs(ctx, is, iterator, total) // more than are left: nothing else may come
+			got, _ := readIDs(ctx, is, iterator, total-tc.stopAt)
 			if diff := cmp.Diff(idRange(int64(tc.stopAt+1), int64(total)), got); diff != "" {
 				t.Fatalf("resume delivered the wrong rows (-want +got):\n%s", diff)
 			}
+			assertNoMoreIDs(ctx, t, iterator)
 		})
 	}
 }
@@ -148,10 +149,11 @@ func TestCDCIterator_ResumeTwiceInsideOneCompressedStatement(t *testing.T) {
 
 	iterator, teardown = testCdcIteratorAtPosition(ctx, t, is, pos)
 	defer teardown()
-	ids, _ = readIDs(ctx, is, iterator, n)
+	ids, _ = readIDs(ctx, is, iterator, n-2500)
 	if diff := cmp.Diff(idRange(2501, n), ids); diff != "" {
 		t.Fatalf("second resume delivered the wrong rows (-want +got):\n%s", diff)
 	}
+	assertNoMoreIDs(ctx, t, iterator)
 }
 
 // When the captured tables change, the number that names a compressed event
@@ -178,10 +180,11 @@ func TestCDCIterator_ResumeInsideCompressedTransactionAfterTablesChanged(t *test
 
 	iterator, teardown = testCdcIteratorAtPosition(ctx, t, is, saved.CdcPosition.ToSDKPosition())
 	defer teardown()
-	got, _ := readIDs(ctx, is, iterator, 10)
+	got, _ := readIDs(ctx, is, iterator, 5)
 	if diff := cmp.Diff(idRange(6, 10), got); diff != "" {
 		t.Fatalf("(-want +got):\n%s", diff)
 	}
+	assertNoMoreIDs(ctx, t, iterator)
 }
 
 // Regression test (#228 review, symptom a): a position written by an older
@@ -218,10 +221,11 @@ func TestCDCIterator_UpgradeWithCompressedTransactionAndLaterDDL(t *testing.T) {
 
 	iterator, teardown = testCdcIteratorAtPosition(ctx, t, is, old.ToSDKPosition())
 	defer teardown()
-	got, _ := readIDs(ctx, is, iterator, 10)
+	got, _ := readIDs(ctx, is, iterator, 1)
 	if diff := cmp.Diff([]int64{4}, got); diff != "" {
 		t.Fatalf("(-want +got):\n%s", diff)
 	}
+	assertNoMoreIDs(ctx, t, iterator)
 }
 
 // Invariant 6: a binlog event written before a column was added, read after

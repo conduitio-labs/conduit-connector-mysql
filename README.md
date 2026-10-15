@@ -230,10 +230,17 @@ The source connector is in beta. This section states what it guarantees and what
   Stop the pipeline, change the schema, and verify the result before resuming.
 - **Tables must be orderable for the snapshot.** See "Tables without a primary key".
 - **Type mapping has known gaps.** `DECIMAL` and `NUMERIC` map to Avro `double` and can lose
-  precision beyond what a 64-bit float holds. A `BIGINT UNSIGNED` value above 2^63-1 cannot
-  be encoded as Avro `long`; the connector logs a warning and passes the value through
-  unconverted. Date and time types are delivered as strings. A full type-mapping design is
-  pending; do not rely on exact fidelity for these types yet.
+  precision beyond what a 64-bit float holds. SQL `NULL` is delivered as the column type's
+  zero value (`0`, `""`), so it cannot be told apart from a real zero. Date and time types are
+  delivered as strings. A full type-mapping design is pending; do not rely on exact fidelity
+  for these types yet.
+- **`BIGINT UNSIGNED` above 2^63-1 stops the source.** The column maps to Avro `long`, which
+  cannot hold values above 9223372036854775807. When the snapshot or CDC reads such a value,
+  the source stops with `mysql.types.unsigned_overflow`, naming the table, column and value.
+  No record is emitted for that row and the position does not move past it. Exclude the
+  table, or bring the values into range, and restart. Versions before this one emitted a
+  wrong number in the snapshot (18446744073709551615 came out as 3474867090068222261) and
+  failed with an encoder error in CDC.
 
 ## Requirements and compatibility
 

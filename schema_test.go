@@ -322,7 +322,9 @@ func TestSchema_Payload_SQLX_Rows(t *testing.T) {
 
 	formatted := map[string]any{}
 	for k, v := range dest {
-		formatted[k] = payloadSchemaManager.formatValue(ctx, k, v)
+		fv, err := payloadSchemaManager.formatValue(ctx, k, v)
+		is.NoErr(err)
+		formatted[k] = fv
 	}
 
 	s, err := schema.Get(ctx, tableName+"_payload", 1)
@@ -363,7 +365,9 @@ func TestSchema_Payload_canal_RowsEvent(t *testing.T) {
 
 	formatted := map[string]any{}
 	for i, col := range rowsEvent.Table.Columns {
-		formatted[col.Name] = payloadSchemaManager.formatValue(ctx, col.Name, rowsEvent.Rows[0][i])
+		fv, err := payloadSchemaManager.formatValue(ctx, col.Name, rowsEvent.Rows[0][i])
+		is.NoErr(err)
+		formatted[col.Name] = fv
 	}
 
 	s, err := schema.Get(ctx, tableName+"_payload", 1)

@@ -40,6 +40,10 @@ const (
 	// CodeSortingColumnInvalid: a tableConfig sortingColumn is nullable or not
 	// unique, so a snapshot ordered by it could skip rows.
 	CodeSortingColumnInvalid = "mysql.snapshot.sorting_column_invalid"
+
+	// CodeUnsignedOverflow: a BIGINT UNSIGNED value is above the largest Avro
+	// long (2^63-1). The source stops instead of emitting a wrong value.
+	CodeUnsignedOverflow = "mysql.types.unsigned_overflow"
 )
 
 // Error is a user-facing configuration or state error with a stable code, the
@@ -85,3 +89,6 @@ var ErrUnsafeSnapshotRemoved = errors.New("snapshot.unsafe has been removed")
 
 // ErrTableWithoutKey is the sentinel for CodeTableWithoutKey.
 var ErrTableWithoutKey = errors.New("table has no primary key and no sorting column")
+
+// ErrUnsignedOverflow is the sentinel for CodeUnsignedOverflow.
+var ErrUnsignedOverflow = errors.New("unsigned value does not fit the column's schema type")

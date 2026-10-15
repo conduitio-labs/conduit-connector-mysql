@@ -226,7 +226,10 @@ func compatRow(t *testing.T, c compatCase, m *schemaMapper, mode string) map[str
 		if mode == "cdc" {
 			raw = cols[n].cdc
 		}
-		v := m.formatValue(context.Background(), cols[n].col.Name, raw)
+		v, err := m.formatValue(context.Background(), cols[n].col.Name, raw)
+		if err != nil {
+			t.Fatalf("%s: %v", cols[n].col.Name, err)
+		}
 		// formatValue hands a BIT column over as []byte, which neither codec
 		// encodes into fixed[8] (both reject it, see TestSchemaHambaCompat_BitSlice);
 		// the array form is what exercises the fixed encoding.
@@ -250,7 +253,10 @@ func TestSchemaHambaCompat_BitSlice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	v := m.formatValue(context.Background(), cols["sql:BIT"].col.Name, cols["sql:BIT"].snapshot)
+	v, err := m.formatValue(context.Background(), cols["sql:BIT"].col.Name, cols["sql:BIT"].snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := avro.Marshal(sch, map[string]any{cols["sql:BIT"].col.Name: v}); err == nil {
 		t.Fatal("expected an encode error for []byte into fixed[8]")
 	}

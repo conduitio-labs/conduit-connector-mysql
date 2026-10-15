@@ -40,6 +40,12 @@ jobs:
       - name: Test
         run: go test -v -race -count=1 -skip '^TestAcceptanceV2$' ./...
 
+      # Kills the source as a real process (SIGKILL) at chosen points and
+      # checks no gap, exact resume and monotonic positions; see
+      # test/chaos/doc.go.
+      - name: SIGKILL chaos
+        run: go test -v -race -count=1 -tags chaos ./test/chaos/
+
       # The SDK acceptance suite v2 (revision pinned by the SDK in go.mod). The
       # report is the certification evidence: it is deleted first so a stale one
       # can never pass, and it only counts if the run finished and is complete.

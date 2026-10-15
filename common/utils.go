@@ -20,7 +20,6 @@ import (
 	"io"
 	"log/slog"
 	"strconv"
-	"strings"
 
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/go-mysql-org/go-mysql/canal"
@@ -136,46 +135,6 @@ func (t TableKeys) GetTables() []string {
 		names = append(names, name)
 	}
 	return names
-}
-
-// TableKeyFetcher fetches primary keys from the database and caches them.
-type TableKeyFetcher struct {
-	database string
-	cache    TableKeys
-}
-
-func NewTableKeyFetcher(database string) *TableKeyFetcher {
-	return &TableKeyFetcher{
-		database: database,
-		cache:    make(TableKeys),
-	}
-}
-
-func (t *TableKeyFetcher) GetKeys(tx *sqlx.Tx, table string) (PrimaryKeys, error) {
-	keys, ok := t.cache[table]
-	if ok {
-		return keys, nil
-	}
-
-	// A qualified name, db.table, names a table in another database (the
-	// destination writes it that way, see quoteTable).
-	database, name := t.database, table
-	if schema, rest, ok := strings.Cut(table, "."); ok {
-		database, name = schema, rest
-	}
-
-	keys, err := GetPrimaryKeys(tx, database, name)
-	if err != nil {
-		return nil, err
-	}
-
-	// An empty result is not cached: a primary key added to the table later
-	// must be seen by the next delete instead of failing it until a restart.
-	if len(keys) > 0 {
-		t.cache[table] = keys
-	}
-
-	return keys, nil
 }
 
 // keyQuerier allows us to select primary keys from both a sqlx.DB and an sqlx.Tx transaction.

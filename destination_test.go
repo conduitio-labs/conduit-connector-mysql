@@ -17,6 +17,7 @@ package mysql
 import (
 	"context"
 	"errors"
+	"runtime"
 	"testing"
 
 	"github.com/conduitio/conduit-commons/opencdc"
@@ -190,4 +191,17 @@ func TestExactNumber(t *testing.T) {
 	is.Equal(exactNumber("9007199254740993.0"), any(int64(9007199254740993)))
 	is.Equal(exactNumber("1.5"), any("1.5"))
 	is.Equal(exactNumber("1e400"), any("1e400"))
+}
+
+// A JSON number with a huge exponent is not evaluated: big.Rat would build a
+// number with a million digits (about 400 KB and milliseconds per value).
+func TestExactNumber_HugeExponentIsCheap(t *testing.T) {
+	is := is.New(t)
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	got := exactNumber("1e1000000")
+	runtime.ReadMemStats(&after)
+	is.Equal(got, any("1e1000000"))
+	allocated := after.TotalAlloc - before.TotalAlloc
+	is.True(allocated < 64<<10) // bytes allocated to classify one huge literal
 }

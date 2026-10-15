@@ -29,7 +29,6 @@ import (
 	"strings"
 
 	"github.com/Masterminds/squirrel"
-	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	"github.com/conduitio/conduit-commons/opencdc"
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/go-sql-driver/mysql"
@@ -41,16 +40,11 @@ type DestinationConfig struct {
 
 	Config
 
-	mysqlCfg        *mysql.Config
-	tableKeyFetcher *common.TableKeyFetcher
+	mysqlCfg *mysql.Config
 }
 
 func (d *DestinationConfig) MysqlCfg() *mysql.Config {
 	return d.mysqlCfg
-}
-
-func (d *DestinationConfig) TableKeyFetcher() *common.TableKeyFetcher {
-	return d.tableKeyFetcher
 }
 
 func (d *DestinationConfig) Validate(context.Context) error {
@@ -66,7 +60,6 @@ func (d *DestinationConfig) Validate(context.Context) error {
 	}
 
 	d.mysqlCfg = mysqlCfg
-	d.tableKeyFetcher = common.NewTableKeyFetcher(mysqlCfg.DBName)
 
 	return nil
 }
@@ -75,10 +68,6 @@ type Destination struct {
 	sdk.UnimplementedDestination
 	db     *sqlx.DB
 	config DestinationConfig
-
-	// keyTypes caches the DATA_TYPE of each table's primary-key columns.
-	// Write is called serially, so it needs no lock.
-	keyTypes map[string]map[string]string
 }
 
 func NewDestination() sdk.Destination {
@@ -361,96 +350,107 @@ func (d *Destination) deleteRecords(ctx context.Context, tx *sqlx.Tx, table stri
 		return 0, nil
 	}
 
-	primaryKeys, err := d.config.TableKeyFetcher().GetKeys(tx, table)
+	// The key columns and their types are read in this transaction for every
+	// batch, never cached: after an ALTER a cached list would match keys
+	// against the old key or the old type (a stale VARCHAR type let 1.5 through
+	// against a column that had become BIGINT, an acked no-op).
+	keyCols, err := d.primaryKeyColumns(ctx, tx, table)
 	if err != nil {
-		return 0, fmt.Errorf("failed to get keys when deleting record batch: %w", err)
+		return 0, err
 	}
-	if len(primaryKeys) == 0 {
+	if len(keyCols) == 0 {
 		// Without this check the empty key list builds a predicate that matches
 		// every row, and the delete wipes the table.
 		return 0, newError(ErrDeleteWithoutPrimaryKey, CodeDeleteWithoutPrimaryKey, collectionPath,
 			"add a primary key to the table, or drop delete records before the destination (a filter processor on .Operation)",
 			"cannot delete from table %q: it has no primary key, so a delete record cannot be matched to a row", table)
 	}
-	keyTypes, err := d.keyColumnTypes(tx, table, primaryKeys)
-	if err != nil {
-		return 0, err
-	}
 
-	if len(primaryKeys) == 1 {
-		// single key
-
-		keyName := primaryKeys[0]
-
+	var where squirrel.Sqlizer
+	if len(keyCols) == 1 {
+		col := keyCols[0]
 		values := make([]any, 0, len(recs))
 		for _, rec := range recs {
-			val, err := d.parseRecordKey(keyName, keyTypes[keyName], rec.Key)
+			val, err := parseRecordKey(col, rec.Key)
 			if err != nil {
 				return 0, fmt.Errorf("failed to parse key: %w", err)
 			}
 			values = append(values, val)
 		}
-
-		query := squirrel.
-			Delete(quoteTable(table)).
-			Where(squirrel.Eq{quoteIdent(keyName): values})
-
-		sql, args, err := query.ToSql()
-		if err != nil {
-			return 0, fmt.Errorf("failed to build query: %w", err)
-		}
-
-		_, err = tx.ExecContext(ctx, sql, args...)
-		if err != nil {
-			return 0, fmt.Errorf("failed to execute batch delete: %w", err)
-		}
-
-		return len(recs), nil
-	}
-
-	// multiple keys
-
-	orConditions := squirrel.Or{}
-	for _, rec := range recs {
-		andConditions := squirrel.And{}
-		for _, keyName := range primaryKeys {
-			val, err := d.parseRecordKey(keyName, keyTypes[keyName], rec.Key)
-			if err != nil {
-				return 0, fmt.Errorf("failed to parse key: %w", err)
+		where = squirrel.Eq{quoteIdent(col.Name): values}
+	} else {
+		orConditions := squirrel.Or{}
+		for _, rec := range recs {
+			andConditions := squirrel.And{}
+			for _, col := range keyCols {
+				val, err := parseRecordKey(col, rec.Key)
+				if err != nil {
+					return 0, fmt.Errorf("failed to parse key: %w", err)
+				}
+				andConditions = append(andConditions, squirrel.Eq{quoteIdent(col.Name): val})
 			}
-			andConditions = append(andConditions, squirrel.Eq{quoteIdent(keyName): val})
+			orConditions = append(orConditions, andConditions)
 		}
-		orConditions = append(orConditions, andConditions)
+		where = orConditions
 	}
 
-	query := squirrel.Delete(quoteTable(table)).Where(orConditions)
-	sql, args, err := query.ToSql()
+	sql, args, err := squirrel.Delete(quoteTable(table)).Where(where).ToSql()
 	if err != nil {
 		return 0, fmt.Errorf("failed to build query: %w", err)
 	}
-
-	_, err = tx.ExecContext(ctx, sql, args...)
-	if err != nil {
+	if _, err := tx.ExecContext(ctx, sql, args...); err != nil {
 		return 0, fmt.Errorf("failed to execute batch delete: %w", err)
 	}
-
 	return len(recs), nil
 }
 
-// parseRecordKey returns the value of the key column keyName from a record key.
+// keyColumn is a primary-key column with its type.
+type keyColumn struct {
+	Name       string `db:"COLUMN_NAME"`
+	DataType   string `db:"DATA_TYPE"`   // e.g. bigint, varchar
+	ColumnType string `db:"COLUMN_TYPE"` // e.g. bigint unsigned, varchar(20)
+}
+
+// primaryKeyColumns returns the primary-key columns of table in key order. A
+// table of the form db.table is looked up in database db.
+func (d *Destination) primaryKeyColumns(ctx context.Context, tx *sqlx.Tx, table string) ([]keyColumn, error) {
+	database, name := d.config.MysqlCfg().DBName, table
+	if schema, rest, ok := strings.Cut(table, "."); ok {
+		database, name = schema, rest
+	}
+	var cols []keyColumn
+	if err := tx.SelectContext(ctx, &cols, `
+		SELECT k.COLUMN_NAME, c.DATA_TYPE, c.COLUMN_TYPE
+		FROM information_schema.key_column_usage k
+		JOIN information_schema.columns c
+			ON c.TABLE_SCHEMA = k.TABLE_SCHEMA AND c.TABLE_NAME = k.TABLE_NAME AND c.COLUMN_NAME = k.COLUMN_NAME
+		WHERE k.CONSTRAINT_NAME = 'PRIMARY' AND k.TABLE_SCHEMA = ? AND k.TABLE_NAME = ?
+		ORDER BY k.ORDINAL_POSITION`, database, name); err != nil {
+		return nil, fmt.Errorf("failed to get the primary-key columns of table %s: %w", table, err)
+	}
+	for i := range cols {
+		cols[i].DataType = strings.ToLower(cols[i].DataType)
+		cols[i].ColumnType = strings.ToLower(cols[i].ColumnType)
+	}
+	return cols, nil
+}
+
+// parseRecordKey returns the value of the key column col from a record key,
+// in the form MySQL compares exactly with that column.
 //
-// Invariant 6: key values are matched exactly. A structured key is used as is.
-// A raw key must be a JSON object, and its numbers are decoded without going
-// through float64: before, every key was round-tripped through JSON into
-// float64, which rounds integers above 2^53, so a delete for id
-// 9007199254740993 removed the row 9007199254740992 instead.
-//
-// A key value must be one scalar: squirrel turns a slice into IN (...), so
-// {"a":1,"id":[1,2,3]} deleted three rows and {"a":1,"id":[]} became an acked
-// no-op. For an integer column the value must be a whole number: MySQL
-// compares a fraction or a non-numeric string with an integer column as a
-// double, so 1.5 matches nothing (an acked no-op) and "abc" matches 0.
-func (d *Destination) parseRecordKey(keyName, dataType string, keyVal opencdc.Data) (any, error) {
+// Invariant 6: a key value matches exactly the row it names.
+//   - A structured key is used as is. A raw key must be one JSON object; its
+//     numbers are decoded without float64, which rounded integers above 2^53
+//     (a delete for 9007199254740993 removed 9007199254740992).
+//   - A value must be one scalar: squirrel turns a slice into IN (...), so
+//     {"a":1,"id":[1,2,3]} deleted three rows and [] was an acked no-op.
+//   - String columns get a string. MySQL compares a number with a string
+//     column as a double, so 1000 matched '1000', '1e3', '01000', '1000.0'
+//     and ' 1000' and deleted all of them.
+//   - Integer columns get a whole number within the column's range. A fraction
+//     or an out-of-range value matches nothing (an acked no-op), and a
+//     non-numeric string is compared as a double ("abc" matches 0).
+func parseRecordKey(col keyColumn, keyVal opencdc.Data) (any, error) {
 	var fields map[string]any
 	switch key := keyVal.(type) {
 	case opencdc.StructuredData:
@@ -470,123 +470,191 @@ func (d *Destination) parseRecordKey(keyName, dataType string, keyVal opencdc.Da
 		}
 	}
 
-	val, ok := fields[keyName]
+	val, ok := fields[col.Name]
 	if !ok || val == nil {
 		// A null value never matches a primary-key column, so the delete
 		// would do nothing and still be acked.
 		return nil, newError(ErrKeyColumnMissing, CodeKeyColumnMissing, ".Key",
 			"make sure the record key holds a non-null value for every primary-key column of the table, for example with a processor that sets .Key",
-			"the record key has no value for the primary-key column %q", keyName)
-	}
-	if n, ok := val.(json.Number); ok {
-		val = exactNumber(n)
+			"the record key has no value for the primary-key column %q", col.Name)
 	}
 	if _, isBytes := val.([]byte); !isBytes {
 		switch reflect.ValueOf(val).Kind() {
 		case reflect.Slice, reflect.Array, reflect.Map:
 			return nil, newError(ErrKeyValueNotScalar, CodeKeyValueNotScalar, ".Key",
 				"send one scalar value per primary-key column in the record key",
-				"the record key has a %T value for the primary-key column %q, which would match several rows or none", val, keyName)
+				"the record key has a %T value for the primary-key column %q, which would match several rows or none", val, col.Name)
 		default:
 		}
 	}
-	if integerTypes[dataType] && !isWholeNumber(val) {
-		return nil, newError(ErrKeyValueTypeMismatch, CodeKeyValueTypeMismatch, ".Key",
-			"send whole numbers for integer primary-key columns",
-			"the record key has %v (%T) for the %s primary-key column %q, which is not a whole number", val, val, dataType, keyName)
-	}
-	return val, nil
-}
 
-// integerTypes are the MySQL DATA_TYPE values of integer columns.
-var integerTypes = map[string]bool{
-	//nolint:goconst // MySQL DATA_TYPE names, as in legacy_keys.go
-	"tinyint": true, "smallint": true, "mediumint": true, "int": true, "integer": true, "bigint": true,
-}
+	mismatch := func(why string) error {
+		return newError(ErrKeyValueTypeMismatch, CodeKeyValueTypeMismatch, ".Key",
+			"send key values that fit the primary-key column's type",
+			"the record key has %v (%T) for the %s primary-key column %q: %s", val, val, col.ColumnType, col.Name, why)
+	}
 
-// isWholeNumber reports whether v is a whole number that MySQL compares with an
-// integer column without rounding. Booleans count (true is 1, as in MySQL).
-func isWholeNumber(v any) bool {
-	switch v := v.(type) {
-	case bool, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
-		return true
-	case float32:
-		f := float64(v)
-		return !math.IsInf(f, 0) && !math.IsNaN(f) && f == math.Trunc(f)
-	case float64:
-		return !math.IsInf(v, 0) && !math.IsNaN(v) && v == math.Trunc(v)
-	case string:
-		return isIntegerLiteral(v)
-	case []byte:
-		return isIntegerLiteral(string(v))
-	default:
-		return false
-	}
-}
-
-func isIntegerLiteral(s string) bool {
-	if _, err := strconv.ParseInt(s, 10, 64); err == nil {
-		return true
-	}
-	_, err := strconv.ParseUint(s, 10, 64)
-	return err == nil
-}
-
-// keyColumnTypes returns the DATA_TYPE of the primary-key columns of table,
-// cached per table like the key names.
-func (d *Destination) keyColumnTypes(tx *sqlx.Tx, table string, keys common.PrimaryKeys) (map[string]string, error) {
-	if types, ok := d.keyTypes[table]; ok {
-		return types, nil
-	}
-	database, name := d.config.MysqlCfg().DBName, table
-	if schema, rest, ok := strings.Cut(table, "."); ok {
-		database, name = schema, rest
-	}
-	var cols []struct {
-		Name     string `db:"COLUMN_NAME"`
-		DataType string `db:"DATA_TYPE"`
-	}
-	if err := tx.Select(&cols, `
-		SELECT COLUMN_NAME, DATA_TYPE
-		FROM information_schema.columns
-		WHERE table_schema = ? AND table_name = ?`, database, name); err != nil {
-		return nil, fmt.Errorf("failed to get the key column types of table %s: %w", table, err)
-	}
-	types := make(map[string]string, len(keys))
-	for _, c := range cols {
-		if slices.Contains(keys, c.Name) {
-			types[c.Name] = strings.ToLower(c.DataType)
+	switch {
+	case stringTypes[col.DataType]:
+		s, ok := stringKeyValue(val)
+		if !ok {
+			return nil, mismatch("a string column needs a string or a number")
 		}
+		return s, nil
+	case integerTypes[col.DataType] != nil:
+		n, ok := keyInteger(val)
+		if !ok {
+			return nil, mismatch("not a whole number")
+		}
+		r := integerTypes[col.DataType]
+		lo, hi := r.min, r.max
+		if strings.Contains(col.ColumnType, "unsigned") {
+			lo, hi = big.NewInt(0), r.umax
+		}
+		if n.Cmp(lo) < 0 || n.Cmp(hi) > 0 {
+			return nil, mismatch(fmt.Sprintf("outside the column's range %s..%s", lo, hi))
+		}
+		if n.IsInt64() {
+			return n.Int64(), nil
+		}
+		return n.Uint64(), nil // in range of an unsigned bigint
+	default:
+		if num, ok := val.(json.Number); ok {
+			return exactNumber(num), nil
+		}
+		return val, nil
 	}
-	if d.keyTypes == nil {
-		d.keyTypes = make(map[string]map[string]string)
-	}
-	d.keyTypes[table] = types
-	return types, nil
 }
 
-// exactNumber converts a JSON number so that it is compared exactly: a whole
-// value in any form (9007199254740993, 9.007199254740993e15,
-// 9007199254740993.0) becomes an int64 or uint64, anything else stays the
-// literal string. A float64 would be rounded to the nearest double and match a
-// different row. A non-whole literal against an integer column is refused by
-// parseRecordKey; against a DECIMAL column MySQL compares the string as a
-// double, which is no worse than the float64 used before.
+// stringTypes are the DATA_TYPE values of columns compared as strings. ENUM and
+// SET compare a number with their index, a string with their value.
+//
+//nolint:goconst // MySQL DATA_TYPE names
+var stringTypes = map[string]bool{
+	"char": true, "varchar": true, "tinytext": true, "text": true, "mediumtext": true, "longtext": true,
+	"binary": true, "varbinary": true, "enum": true, "set": true,
+}
+
+// intRange is the signed range and the unsigned maximum of an integer type.
+type intRange struct{ min, max, umax *big.Int }
+
+func newIntRange(bits uint) *intRange {
+	one := big.NewInt(1)
+	maxv := new(big.Int).Sub(new(big.Int).Lsh(one, bits-1), one)
+	return &intRange{
+		min:  new(big.Int).Neg(new(big.Int).Lsh(one, bits-1)),
+		max:  maxv,
+		umax: new(big.Int).Sub(new(big.Int).Lsh(one, bits), one),
+	}
+}
+
+// integerTypes maps the DATA_TYPE of integer columns to their range.
+//
+//nolint:goconst // MySQL DATA_TYPE names, the same literals as in legacy_keys.go
+var integerTypes = map[string]*intRange{
+	"tinyint": newIntRange(8), "smallint": newIntRange(16), "mediumint": newIntRange(24),
+	"int": newIntRange(32), "integer": newIntRange(32), "bigint": newIntRange(64),
+}
+
+// stringKeyValue renders a key value for a string column: strings as they are,
+// numbers as their decimal text (a raw JSON number as its literal).
+func stringKeyValue(v any) (string, bool) {
+	switch v := v.(type) {
+	case string:
+		return v, true
+	case []byte:
+		return string(v), true
+	case json.Number:
+		return v.String(), true
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+		return fmt.Sprint(v), true
+	case float32:
+		return strconv.FormatFloat(float64(v), 'f', -1, 32), true
+	case float64:
+		return strconv.FormatFloat(v, 'f', -1, 64), true
+	default:
+		return "", false // bool and anything else has no single string form
+	}
+}
+
+// keyInteger returns v as an integer if it is a whole number: a Go integer, a
+// whole float, a whole JSON number in any form (5, 5.0, 5e0), an integer
+// string, or a boolean (true is 1, as MySQL compares it).
+func keyInteger(v any) (*big.Int, bool) {
+	switch v := v.(type) {
+	case bool:
+		if v {
+			return big.NewInt(1), true
+		}
+		return big.NewInt(0), true
+	case int:
+		return big.NewInt(int64(v)), true
+	case int8:
+		return big.NewInt(int64(v)), true
+	case int16:
+		return big.NewInt(int64(v)), true
+	case int32:
+		return big.NewInt(int64(v)), true
+	case int64:
+		return big.NewInt(v), true
+	case uint:
+		return new(big.Int).SetUint64(uint64(v)), true
+	case uint8:
+		return new(big.Int).SetUint64(uint64(v)), true
+	case uint16:
+		return new(big.Int).SetUint64(uint64(v)), true
+	case uint32:
+		return new(big.Int).SetUint64(uint64(v)), true
+	case uint64:
+		return new(big.Int).SetUint64(v), true
+	case float32:
+		return wholeFloat(float64(v))
+	case float64:
+		return wholeFloat(v)
+	case json.Number:
+		return wholeLiteral(v.String())
+	case string:
+		n, ok := new(big.Int).SetString(v, 10)
+		return n, ok
+	case []byte:
+		n, ok := new(big.Int).SetString(string(v), 10)
+		return n, ok
+	default:
+		return nil, false
+	}
+}
+
+func wholeFloat(f float64) (*big.Int, bool) {
+	if math.IsInf(f, 0) || math.IsNaN(f) || f != math.Trunc(f) {
+		return nil, false
+	}
+	n, _ := big.NewFloat(f).Int(nil)
+	return n, true
+}
+
+func wholeLiteral(lit string) (*big.Int, bool) {
+	if !smallExponent(lit) {
+		return nil, false // far outside every integer range
+	}
+	r, ok := new(big.Rat).SetString(lit)
+	if !ok || !r.IsInt() {
+		return nil, false
+	}
+	return r.Num(), true
+}
+
+// exactNumber converts a JSON number for a key column that is neither a string
+// nor an integer column (DECIMAL, FLOAT, DOUBLE, ...): a whole value in any
+// form becomes an int64 or uint64, anything else stays the literal string,
+// which MySQL compares with a DECIMAL column exactly. A float64 would be
+// rounded to the nearest double.
 func exactNumber(n json.Number) any {
-	if i, err := n.Int64(); err == nil {
-		return i
-	}
-	if u, err := strconv.ParseUint(n.String(), 10, 64); err == nil {
-		return u
-	}
-	if !smallExponent(n.String()) {
-		return n.String()
-	}
-	if r, ok := new(big.Rat).SetString(n.String()); ok && r.IsInt() {
-		if num := r.Num(); num.IsInt64() {
-			return num.Int64()
-		} else if num.IsUint64() {
-			return num.Uint64()
+	if n, ok := wholeLiteral(n.String()); ok {
+		if n.IsInt64() {
+			return n.Int64()
+		}
+		if n.IsUint64() {
+			return n.Uint64()
 		}
 	}
 	return n.String()

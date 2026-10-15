@@ -239,3 +239,137 @@ func TestDestination_Delete_IntegerKeyNeedsWholeNumber(t *testing.T) {
 		})
 	}
 }
+
+// MySQL compares a number with a string column as a double, so a numeric key
+// 1000 for a VARCHAR primary key deleted '1000', '1e3', '01000', '1000.0' and
+// ' 1000'. Numbers are sent as their decimal text to string key columns.
+func TestDestination_Delete_NumericKeyOnStringColumn(t *testing.T) {
+	ctx := testutils.TestContext(t)
+	is := is.New(t)
+	db := testutils.NewDB(t)
+	t.Cleanup(func() { db.Exec("DROP TABLE IF EXISTS dest_keystr") })
+
+	dest, cleanup := testDestination(ctx, is)
+	defer cleanup()
+
+	for name, tc := range map[string]struct {
+		composite bool
+		key       opencdc.Data
+		deleted   string
+	}{
+		"raw integer":       {false, opencdc.RawData(`{"id":1000}`), "1000"},
+		"raw exponent":      {false, opencdc.RawData(`{"id":1e3}`), "1e3"},
+		"structured int64":  {false, opencdc.StructuredData{"id": int64(1000)}, "1000"},
+		"structured float":  {false, opencdc.StructuredData{"id": float64(1000)}, "1000"},
+		"string":            {false, opencdc.StructuredData{"id": "01000"}, "01000"},
+		"composite raw":     {true, opencdc.RawData(`{"a":1,"id":1000}`), "1000"},
+		"composite literal": {true, opencdc.RawData(`{"a":1,"id":1000.0}`), "1000.0"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			is := is.New(t)
+			is.NoErr(db.Exec("DROP TABLE IF EXISTS dest_keystr").Error)
+			if tc.composite {
+				is.NoErr(db.Exec("CREATE TABLE dest_keystr (a INT, id VARCHAR(20), PRIMARY KEY (a, id))").Error)
+				is.NoErr(db.Exec("INSERT INTO dest_keystr VALUES (1,'1000'),(1,'1e3'),(1,'01000'),(1,'1000.0'),(1,' 1000')").Error)
+			} else {
+				is.NoErr(db.Exec("CREATE TABLE dest_keystr (id VARCHAR(20) PRIMARY KEY)").Error)
+				is.NoErr(db.Exec("INSERT INTO dest_keystr VALUES ('1000'),('1e3'),('01000'),('1000.0'),(' 1000')").Error)
+			}
+
+			written, err := dest.Write(ctx, []opencdc.Record{keysTestDelete("dest_keystr", tc.key)})
+			is.NoErr(err)
+			is.Equal(written, 1)
+
+			var left []string
+			is.NoErr(db.Raw("SELECT id FROM dest_keystr").Scan(&left).Error)
+			is.Equal(len(left), 4) // exactly one row deleted
+			for _, id := range left {
+				is.True(id != tc.deleted)
+			}
+		})
+	}
+
+	t.Run("bool on a string column", func(t *testing.T) {
+		is := is.New(t)
+		is.NoErr(db.Exec("DROP TABLE IF EXISTS dest_keystr").Error)
+		is.NoErr(db.Exec("CREATE TABLE dest_keystr (id VARCHAR(20) PRIMARY KEY)").Error)
+		_, err := dest.Write(ctx, []opencdc.Record{keysTestDelete("dest_keystr", opencdc.StructuredData{"id": true})})
+		is.True(errors.Is(err, ErrKeyValueTypeMismatch))
+	})
+}
+
+// The key column types used to be cached for the life of the destination, so
+// after ALTER TABLE ... BIGINT a key 1.5 was still sent as for a VARCHAR and
+// matched nothing (an acked no-op). Types are read for every batch.
+func TestDestination_Delete_KeyTypeChangedAfterOpen(t *testing.T) {
+	ctx := testutils.TestContext(t)
+	is := is.New(t)
+	db := testutils.NewDB(t)
+
+	is.NoErr(db.Exec("DROP TABLE IF EXISTS dest_keyalter").Error)
+	is.NoErr(db.Exec("CREATE TABLE dest_keyalter (id VARCHAR(20) PRIMARY KEY)").Error)
+	t.Cleanup(func() { db.Exec("DROP TABLE IF EXISTS dest_keyalter") })
+	is.NoErr(db.Exec("INSERT INTO dest_keyalter VALUES ('1'), ('2')").Error)
+
+	dest, cleanup := testDestination(ctx, is)
+	defer cleanup()
+
+	written, err := dest.Write(ctx, []opencdc.Record{keysTestDelete("dest_keyalter", opencdc.StructuredData{"id": "1"})})
+	is.NoErr(err)
+	is.Equal(written, 1)
+
+	is.NoErr(db.Exec("ALTER TABLE dest_keyalter MODIFY id BIGINT").Error)
+	_, err = dest.Write(ctx, []opencdc.Record{keysTestDelete("dest_keyalter", opencdc.RawData(`{"id":1.5}`))})
+	is.True(errors.Is(err, ErrKeyValueTypeMismatch))
+}
+
+// An integer key outside the column's range matches nothing: TINYINT 300,
+// UNSIGNED -1 and 1e300 were acked no-ops. They are refused; the edges of the
+// range still delete their row.
+func TestDestination_Delete_IntegerKeyOutOfRange(t *testing.T) {
+	ctx := testutils.TestContext(t)
+	is := is.New(t)
+	db := testutils.NewDB(t)
+	t.Cleanup(func() { db.Exec("DROP TABLE IF EXISTS dest_keyrange") })
+
+	dest, cleanup := testDestination(ctx, is)
+	defer cleanup()
+
+	for name, tc := range map[string]struct {
+		colType string
+		row     string
+		key     opencdc.Data
+		ok      bool
+	}{
+		"tinyint 300":          {"TINYINT", "127", opencdc.RawData(`{"id":300}`), false},
+		"tinyint max":          {"TINYINT", "127", opencdc.RawData(`{"id":127}`), true},
+		"tinyint unsigned -1":  {"TINYINT UNSIGNED", "0", opencdc.StructuredData{"id": int64(-1)}, false},
+		"tinyint unsigned 255": {"TINYINT UNSIGNED", "255", opencdc.StructuredData{"id": 255}, true},
+		"int 2^31":             {"INT", "1", opencdc.RawData(`{"id":2147483648}`), false},
+		"bigint 1e300":         {"BIGINT", "1", opencdc.RawData(`{"id":1e300}`), false},
+		"bigint unsigned max":  {"BIGINT UNSIGNED", "18446744073709551615", opencdc.RawData(`{"id":18446744073709551615}`), true},
+		"bigint unsigned 2^64": {"BIGINT UNSIGNED", "1", opencdc.RawData(`{"id":18446744073709551616}`), false},
+		"bigint min":           {"BIGINT", "-9223372036854775808", opencdc.RawData(`{"id":-9223372036854775808}`), true},
+		"bigint huge exponent": {"BIGINT", "1", opencdc.RawData(`{"id":1e1000000}`), false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			is := is.New(t)
+			is.NoErr(db.Exec("DROP TABLE IF EXISTS dest_keyrange").Error)
+			is.NoErr(db.Exec("CREATE TABLE dest_keyrange (id " + tc.colType + " PRIMARY KEY)").Error)
+			is.NoErr(db.Exec("INSERT INTO dest_keyrange VALUES (" + tc.row + ")").Error)
+
+			written, err := dest.Write(ctx, []opencdc.Record{keysTestDelete("dest_keyrange", tc.key)})
+			var count int64
+			is.NoErr(db.Raw("SELECT COUNT(*) FROM dest_keyrange").Scan(&count).Error)
+			if tc.ok {
+				is.NoErr(err)
+				is.Equal(written, 1)
+				is.Equal(count, int64(0))
+			} else {
+				is.True(errors.Is(err, ErrKeyValueTypeMismatch))
+				is.Equal(written, 0)
+				is.Equal(count, int64(1))
+			}
+		})
+	}
+}

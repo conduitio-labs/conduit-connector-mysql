@@ -38,4 +38,29 @@ jobs:
           go-version-file: 'go.mod'
 
       - name: Test
-        run: go test -v -race -count=1 ./...
+        run: go test -v -race -count=1 -skip '^TestAcceptanceV2$' ./...
+
+      # The SDK acceptance suite v2 (revision pinned by the SDK in go.mod). The
+      # report is the certification evidence: it is deleted first so a stale one
+      # can never pass, and it only counts if the run finished and is complete.
+      - name: Acceptance suite v2
+        run: |
+          rm -f acceptance-report.json
+          CONDUIT_ACCEPTANCE_REPORT="$PWD/acceptance-report.json" \
+            go test -v -race -count=1 -run '^TestAcceptanceV2$' .
+
+      - name: Check acceptance report
+        if: always()
+        run: |
+          test -f acceptance-report.json || { echo "acceptance report missing: the run did not start or crashed"; exit 1; }
+          jq '{suite_revision, sdk_version, finished, complete, passed, unexplained_skips, capabilities, limits, exceptions,
+               cases: [.cases[] | {id, name, outcome, skip_kind}]}' acceptance-report.json
+          jq -e '.finished == true and .complete == true and .passed == true' acceptance-report.json
+
+      - name: Upload acceptance report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: acceptance-report
+          path: acceptance-report.json
+          if-no-files-found: warn

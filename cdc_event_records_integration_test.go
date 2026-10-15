@@ -221,7 +221,9 @@ func TestCDCIterator_ResumeInsideLaterRowsEventOfOneStatement(t *testing.T) {
 // without a gap. A correct one (PrevPosition is the end of the previous rows
 // event) resumes exactly; one written right after a mid-event resume by a
 // version with that bug (PrevPosition is the event's own end, Index counts
-// from the resume point) delivers the whole event again.
+// from the resume point) delivers the whole event again. A compressed
+// transaction earlier in the file (its rows have offset 0) is not delivered
+// again either (#228 review).
 func TestCDCIterator_ResumeFromPositionsOfOlderVersions(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
@@ -238,9 +240,12 @@ func TestCDCIterator_ResumeFromPositionsOfOlderVersions(t *testing.T) {
 
 	iterator, teardown := testCdcIterator(ctx, t, is)
 	insert(100, 102) // an earlier event in the same binlog file
+	exec := newSession(ctx, t, is)
+	exec.compression(true)
+	exec.insertUsers(200, 202) // an earlier compressed transaction
 	insert(1, 10)
-	ids, _ := readIDs(ctx, is, iterator, 3)
-	is.Equal(ids, idRange(100, 102))
+	ids, _ := readIDs(ctx, is, iterator, 6)
+	is.Equal(ids, append(idRange(100, 102), idRange(200, 202)...))
 	ids, pos := readIDs(ctx, is, iterator, 4)
 	is.Equal(ids, idRange(1, 4))
 	teardown()
@@ -253,7 +258,7 @@ func TestCDCIterator_ResumeFromPositionsOfOlderVersions(t *testing.T) {
 	t.Run("correct position of an older version", func(t *testing.T) {
 		is := is.New(t)
 		old := *saved.CdcPosition
-		old.ReplayFrom = nil
+		old.ReplayFrom, old.Compressed = nil, nil
 		it, td := testCdcIteratorAtPosition(ctx, t, is, old.ToSDKPosition())
 		defer td()
 		got, _ := readIDs(ctx, is, it, 8)
@@ -265,7 +270,7 @@ func TestCDCIterator_ResumeFromPositionsOfOlderVersions(t *testing.T) {
 	t.Run("position written after a mid-event resume by an older version", func(t *testing.T) {
 		is := is.New(t)
 		old := *saved.CdcPosition
-		old.ReplayFrom = nil
+		old.ReplayFrom, old.Compressed = nil, nil
 		own := old.ReplicationEventPosition
 		old.PrevPosition = &own // the bug's signature
 		old.Index = 1           // relative to the resume point, so unreliable

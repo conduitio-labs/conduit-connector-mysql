@@ -16,9 +16,12 @@ package mysql
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -27,8 +30,8 @@ import (
 	"github.com/conduitio/conduit-commons/opencdc"
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/go-mysql-org/go-mysql/canal"
+	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/replication"
-	"github.com/go-mysql-org/go-mysql/schema"
 	mysqldriver "github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 )
@@ -114,13 +117,17 @@ func (c *cdcIterator) start(ctx context.Context) error {
 		return fmt.Errorf("failed to get start position: %w", err)
 	}
 
+	tables := tablesFingerprint(c.config.tables)
+	plan := planResume(startPosition, tables)
+
 	eventHandler := newCdcEventHandler(
 		ctx,
 		c.canal,
 		c.canalDoneC,
 		c.parsedRecordsC,
 		c.config.tableKeys,
-		startPosition,
+		plan,
+		tables,
 		c.config.coverage,
 	)
 
@@ -128,7 +135,6 @@ func (c *cdcIterator) start(ctx context.Context) error {
 	// Close racing a not-yet-scheduled goroutine was a data race.
 	c.canal.SetEventHandler(eventHandler)
 
-	plan := planResume(startPosition)
 	if plan.note != "" {
 		sdk.Logger(ctx).Warn().
 			Str("binlog_file", plan.from.Name).
@@ -248,6 +254,10 @@ func (c *cdcIterator) wrapCanalRunErr() error {
 	if errors.As(err, &skipped) {
 		return skipped
 	}
+	var coded *Error
+	if errors.As(err, &coded) {
+		return coded
+	}
 
 	// canal rejects a PartialUpdateRowsEvent before the handler runs; it is
 	// not a purged binlog either.
@@ -321,6 +331,30 @@ type cdcEventHandler struct {
 	coverage         *common.TableCoverage
 
 	onRowsChange onRowChangeFn
+
+	// The fields below are only used on canal's goroutine (OnRow, OnGTID and
+	// OnPosSynced for events of the stream). canal.Close calls OnPosSynced
+	// from the goroutine that tears down, with a nil header; that call
+	// returns before touching them.
+
+	// replayPoint is where canal could restart reading and decode every
+	// event after it: the last position it synced with an offset (after a
+	// commit, BEGIN, DDL or rotation), or the end of the last GTID event,
+	// which is the start of the transaction after it. Stamped as ReplayFrom
+	// on every record.
+	replayPoint common.ReplicationEventPosition
+	// compressedSeen counts the rows events without an offset (those inside
+	// a compressed transaction) received since replayPoint was set.
+	compressedSeen int
+	// tables fingerprints the captured table set; see
+	// common.CompressedEventRef.
+	tables string
+
+	// Resume state, from the resumePlan; see onRows.
+	target           *common.ReplicationEventPosition
+	targetCompressed *common.CompressedEventRef
+	skipRows         int
+	prevPosition     common.ReplicationEventPosition
 }
 
 func newCdcEventHandler(
@@ -329,7 +363,8 @@ func newCdcEventHandler(
 	canalDoneC chan struct{},
 	parsedRecordsC chan opencdc.Record,
 	tablesPrimaryKeys common.TableKeys,
-	startPosition common.CdcPosition,
+	plan resumePlan,
+	tables string,
 	coverage *common.TableCoverage,
 ) *cdcEventHandler {
 	h := &cdcEventHandler{
@@ -338,11 +373,29 @@ func newCdcEventHandler(
 		canalDoneC:       canalDoneC,
 		parsedRecordsC:   parsedRecordsC,
 		tablePrimaryKeys: tablesPrimaryKeys,
+		replayPoint:      plan.from,
+		tables:           tables,
+		target:           plan.target,
+		targetCompressed: plan.targetCompressed,
+		skipRows:         plan.skipRows,
+		prevPosition:     plan.prev,
 	}
-
-	h.onRowsChange = h.handleSingleRowChange(ctx, planResume(startPosition))
+	h.onRowsChange = func(e rowEvent) ([]opencdc.Record, error) { return h.onRows(ctx, e) }
 
 	return h
+}
+
+// tablesFingerprint identifies a captured table set, independent of order.
+func tablesFingerprint(tables []string) string {
+	sorted := slices.Clone(tables)
+	slices.Sort(sorted)
+	sorted = slices.Compact(sorted)
+	sum := sha256.New()
+	for _, t := range sorted {
+		// Length-prefixed, so no two sets encode the same.
+		_, _ = fmt.Fprintf(sum, "%d:%s", len(t), t)
+	}
+	return hex.EncodeToString(sum.Sum(nil))[:16]
 }
 
 func (h *cdcEventHandler) createMetadata(
@@ -429,6 +482,7 @@ func (h *cdcEventHandler) buildRecords(
 	e rowEvent,
 	prevPos common.ReplicationEventPosition,
 	replayFrom common.ReplicationEventPosition,
+	compressed *common.CompressedEventRef,
 	firstIndex int,
 ) ([]opencdc.Record, error) {
 	keySchema := newSchemaMapper()
@@ -441,12 +495,18 @@ func (h *cdcEventHandler) buildRecords(
 
 	records := make([]opencdc.Record, 0, len(e.Rows))
 	for i, row := range e.Rows {
-		payloadAfter := h.buildPayload(ctx, payloadSchema, e.Table.Columns, row.after)
+		payloadAfter, err := h.buildPayload(ctx, payloadSchema, e, row.after)
+		if err != nil {
+			return nil, err
+		}
 		key := h.buildKey(ctx, e, payloadAfter, keySchema)
 
 		var payloadBefore opencdc.StructuredData
 		if row.before != nil {
-			payloadBefore = h.buildPayload(ctx, payloadSchema, e.Table.Columns, row.before)
+			payloadBefore, err = h.buildPayload(ctx, payloadSchema, e, row.before)
+			if err != nil {
+				return nil, err
+			}
 		}
 
 		pos := common.CdcPosition{
@@ -456,6 +516,7 @@ func (h *cdcEventHandler) buildRecords(
 			},
 			PrevPosition: &prevPos,
 			ReplayFrom:   &replayFrom,
+			Compressed:   compressed,
 			// Invariant 2: the row's index in the whole event, so positions
 			// keep increasing across a resume in the middle of the event and a
 			// second resume skips exactly the rows already delivered.
@@ -495,16 +556,34 @@ func findKeyColType(avroCols []*avroNamedType, keyCol string) (*avroNamedType, b
 	return nil, false
 }
 
+// buildPayload maps the values of one row image to the table's columns.
+//
+// Invariant 6: canal decodes an event with the table's schema as it is when
+// the event is read, not as it was when the event was written. An event
+// written before a column was added has fewer values than the table has
+// columns now; which column each value belongs to is then unknown, so this
+// halts with CodeRowColumnsMismatch instead of guessing (it used to panic on
+// the missing index, which crashed the plugin on every restart).
 func (h *cdcEventHandler) buildPayload(
 	ctx context.Context,
 	payloadSchema *schemaMapper,
-	columns []schema.TableColumn, rows []any,
-) opencdc.StructuredData {
+	e rowEvent,
+	values []any,
+) (opencdc.StructuredData, error) {
+	columns := e.Table.Columns
+	if len(values) < len(columns) {
+		return nil, newError(ErrRowColumnsMismatch, CodeRowColumnsMismatch, "tables",
+			"reset the pipeline's position to snapshot again (expect duplicates; see the README on recovery). The connector reads the "+
+				"table's current columns, so a binlog event written before a column was added cannot be decoded",
+			"a binlog event for table %s.%s in %s (event end offset %d) has %d values, but the table now has %d columns: "+
+				"its schema changed after the event was written",
+			e.Table.Schema, e.Table.Name, h.canal.SyncedPosition().Name, e.Header.LogPos, len(values), len(columns))
+	}
 	payload := opencdc.StructuredData{}
 	for i, col := range columns {
-		payload[col.Name] = payloadSchema.formatValue(ctx, col.Name, rows[i])
+		payload[col.Name] = payloadSchema.formatValue(ctx, col.Name, values[i])
 	}
-	return payload
+	return payload, nil
 }
 
 // resumePlan is how the CDC iterator restarts from a saved position: where
@@ -515,27 +594,43 @@ type resumePlan struct {
 	from common.ReplicationEventPosition
 	// target is the event of the saved position. Every event before it is
 	// dropped, and the first skipRows rows of it. nil: deliver everything.
-	target   *common.ReplicationEventPosition
-	skipRows int
+	target *common.ReplicationEventPosition
+	// targetCompressed is set when target is inside a compressed transaction
+	// and has no offset (target.Pos is 0): the target is then the
+	// targetCompressed.Ordinal-th rows event without an offset after from.
+	targetCompressed *common.CompressedEventRef
+	skipRows         int
 	// prev seeds PrevPosition for the first event handled.
 	prev common.ReplicationEventPosition
-	// note is logged when the plan reads more than it has to.
+	// note is logged when the plan reads or delivers more than it has to.
 	note string
 }
 
-// planResume derives the resume plan from a saved CDC position.
+// planResume derives the resume plan from a saved CDC position. tables is the
+// fingerprint of the table set captured now (tablesFingerprint).
 //
 // Invariant 3: canal can only decode a rows event if it read the Table_map
 // events before it, so it must start at a point where canal itself would
-// resume: a transaction boundary, a BEGIN or a rotation. Positions written by
-// this version carry that point (ReplayFrom). Older positions carry only
-// PrevPosition, the end of the previous captured rows event, which can lie in
-// the middle of the saved event's statement (a large statement is logged as
-// several rows events after one Table_map), and in positions written right
-// after a resume in the middle of an event it is the event's own end (the bug
-// fixed with this change). For those the binlog file is read from its start
-// and the saved event found by its offset: slower, once, never wrong.
-func planResume(start common.CdcPosition) resumePlan {
+// resume: a transaction boundary, a BEGIN, a rotation, or the start of a
+// transaction after its GTID event. Positions written by this version carry
+// that point (ReplayFrom).
+//
+// Events inside a compressed transaction (binlog_transaction_compression=ON)
+// have no offset of their own: canal reports 0. Such a position names its
+// event by counting from ReplayFrom (Compressed); it resumes exactly while the
+// captured table set is the one it was counted under, and otherwise delivers
+// the compressed transaction again from its start.
+//
+// Older positions carry only PrevPosition, the end of the previous captured
+// rows event, which can lie in the middle of the saved event's statement (a
+// large statement is logged as several rows events after one Table_map), and
+// in positions written right after a resume in the middle of an event it is
+// the event's own end (the bug fixed with this change). For those the binlog
+// file is read from its start and the saved event found by its offset:
+// slower, once, never wrong. An older position inside a compressed
+// transaction has no offset to find, so that file is delivered again from its
+// start.
+func planResume(start common.CdcPosition, tables string) resumePlan {
 	own := start.ReplicationEventPosition
 	if start.PrevPosition == nil {
 		// A fresh start (the server position, or the snapshot's P0): no
@@ -544,9 +639,34 @@ func planResume(start common.CdcPosition) resumePlan {
 	}
 	target := own
 	fileStart := common.ReplicationEventPosition{Name: own.Name, Pos: binlogFirstEventPos}
+
+	// A ReplayFrom without an offset was written by an unreleased build of
+	// this change, inside a compressed transaction; it is no place to start.
+	if replay := start.ReplayFrom; replay != nil && replay.Pos >= binlogFirstEventPos {
+		if own.Pos != 0 {
+			return resumePlan{from: *replay, target: &target, skipRows: start.Index + 1, prev: *start.PrevPosition}
+		}
+		if ref := start.Compressed; ref != nil && ref.Ordinal > 0 && ref.Tables == tables {
+			compressed := *ref
+			return resumePlan{
+				from: *replay, target: &target, targetCompressed: &compressed,
+				skipRows: start.Index + 1, prev: *start.PrevPosition,
+			}
+		}
+		return resumePlan{
+			from: *replay, prev: *start.PrevPosition,
+			note: "resuming inside a compressed binlog transaction whose position cannot be matched (the captured " +
+				"tables changed since it was written); delivering that transaction again from its start (duplicates possible)",
+		}
+	}
+
 	switch {
-	case start.ReplayFrom != nil:
-		return resumePlan{from: *start.ReplayFrom, target: &target, skipRows: start.Index + 1, prev: *start.PrevPosition}
+	case own.Pos == 0:
+		return resumePlan{
+			from: fileStart, prev: fileStart,
+			note: "resuming from a CDC position written by an older version inside a compressed binlog transaction, " +
+				"which has no offset to find again; delivering the binlog file again from its start (duplicates possible)",
+		}
 	case *start.PrevPosition == own:
 		// Written by a version with the mid-event resume bug: Index counted
 		// from the resume point, not from the start of the event, so the
@@ -569,61 +689,152 @@ func planResume(start common.CdcPosition) resumePlan {
 // after the 4-byte magic number.
 const binlogFirstEventPos = 4
 
-func (h *cdcEventHandler) handleSingleRowChange(
-	ctx context.Context,
-	plan resumePlan,
-) onRowChangeFn {
-	target, skipRows := plan.target, plan.skipRows
-	prevPosition := plan.prev
-
-	return func(e rowEvent) ([]opencdc.Record, error) {
-		event := common.ReplicationEventPosition{
-			Name: h.canal.SyncedPosition().Name,
-			Pos:  e.Header.LogPos,
-		}
-		// Where canal would resume now: at or before this event, and a point
-		// from which it can decode it.
-		replayFrom := common.ReplicationEventPosition(h.canal.SyncedPosition())
-		firstIndex := 0
-
-		// Invariant 3: drop exactly what was delivered before the saved
-		// position. An event inside a compressed transaction has offset 0
-		// (#213), so its place relative to the saved position is unknown: it
-		// is delivered, at worst again.
-		if target != nil && e.Header.LogPos != 0 {
-			switch event.Compare(*target) {
-			case -1:
-				prevPosition = event
-				return nil, nil
-			case 0:
-				if skipRows > len(e.Rows) {
-					// should be impossible
-					sdk.Logger(ctx).Error().
-						Any("position", *target).
-						Int("skip", skipRows).
-						Int("rows", len(e.Rows)).
-						Msg("the saved position points past the end of its binlog event")
-					skipRows = len(e.Rows)
-				}
-				e.Rows = e.Rows[skipRows:]
-				firstIndex = skipRows
-				target = nil
-			default:
-				// The saved event did not come (its table is no longer
-				// captured, for example): everything from here is new.
-				target = nil
-			}
-		}
-
-		rows, err := h.buildRecords(ctx, e, prevPosition, replayFrom, firstIndex)
-
-		prevPosition = event
-
-		return rows, err
+// onRows drops what a restart reads again but was delivered before, and
+// builds the records of the rest. It runs on canal's goroutine.
+func (h *cdcEventHandler) onRows(ctx context.Context, e rowEvent) ([]opencdc.Record, error) {
+	event := common.ReplicationEventPosition{
+		Name: h.canal.SyncedPosition().Name,
+		Pos:  e.Header.LogPos,
 	}
+	inCompressed := e.Header.LogPos == 0
+	var compressed *common.CompressedEventRef
+	if inCompressed {
+		compressed = &common.CompressedEventRef{Ordinal: h.compressedSeen, Tables: h.tables}
+	}
+	firstIndex := 0
+
+	// Invariant 3: drop exactly what was delivered before the saved position.
+	switch {
+	case h.targetCompressed != nil:
+		// canal started at the compressed transaction of the saved event, and
+		// the table set is the one its ordinal was counted under, so the
+		// events arrive in the same order and are counted the same.
+		if !inCompressed {
+			return nil, errResumeEventNotFound(
+				"the saved CDC position names rows event %d of the compressed transaction at %s:%d, but an event at "+
+					"offset %d came first", h.targetCompressed.Ordinal, h.replayPoint.Name, h.replayPoint.Pos, e.Header.LogPos)
+		}
+		if compressed.Ordinal < h.targetCompressed.Ordinal {
+			h.prevPosition = event
+			return nil, nil
+		}
+		// compressed.Ordinal == h.targetCompressed.Ordinal: the events are
+		// counted one at a time, so the target is never passed over.
+		if err := h.skipDelivered(&e); err != nil {
+			return nil, err
+		}
+		firstIndex = h.skipRows
+		h.target, h.targetCompressed = nil, nil
+	case h.target != nil && inCompressed:
+		// An event without an offset seen while the saved event (which has
+		// one) is still ahead lies before it. h.passedTarget ends this once a
+		// later offset shows up, so a saved event that never comes cannot
+		// make compressed transactions after it disappear.
+		h.prevPosition = event
+		return nil, nil
+	case h.target != nil:
+		switch event.Compare(*h.target) {
+		case -1:
+			h.prevPosition = event
+			return nil, nil
+		case 0:
+			if err := h.skipDelivered(&e); err != nil {
+				return nil, err
+			}
+			firstIndex = h.skipRows
+			h.target = nil
+		default:
+			// The saved event did not come (its table is no longer
+			// captured, for example): everything from here is new.
+			h.target = nil
+		}
+	}
+
+	rows, err := h.buildRecords(ctx, e, h.prevPosition, h.replayPoint, compressed, firstIndex)
+
+	h.prevPosition = event
+
+	return rows, err
+}
+
+// skipDelivered drops the rows of the saved event that were delivered before
+// the restart.
+func (h *cdcEventHandler) skipDelivered(e *rowEvent) error {
+	if h.skipRows > len(e.Rows) {
+		// The saved index is past the end of its event: the position does not
+		// describe this binlog. Delivering from here could skip rows or repeat
+		// them, and which is unknown, so halt.
+		return errResumeEventNotFound(
+			"the saved CDC position points at row %d of the binlog event ending at %s:%d, which has %d rows",
+			h.skipRows-1, h.canal.SyncedPosition().Name, e.Header.LogPos, len(e.Rows))
+	}
+	e.Rows = e.Rows[h.skipRows:]
+	return nil
+}
+
+// passedTarget is called for every event with an offset that is not a rows
+// event. While the saved event (with an offset) is ahead, an offset past it
+// means it did not come, and the events from here on are new. While a saved
+// event inside a compressed transaction is ahead, any offset means it was not
+// found where the position says.
+func (h *cdcEventHandler) passedTarget(at common.ReplicationEventPosition) error {
+	switch {
+	case h.targetCompressed != nil:
+		return errResumeEventNotFound(
+			"the saved CDC position names rows event %d of the compressed transaction at %s:%d, but the binlog "+
+				"reached %s:%d before it", h.targetCompressed.Ordinal, h.replayPoint.Name, h.replayPoint.Pos, at.Name, at.Pos)
+	case h.target != nil && at.Compare(*h.target) > 0:
+		h.target = nil
+	}
+	return nil
+}
+
+// OnGTID moves the replay point to the end of a MySQL GTID event, which is the
+// start of its transaction. That is the only place canal can restart from and
+// still name an event inside a compressed transaction: the BEGIN and commit of
+// such a transaction are inside it and carry no offset.
+func (h *cdcEventHandler) OnGTID(header *replication.EventHeader, gtid mysql.BinlogGTIDEvent) error {
+	if _, ok := gtid.(*replication.GTIDEvent); !ok || header == nil || header.LogPos == 0 {
+		// MariaDB has no compressed transactions of this kind; its replay
+		// point stays the last synced position.
+		return nil
+	}
+	at := common.ReplicationEventPosition{Name: h.canal.SyncedPosition().Name, Pos: header.LogPos}
+	if err := h.passedTarget(at); err != nil {
+		return err
+	}
+	h.replayPoint, h.compressedSeen = at, 0
+	return nil
+}
+
+// OnPosSynced moves the replay point to each position canal syncs with an
+// offset. Inside a compressed transaction canal syncs offset 0, which is no
+// place to restart from, and is skipped.
+func (h *cdcEventHandler) OnPosSynced(header *replication.EventHeader, pos mysql.Position, _ mysql.GTIDSet, _ bool) error {
+	if header == nil {
+		// Not an event of the stream: canal.Close calls this from the
+		// goroutine that tears down. Return before touching any state.
+		return nil
+	}
+	if pos.Pos == 0 {
+		return nil
+	}
+	at := common.ReplicationEventPosition{Name: pos.Name, Pos: pos.Pos}
+	if err := h.passedTarget(at); err != nil {
+		return err
+	}
+	h.replayPoint, h.compressedSeen = at, 0
+	return nil
 }
 
 func (h *cdcEventHandler) OnRow(e *canal.RowsEvent) error {
+	// Count before anything can return: the count names compressed events on
+	// a restart, and must match what a restart from replayPoint counts. Rows
+	// from canal's dump have no header; the dump is disabled.
+	if e.Header != nil && e.Header.LogPos == 0 {
+		h.compressedSeen++
+	}
+
 	// Invariant 6: halt before building any record if the row image left a
 	// column out; see checkSkippedColumns.
 	if err := checkSkippedColumns(e); err != nil {

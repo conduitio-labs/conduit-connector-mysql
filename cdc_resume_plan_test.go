@@ -65,10 +65,54 @@ func TestPlanResume(t *testing.T) {
 			from: ev("binlog.000003", 4), target: ptr(ev("binlog.000003", 900)), skipRows: 0,
 			prev: ev("binlog.000003", 4),
 		},
+	}, {
+		name: "this version, inside a compressed transaction: count from its start",
+		start: common.CdcPosition{
+			ReplicationEventPosition: ev("binlog.000003", 0), Index: 3,
+			PrevPosition: ptr(ev("binlog.000003", 0)), ReplayFrom: ptr(ev("binlog.000003", 650)),
+			Compressed: &common.CompressedEventRef{Ordinal: 2, Tables: "fp"},
+		},
+		want: resumePlan{
+			from: ev("binlog.000003", 650), target: ptr(ev("binlog.000003", 0)),
+			targetCompressed: &common.CompressedEventRef{Ordinal: 2, Tables: "fp"}, skipRows: 4,
+			prev: ev("binlog.000003", 0),
+		},
+	}, {
+		name: "compressed, counted under another table set: deliver the transaction again",
+		start: common.CdcPosition{
+			ReplicationEventPosition: ev("binlog.000003", 0), Index: 3,
+			PrevPosition: ptr(ev("binlog.000003", 0)), ReplayFrom: ptr(ev("binlog.000003", 650)),
+			Compressed: &common.CompressedEventRef{Ordinal: 2, Tables: "other"},
+		},
+		want: resumePlan{from: ev("binlog.000003", 650), prev: ev("binlog.000003", 0)},
+	}, {
+		name: "compressed without a reference: deliver from the replay point",
+		start: common.CdcPosition{
+			ReplicationEventPosition: ev("binlog.000003", 0), Index: 3,
+			PrevPosition: ptr(ev("binlog.000003", 0)), ReplayFrom: ptr(ev("binlog.000003", 650)),
+		},
+		want: resumePlan{from: ev("binlog.000003", 650), prev: ev("binlog.000003", 0)},
+	}, {
+		name: "older version inside a compressed transaction: the file again from its start",
+		start: common.CdcPosition{
+			ReplicationEventPosition: ev("binlog.000003", 0), Index: 3,
+			PrevPosition: ptr(ev("binlog.000003", 0)),
+		},
+		want: resumePlan{from: ev("binlog.000003", 4), prev: ev("binlog.000003", 4)},
+	}, {
+		name: "replay point without an offset is ignored: resume like an older version",
+		start: common.CdcPosition{
+			ReplicationEventPosition: ev("binlog.000003", 900), Index: 6,
+			PrevPosition: ptr(ev("binlog.000003", 700)), ReplayFrom: ptr(ev("binlog.000003", 0)),
+		},
+		want: resumePlan{
+			from: ev("binlog.000003", 4), target: ptr(ev("binlog.000003", 900)), skipRows: 7,
+			prev: ev("binlog.000003", 4),
+		},
 	}}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := planResume(tc.start)
+			got := planResume(tc.start, "fp")
 			got.note = ""
 			if diff := cmp.Diff(tc.want, got, cmp.AllowUnexported(resumePlan{})); diff != "" {
 				t.Fatalf("(-want +got):\n%s", diff)
@@ -92,5 +136,19 @@ func TestReplicationEventPositionCompare(t *testing.T) {
 		if got := a.Compare(tc.b); got != tc.want {
 			t.Errorf("Compare(%v) = %d, want %d", tc.b, got, tc.want)
 		}
+	}
+}
+
+func TestTablesFingerprint(t *testing.T) {
+	a := tablesFingerprint([]string{"b", "a", "a"})
+	if a != tablesFingerprint([]string{"a", "b"}) {
+		t.Fatal("order or duplicates changed the fingerprint")
+	}
+	if a == tablesFingerprint([]string{"a"}) || a == tablesFingerprint([]string{"ab"}) {
+		t.Fatal("different table sets share a fingerprint")
+	}
+	// Length prefixes keep a name boundary from being moved.
+	if tablesFingerprint([]string{"1:a"}) == tablesFingerprint([]string{"1", "a"}) {
+		t.Fatal("ambiguous encoding")
 	}
 }

@@ -165,8 +165,12 @@ The source connector is in beta. This section states what it guarantees and what
   after it. Rows can therefore appear twice: once as a `snapshot` record and again as a
   CDC change.
 - **Restart.** A restart during the snapshot resumes the snapshot from the last
-  acknowledged key per table. After a CDC restart, CDC resumes from the persisted binlog
-  position; a multi-row binlog event may be replayed from its first row.
+  acknowledged key per table. After a CDC restart, CDC resumes after the last acknowledged
+  row, also in the middle of a multi-row binlog event and in a later binlog event of one large
+  statement. The first restart after upgrading from an older version re-reads the current
+  binlog file from its start to find the saved event, once. If that saved position was
+  written right after a restart in the middle of an event, that event is delivered again in
+  full.
 - **Ordering.** CDC records are delivered in binlog order. During the snapshot, rows are
   ordered by key within a table; tables are read concurrently, so there is no ordering across
   tables.

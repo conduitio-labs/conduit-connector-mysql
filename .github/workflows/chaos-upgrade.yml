@@ -51,7 +51,10 @@ jobs:
       # after CDC, every exact upgrade check falls back to a gap check, and the
       # test fails on purpose (an over-skipping source would pass). Until then
       # the base is 4676f45, the last main commit before #228, the change this
-      # test was written for.
+      # test was written for. No release contains #228 yet; the first one cut
+      # after its merge (8e3f4fa) is the base to switch to, and then
+      # maxBaseDefects in upgrade_test.go goes to 0 (4676f45's source crashes
+      # on its own about one sequence in three).
       - name: Pick the base
         id: base
         env:

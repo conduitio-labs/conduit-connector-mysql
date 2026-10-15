@@ -72,6 +72,13 @@
 //	MYSQL_CHAOS_BASE_CHILD=/tmp/base-child MYSQL_TEST_DSN=... \
 //	  go test -race -count=1 -tags chaos -run TestSIGKILL_UpgradeDowngrade ./test/chaos/
 //
+// While the base is 4676f45 (no release contains #228 yet), its source can
+// crash by itself ("concurrent map read and map write", about one sequence in
+// three). A base child that exits before it parks is a base defect: it is
+// logged (and a GitHub warning), its sequence is skipped, and the test fails
+// if more than two of the eleven are skipped. Once the base is a release with
+// #228, remove that allowance.
+//
 // # What it does not prove
 //
 // The child drives the source in process, without sdk.Serve and gRPC, and the

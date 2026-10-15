@@ -19,6 +19,7 @@ package chaos
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -34,6 +35,18 @@ import (
 // connector. The nightly workflow (.github/workflows/chaos-upgrade.yml) builds
 // it; without it the test is skipped.
 const envBaseChild = "MYSQL_CHAOS_BASE_CHILD"
+
+// maxBaseDefects is how many sequences may be skipped because a child built
+// from the base crashed by itself before it parked. A base that crashes
+// more often than that is too broken to test an upgrade from.
+//
+// Until a release contains #228, the base is 4676f45, whose source shares
+// record metadata between goroutines: about one sequence in three dies with
+// "fatal error: concurrent map read and map write" in the child. That is a
+// defect of the base, not of this build; #228 fixed it. Once the base is a
+// release that contains #228, no base child should crash, the allowance
+// is dead weight, and it should be removed (set it to 0).
+const maxBaseDefects = 2
 
 // step is one child run: which build, and where it parks to be killed.
 type step struct {
@@ -92,12 +105,14 @@ func TestSIGKILL_UpgradeDowngrade(t *testing.T) {
 	}
 
 	const total = 13
-	exact, fellBack := 0, 0
+	exact, fellBack, baseDefects := 0, 0, 0
 	for i, s := range seqs {
-		if s.exact {
-			exact++
-		}
 		t.Run(s.name, func(t *testing.T) {
+			defer func() {
+				if s.exact && !t.Skipped() {
+					exact++ // the exact checks that actually ran
+				}
+			}()
 			h := &harness{t: t, dir: t.TempDir(), table: "chaos_updown_" + strconv.Itoa(i), db: db, batch: "1"}
 			h.exec("DROP TABLE IF EXISTS " + h.table)
 			h.exec("CREATE TABLE " + h.table + " (id BIGINT NOT NULL PRIMARY KEY, v VARCHAR(32) NOT NULL)")
@@ -112,11 +127,38 @@ func TestSIGKILL_UpgradeDowngrade(t *testing.T) {
 				return ""
 			}
 
+			// wait is h.waitMarker, except that a base child which exits by
+			// itself ends the sequence as a base defect (see maxBaseDefects).
+			wait := func(c *childProc, file, what string, base bool) {
+				t.Helper()
+				if !base {
+					h.waitMarker(c, file, what)
+					return
+				}
+				err := h.awaitMarker(c, file, what)
+				var exited *childExitError
+				switch {
+				case err == nil:
+				case errors.As(err, &exited):
+					baseDefects++
+					msg := fmt.Sprintf("the base child exited by itself before it did %s (base defect %d, at most %d allowed): %v\n%s",
+						what, baseDefects, maxBaseDefects, exited.err, exited.log)
+					t.Log(msg)
+					if os.Getenv("GITHUB_ACTIONS") == "true" {
+						fmt.Printf("::warning::%s: the base child crashed (base defect %d of at most %d); sequence skipped\n",
+							t.Name(), baseDefects, maxBaseDefects)
+					}
+					t.Skip("the base child crashed by itself; counted as a base defect")
+				default:
+					t.Fatal(err)
+				}
+			}
+
 			// Into change capture: row 1 is written after Open.
 			c := h.startBinary(binFor(s.run0), "store_id:1")
-			h.waitOpened(c)
+			wait(c, openedFile, "open its source", s.run0)
 			h.insertRange(1, 1)
-			h.waitParked(c)
+			wait(c, parkedFile, "park", s.run0)
 			h.kill(c)
 
 			h.insertRange(2, 9)
@@ -125,7 +167,7 @@ func TestSIGKILL_UpgradeDowngrade(t *testing.T) {
 
 			for _, st := range s.steps {
 				c := h.startBinary(binFor(st.base), "store_id:"+strconv.FormatInt(st.id, 10))
-				h.waitParked(c)
+				wait(c, parkedFile, "park", st.base)
 				h.kill(c)
 			}
 
@@ -173,6 +215,11 @@ func TestSIGKILL_UpgradeDowngrade(t *testing.T) {
 			}
 			t.Logf("%d rows delivered more than once; allowed here, because a release resuming inside an event replays it from its first row", dups)
 		})
+	}
+	if baseDefects > maxBaseDefects {
+		t.Errorf("%d of %d sequences were skipped because the base child crashed by itself, more than the %d allowed. "+
+			"The base is too broken to test an upgrade from; use a release that contains #228 as the base",
+			baseDefects, len(seqs), maxBaseDefects)
 	}
 	if exact > 0 && fellBack == exact {
 		t.Errorf("all %d exact sequences fell back to the gap check, because the base goes back to the snapshot after CDC "+

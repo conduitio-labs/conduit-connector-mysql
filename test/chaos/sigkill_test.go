@@ -128,20 +128,42 @@ func (h *harness) waitOpened(c *childProc) {
 	h.waitMarker(c, openedFile, "open its source")
 }
 
+// childExitError is a child that exited by itself before it reached a marker.
+type childExitError struct {
+	run  int
+	what string
+	err  error
+	log  string
+}
+
+func (e *childExitError) Error() string {
+	return fmt.Sprintf("run %d: child exited before it did %s: %v\n%s", e.run, e.what, e.err, e.log)
+}
+
 func (h *harness) waitMarker(c *childProc, file, what string) {
+	h.t.Helper()
+	if err := h.awaitMarker(c, file, what); err != nil {
+		h.t.Fatal(err)
+	}
+}
+
+// awaitMarker waits until the child wrote its run number to file. It returns
+// a *childExitError if the child exits first, and another error if the marker
+// does not appear within 90s.
+func (h *harness) awaitMarker(c *childProc, file, what string) error {
 	h.t.Helper()
 	deadline := time.After(90 * time.Second)
 	for {
 		select {
 		case err := <-c.done:
-			h.t.Fatalf("run %d: child exited before it did %s: %v\n%s", h.run, what, err, c.log.String())
+			return &childExitError{run: h.run, what: what, err: err, log: c.log.String()}
 		case <-deadline:
-			h.t.Fatalf("run %d: child did not %s within 90s\n%s", h.run, what, c.log.String())
+			return fmt.Errorf("run %d: child did not %s within 90s\n%s", h.run, what, c.log.String())
 		case <-time.After(20 * time.Millisecond):
 		}
 		b, err := os.ReadFile(filepath.Join(h.dir, file))
 		if err == nil && string(b) == strconv.Itoa(h.run) {
-			return
+			return nil
 		}
 	}
 }

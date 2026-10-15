@@ -167,8 +167,16 @@ specification:
       after it. Rows can therefore appear twice: once as a `snapshot` record and again as a
       CDC change.
     - **Restart.** A restart during the snapshot resumes the snapshot from the last
-      acknowledged key per table. After a CDC restart, CDC resumes from the persisted binlog
-      position; a multi-row binlog event may be replayed from its first row.
+      acknowledged key per table. After a CDC restart, CDC resumes after the last acknowledged
+      row, also in the middle of a multi-row binlog event, in a later binlog event of one large
+      statement, and inside a compressed transaction (`binlog_transaction_compression=ON`). After
+      upgrading from an older version, restarts re-read the binlog file of the saved position from
+      its start to find the saved event, until the first record is acknowledged under the new
+      version. Rows are delivered again (duplicates, never a gap) in three cases, each logged as a
+      warning: the saved position was written right after a restart in the middle of an event (that
+      event is delivered again), an older version's position points inside a compressed transaction
+      (its binlog file is delivered again from its start), or the captured tables changed while the
+      saved position was inside a compressed transaction (that transaction is delivered again).
     - **Ordering.** CDC records are delivered in binlog order. During the snapshot, rows are
       ordered by key within a table; tables are read concurrently, so there is no ordering across
       tables.
@@ -273,6 +281,16 @@ specification:
     The source also stops with the code `mysql.cdc.partial_json_unsupported` when a writer logs partial JSON updates
     (`binlog_row_value_options=PARTIAL_JSON`), which the connector cannot read. Set the option to an empty value for
     the writers.
+
+    Two more CDC halts are resolved by resetting the position, so the recovery below (deletes) applies to them too:
+
+    - `mysql.cdc.row_columns_mismatch`: a binlog event has fewer values than its table now has columns. The
+      connector decodes events with the table's current columns, so an event written before an `ADD COLUMN` and
+      read after it (the connector was stopped or lagging across the DDL) cannot be mapped. Restarting does not
+      help: the event fails the same way every time. Reset the position to snapshot again.
+    - `mysql.cdc.resume_event_not_found`: on a restart, the binlog event the saved position names was not where
+      the position says. This should not happen; report it with the logged position, and reset the position to
+      continue.
 
     #### Recovery
 

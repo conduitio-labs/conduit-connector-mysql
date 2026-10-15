@@ -40,6 +40,16 @@ const (
 	// CodeSortingColumnInvalid: a tableConfig sortingColumn is nullable or not
 	// unique, so a snapshot ordered by it could skip rows.
 	CodeSortingColumnInvalid = "mysql.snapshot.sorting_column_invalid"
+
+	// CodeRowColumnsMismatch: a binlog row image has fewer values than the
+	// table has columns now, so its values cannot be mapped to columns. The
+	// table's schema changed after the event was written.
+	CodeRowColumnsMismatch = "mysql.cdc.row_columns_mismatch"
+
+	// CodeResumeEventNotFound: on a restart, the binlog event the saved
+	// position names was not where the position says. Nothing after it is
+	// delivered, because what was delivered before is unknown.
+	CodeResumeEventNotFound = "mysql.cdc.resume_event_not_found"
 )
 
 // Error is a user-facing configuration or state error with a stable code, the
@@ -48,7 +58,8 @@ const (
 type Error struct {
 	// Code is the stable, machine-readable error code.
 	Code string
-	// ConfigPath is the connector configuration parameter at fault.
+	// ConfigPath is the connector configuration parameter at fault, or
+	// "position" when the persisted pipeline position is.
 	ConfigPath string
 	// Message says what is wrong, naming the offending values.
 	Message string
@@ -85,3 +96,17 @@ var ErrUnsafeSnapshotRemoved = errors.New("snapshot.unsafe has been removed")
 
 // ErrTableWithoutKey is the sentinel for CodeTableWithoutKey.
 var ErrTableWithoutKey = errors.New("table has no primary key and no sorting column")
+
+// ErrRowColumnsMismatch is the sentinel for CodeRowColumnsMismatch.
+var ErrRowColumnsMismatch = errors.New("binlog row image does not match the table's columns")
+
+// ErrResumeEventNotFound is the sentinel for CodeResumeEventNotFound.
+var ErrResumeEventNotFound = errors.New("saved binlog event not found on resume")
+
+// resumeFix is the suggested fix for CodeResumeEventNotFound.
+const resumeFix = "this is a connector bug; please report it with the position from the log. To continue, reset the " +
+	"pipeline's position, which snapshots every table again (expect duplicates)"
+
+func errResumeEventNotFound(format string, args ...any) *Error {
+	return newError(ErrResumeEventNotFound, CodeResumeEventNotFound, "position", resumeFix, format, args...)
+}

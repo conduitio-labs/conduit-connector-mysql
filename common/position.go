@@ -109,6 +109,14 @@ func (p SnapshotPosition) Clone() SnapshotPosition {
 			prev := *p.CDCStart.PrevPosition
 			cdcStart.PrevPosition = &prev
 		}
+		if p.CDCStart.ReplayFrom != nil {
+			replay := *p.CDCStart.ReplayFrom
+			cdcStart.ReplayFrom = &replay
+		}
+		if p.CDCStart.Compressed != nil {
+			compressed := *p.CDCStart.Compressed
+			cdcStart.Compressed = &compressed
+		}
 		newPosition.CDCStart = &cdcStart
 	}
 
@@ -184,12 +192,61 @@ type CdcPosition struct {
 	// event just before the current one.
 	PrevPosition *ReplicationEventPosition `json:"prev,omitempty"`
 
+	// ReplayFrom is where a restart starts reading the binlog: the position
+	// canal had last synced when the event was handled (after the previous
+	// transaction's commit, after a BEGIN, or a rotation), so the Table_map
+	// events of the event's statement are read again and the event can be
+	// decoded. A restart skips every event before ReplicationEventPosition and
+	// the rows of that event up to Index. nil in positions written before this
+	// field existed; see the cdc iterator for how those resume. Additive:
+	// older builds ignore it and resume from PrevPosition as before.
+	ReplayFrom *ReplicationEventPosition `json:"replay_from,omitempty"`
+
+	// Compressed locates an event inside a compressed transaction
+	// (binlog_transaction_compression=ON). The events of such a transaction
+	// carry no offset of their own (ReplicationEventPosition.Pos is 0), so
+	// the event is named by its place after ReplayFrom instead, which is then
+	// the start of the compressed transaction. nil for events with an offset
+	// and in positions written before this field existed; see the cdc
+	// iterator for how those resume. Additive: older builds ignore it.
+	Compressed *CompressedEventRef `json:"compressed,omitempty"`
+
 	// TableCoverage records which tables' existing rows the pipeline has
 	// covered; see TableCoverage. nil means a position written before this field
 	// existed. Additive: the position version is intentionally not bumped, so
 	// older builds ignore the field and drop it on their next write. See
 	// docs/design-documents/20261012-cdc-snapshotted-tables.md.
 	TableCoverage *TableCoverage `json:"table_coverage,omitempty"`
+}
+
+// CompressedEventRef names a rows event inside a compressed transaction by
+// counting from CdcPosition.ReplayFrom.
+type CompressedEventRef struct {
+	// Ordinal is the event's 1-based number among the rows events without an
+	// offset that the connector received after ReplayFrom. Only events of
+	// captured tables reach the connector, so the count depends on the table
+	// set; see Tables.
+	Ordinal int `json:"ordinal"`
+	// Tables fingerprints the captured table set Ordinal was counted under. A
+	// restart with another set cannot trust Ordinal and delivers the whole
+	// transaction again.
+	Tables string `json:"tables"`
+}
+
+// Compare orders two binlog positions: by file name (binlog file names have a
+// fixed-width sequence number, so they sort as text), then by offset.
+func (p ReplicationEventPosition) Compare(o ReplicationEventPosition) int {
+	switch {
+	case p.Name < o.Name:
+		return -1
+	case p.Name > o.Name:
+		return 1
+	case p.Pos < o.Pos:
+		return -1
+	case p.Pos > o.Pos:
+		return 1
+	}
+	return 0
 }
 
 func (p ReplicationEventPosition) ToMysqlPos() mysql.Position {

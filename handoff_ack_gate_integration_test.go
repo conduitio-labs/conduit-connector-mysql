@@ -20,8 +20,8 @@
 // leaves a different class entirely uncovered:
 //
 //	the snapshot iterator gates its own completion on receiving acks.
-//	snapshot_iterator.go's Read waits on s.acks.Wait(ctx) before returning
-//	ErrSnapshotIteratorDone, and s.acks.Done() is called ONLY from Ack. So a
+//	snapshot_iterator.go's ReadN waits on s.acks.wait(ctx) before returning
+//	ErrSnapshotIteratorDone, and s.acks.done is called ONLY from Ack. So a
 //	boundary ack that never arrives means the handoff never completes and CDC
 //	never starts.
 //
@@ -83,7 +83,7 @@ func TestHandoff_WithheldBoundaryAck_DoesNotHangForever(t *testing.T) {
 	t.Cleanup(func() { teardownForCleanup(source) })
 
 	// Read the one snapshot row and DELIBERATELY DO NOT ACK IT. This is the
-	// whole point: acks.Done() is only reached from Ack, so the waitgroup the
+	// whole point: acks.done is only reached from Ack, so the ack counter the
 	// snapshot's completion path waits on never reaches zero.
 	recs, err := source.ReadN(ctx, 1)
 	is.NoErr(err)

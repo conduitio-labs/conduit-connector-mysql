@@ -150,6 +150,37 @@ If the target table already contains a record with the same key, the Destination
 
 If a unique key is not present in the target table, the record will be simply appended.
 
+With several unique indexes (including functional and prefix indexes), `ON DUPLICATE KEY UPDATE` overwrites the row matched by any of them, including that row's primary key. Functional unique indexes are read but not evaluated: the destination cannot compute their expressions, so it neither type-checks their inputs nor uses them to decide whether a record can be matched.
+
+### Columns and schema changes
+
+Each record is written with exactly the fields in its `.Payload.After`, whatever the other records in the batch contain:
+
+- A field the table has no column for fails the write with `mysql.destination.unknown_column`. The destination does not create or alter tables, and it never drops a field. Add the column first, or remove the field with a processor.
+- A field the record does not have is not written. An inserted row gets the column's default; an existing row keeps the column's current value. A field set to `null` writes `NULL`.
+
+Table and column names are quoted, so reserved words work. A collection of the form `db.table` writes to `table` in database `db`.
+
+**Security.** Table and column names come from the records. Quoting keeps them from changing the SQL, but a record's collection can name any database the DSN user can write to, through `db.table`. Grant the destination's user access only to the databases it should write. Quoting is only sound in character sets where no character can end in a backtick byte, so a connection using `sjis`, `cp932`, `gbk`, `gb18030` or `big5` is refused with `mysql.destination.unsafe_charset` (checked in the DSN, when the destination opens, and on the connection of every write). Use `utf8mb4`, the driver's default.
+
+### Deletes
+
+Delete records are matched on the target table's primary key, so the table must have one: a delete for a table without a primary key fails with `mysql.destination.delete_without_primary_key` instead of removing rows. The record key must hold a non-null value for every primary-key column (`mysql.destination.key_column_missing` otherwise), either as structured data or as a single JSON object. Each value must be one scalar: a list or an object fails with `mysql.destination.key_value_not_scalar` (it would match several rows or none). Key values are converted to the type of their key column, which is read for every write, so an `ALTER TABLE` on a running pipeline is picked up without a restart. The same rules apply to the values an upsert writes into the columns of any unique index (the primary key and `UNIQUE` keys), because those values decide which row `ON DUPLICATE KEY UPDATE` overwrites: `{"id":1.5}` for a `BIGINT` key is refused instead of being rounded to 2 and overwriting row 2. A record must be fully non-null in at least one unique index, otherwise it fails with `mysql.destination.key_column_missing`: a null never conflicts, so every redelivery would insert another row. A null in one unique column is fine while another unique index identifies the row (a nullable `UNIQUE` email next to a primary key). Exceptions, which append a row on every redelivery: a null or absent `AUTO_INCREMENT` primary key, which generates a new id, and a table without a unique index. Field names are resolved to columns by the MySQL server itself (through `information_schema`), so a field names exactly the column a statement would use: `ID` names `id`, and so do characters MySQL folds (for example the Kelvin sign names `k`), while `ſ` names no column. A record with two fields that name one column (`id` and `ID`) fails with `mysql.destination.duplicate_column`. A delete for a table that does not exist fails with `mysql.destination.table_not_found`; table names are case-sensitive unless the server sets `lower_case_table_names`.
+
+- **Integer columns** (`TINYINT` to `BIGINT`, signed or `UNSIGNED`) take a whole number within the column's range (`5`, `5.0`, `5e0` or the string `"5"`). A fraction, a non-numeric string or a value outside the range fails with `mysql.destination.key_value_type_mismatch` instead of matching nothing or the wrong row. A boolean matches as MySQL compares it: `true` is 1, which is what a `TINYINT(1)` key needs.
+- **String columns** (`CHAR`, `VARCHAR`, the `TEXT` types, `BINARY`, `VARBINARY`) take a string. An integer is sent as its decimal text and a raw JSON number as written (so `1e3` matches the row `'1e3'`), because MySQL compares a number with a string column as a double and `1000` would match `'1000'`, `'01000'`, `'1000.0'` and `' 1000'`. A float is accepted only if it is whole and below 1e15, where MySQL's text for it is the plain integer; other floats and booleans fail.
+- **`ENUM` and `SET` columns** take the member name as a string. A number fails, because MySQL would compare it with the member's index.
+- **`BIT(M)` columns** take a whole number from 0 to 2^M-1.
+- **Other columns** (`DECIMAL`, floating point, temporal) get the value as it is; a raw JSON number keeps its literal, which MySQL compares exactly with a `DECIMAL` column.
+
+Integer values in a raw JSON key are matched exactly. Structured keys that reach a standalone connector over the plugin protocol have already passed through a double, so integers above 2^53 sent that way are rounded before the destination sees them ([ConduitIO/conduit#3100](https://github.com/ConduitIO/conduit/issues/3100)). A record whose operation is not create, update, delete or snapshot fails with `mysql.destination.unsupported_operation`.
+
+### Atomicity and acknowledgements
+
+Each write is a single transaction. If any record in the write fails, nothing from that write is stored and none of its records are acknowledged; the records are redelivered after the pipeline recovers. Upserts on a primary or unique key make the redelivery idempotent. Redelivering a record whose `AUTO_INCREMENT` key is null or absent, or a record for a table with no unique key, appends another row.
+
+The destination sets `wait_timeout=60` on its own connections (unless the DSN sets `wait_timeout`), and the pool drops connections idle for half of it. If the connector dies in the middle of a write and the server does not see the connection close (a NAT, a proxy, a half-open TCP connection), the uncommitted transaction and its row locks end within that time instead of the server default of 8 hours, so the redelivered records do not wait on them.
+
 ## Delivery semantics and limits
 
 The source connector is in beta. This section states what it guarantees and what it does not.

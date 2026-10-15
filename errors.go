@@ -50,6 +50,52 @@ const (
 	// position names was not where the position says. Nothing after it is
 	// delivered, because what was delivered before is unknown.
 	CodeResumeEventNotFound = "mysql.cdc.resume_event_not_found"
+
+	// CodeDeleteWithoutPrimaryKey: a delete record targets a table without a
+	// primary key, so it cannot be matched to a row. The write fails instead of
+	// deleting every row.
+	CodeDeleteWithoutPrimaryKey = "mysql.destination.delete_without_primary_key"
+
+	// CodeUnsupportedOperation: a record carries an operation the destination
+	// does not apply. The write fails instead of dropping the record.
+	CodeUnsupportedOperation = "mysql.destination.unsupported_operation"
+
+	// CodeUnknownColumn: a record has a field the target table has no column
+	// for. The write fails; the destination does not alter tables and does not
+	// drop fields.
+	CodeUnknownColumn = "mysql.destination.unknown_column"
+
+	// CodePayloadNotStructured: a create, update or snapshot record does not
+	// carry structured data in .Payload.After.
+	CodePayloadNotStructured = "mysql.destination.payload_not_structured"
+
+	// CodePayloadEmpty: a create, update or snapshot record has no fields.
+	CodePayloadEmpty = "mysql.destination.payload_empty"
+
+	// CodeKeyColumnMissing: a delete record's key does not hold a value for a
+	// primary-key column of the table, or is not a JSON object.
+	CodeKeyColumnMissing = "mysql.destination.key_column_missing"
+
+	// CodeUnsafeCharset: the destination connection uses a multibyte
+	// character set (sjis, cp932, gbk, gb18030, big5) under which identifiers
+	// cannot be quoted safely.
+	CodeUnsafeCharset = "mysql.destination.unsafe_charset"
+
+	// CodeKeyValueNotScalar: a record key holds a list or an object for a
+	// primary-key column.
+	CodeKeyValueNotScalar = "mysql.destination.key_value_not_scalar"
+
+	// CodeKeyValueTypeMismatch: a record key holds a value for an integer
+	// primary-key column that is not a whole number.
+	CodeKeyValueTypeMismatch = "mysql.destination.key_value_type_mismatch"
+
+	// CodeTableNotFound: a delete record's collection names a table that does
+	// not exist.
+	CodeTableNotFound = "mysql.destination.table_not_found"
+
+	// CodeDuplicateColumn: a record has two fields that name the same column
+	// (column names are case-insensitive).
+	CodeDuplicateColumn = "mysql.destination.duplicate_column"
 )
 
 // Error is a user-facing configuration or state error with a stable code, the
@@ -110,3 +156,36 @@ const resumeFix = "this is a connector bug; please report it with the position f
 func errResumeEventNotFound(format string, args ...any) *Error {
 	return newError(ErrResumeEventNotFound, CodeResumeEventNotFound, "position", resumeFix, format, args...)
 }
+
+// ErrDeleteWithoutPrimaryKey is the sentinel for CodeDeleteWithoutPrimaryKey.
+var ErrDeleteWithoutPrimaryKey = errors.New("delete from a table without a primary key")
+
+// ErrUnsupportedOperation is the sentinel for CodeUnsupportedOperation.
+var ErrUnsupportedOperation = errors.New("unsupported operation")
+
+// ErrUnknownColumn is the sentinel for CodeUnknownColumn.
+var ErrUnknownColumn = errors.New("unknown column")
+
+// ErrPayloadNotStructured is the sentinel for CodePayloadNotStructured.
+var ErrPayloadNotStructured = errors.New("payload is not structured data")
+
+// ErrPayloadEmpty is the sentinel for CodePayloadEmpty.
+var ErrPayloadEmpty = errors.New("payload has no fields")
+
+// ErrKeyColumnMissing is the sentinel for CodeKeyColumnMissing.
+var ErrKeyColumnMissing = errors.New("record key is missing a primary-key column")
+
+// ErrUnsafeCharset is the sentinel for CodeUnsafeCharset.
+var ErrUnsafeCharset = errors.New("unsafe connection character set")
+
+// ErrKeyValueNotScalar is the sentinel for CodeKeyValueNotScalar.
+var ErrKeyValueNotScalar = errors.New("record key value is not a scalar")
+
+// ErrKeyValueTypeMismatch is the sentinel for CodeKeyValueTypeMismatch.
+var ErrKeyValueTypeMismatch = errors.New("record key value does not fit the key column type")
+
+// ErrTableNotFound is the sentinel for CodeTableNotFound.
+var ErrTableNotFound = errors.New("table not found")
+
+// ErrDuplicateColumn is the sentinel for CodeDuplicateColumn.
+var ErrDuplicateColumn = errors.New("two fields name the same column")

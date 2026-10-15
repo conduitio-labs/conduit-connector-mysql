@@ -616,11 +616,11 @@ func TestDestination_KeyColumnsAreCaseInsensitive(t *testing.T) {
 	})
 }
 
-// A null in a nullable UNIQUE column never conflicts, so a record carrying one
-// inserted another row on every redelivery. A null in a unique-key column is
-// refused unless the column is AUTO_INCREMENT, and so is a record that leaves
-// out every unique key. A record that leaves a UNIQUE column out while its
-// primary key identifies the row is written.
+// A null never conflicts, so a record with no unique index fully non-null
+// inserted another row on every redelivery. Such a record is refused, unless a
+// null AUTO_INCREMENT key generates the row's id. A null in one unique column
+// is fine while another unique index (the primary key) identifies the row:
+// users(id PRIMARY KEY, email UNIQUE NULL) with email null is written once.
 func TestDestination_Upsert_RecordMustBeIdempotent(t *testing.T) {
 	ctx := testutils.TestContext(t)
 	is := is.New(t)
@@ -643,7 +643,13 @@ func TestDestination_Upsert_RecordMustBeIdempotent(t *testing.T) {
 			"(email VARCHAR(20) UNIQUE, v VARCHAR(5))", opencdc.StructuredData{"v": "a"}, false, 0,
 		},
 		"null unique column, primary key present": {
-			"(id BIGINT PRIMARY KEY, email VARCHAR(20) UNIQUE, v VARCHAR(5))", opencdc.StructuredData{"id": 1, "email": nil, "v": "a"}, false, 0,
+			"(id BIGINT PRIMARY KEY, email VARCHAR(20) UNIQUE, v VARCHAR(5))", opencdc.StructuredData{"id": 1, "email": nil, "v": "a"}, true, 1,
+		},
+		"null in one unique key, another unique key set": {
+			"(id BIGINT UNIQUE, email VARCHAR(20) UNIQUE, v VARCHAR(5))", opencdc.StructuredData{"id": nil, "email": "a@x", "v": "a"}, true, 1,
+		},
+		"both unique keys null": {
+			"(id BIGINT UNIQUE, email VARCHAR(20) UNIQUE, v VARCHAR(5))", opencdc.StructuredData{"id": nil, "email": nil, "v": "a"}, false, 0,
 		},
 		"absent unique column, primary key present": {
 			"(id BIGINT PRIMARY KEY, email VARCHAR(20) UNIQUE, v VARCHAR(5))", opencdc.StructuredData{"id": 1, "v": "a"}, true, 1,

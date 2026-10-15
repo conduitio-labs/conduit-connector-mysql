@@ -238,14 +238,14 @@ func (d *Destination) Teardown(_ context.Context) error {
 // Column names are matched case-insensitively, as MySQL does ("ID" is column
 // id).
 //
-// A record must also be idempotent under redelivery (at-least-once). A null
-// value in a unique-key column fails with key_column_missing, unless the column
-// is AUTO_INCREMENT: a null never conflicts, so on a nullable UNIQUE column
-// every redelivery inserted another row. A record that leaves out every column
-// of every unique key fails the same way. Allowed and documented: a null or
-// absent AUTO_INCREMENT primary key (a new id per write), a table with no
-// unique index, and a table with a functional unique index, whose expression
-// the destination cannot evaluate.
+// A record must also be idempotent under redelivery (at-least-once): some
+// unique index of the table must be fully non-null in it, otherwise every
+// redelivery inserts another row (a null never conflicts). Such a record fails
+// with key_column_missing. A null in one unique column is fine while another
+// unique index, such as the primary key, identifies the row. Allowed and
+// documented: a null or absent AUTO_INCREMENT primary key (a new id per write),
+// a table with no unique index, and a table with a functional unique index,
+// whose expression the destination cannot evaluate.
 func (d *Destination) upsertRecords(ctx context.Context, tx *sqlx.Tx, table string, recs []opencdc.Record) error {
 	runs, err := columnRuns(recs)
 	if err != nil {
@@ -269,17 +269,9 @@ func (d *Destination) upsertRecords(ctx context.Context, tx *sqlx.Tx, table stri
 			values := make([]any, 0, len(run.columns))
 			for _, col := range run.columns {
 				v := payload[col]
-				if kc, ok := uniq.cols[strings.ToLower(col)]; ok {
-					if v == nil && !kc.AutoInc {
-						// A null never conflicts, so it cannot identify the row.
-						return newError(ErrKeyColumnMissing, CodeKeyColumnMissing, ".Payload.After",
-							"send a non-null value for every unique-key column, or drop the field so the column default applies",
-							"the record has a null value for the unique-key column %q of table %q", col, table)
-					}
-					if v != nil {
-						if v, err = typeKeyValue(kc, v, ".Payload.After"); err != nil {
-							return err
-						}
+				if kc, ok := uniq.cols[strings.ToLower(col)]; ok && v != nil {
+					if v, err = typeKeyValue(kc, v, ".Payload.After"); err != nil {
+						return err
 					}
 				}
 				values = append(values, v)
@@ -463,7 +455,6 @@ type keyColumn struct {
 	Name       string `db:"COLUMN_NAME"`
 	DataType   string `db:"DATA_TYPE"`   // e.g. bigint, varchar
 	ColumnType string `db:"COLUMN_TYPE"` // e.g. bigint unsigned, varchar(20)
-	AutoInc    bool   `db:"-"`           // AUTO_INCREMENT; set by uniqueIndexes only
 }
 
 // primaryKeyColumns returns the primary-key columns of table in key order. A
@@ -677,10 +668,7 @@ func (d *Destination) uniqueIndexes(ctx context.Context, tx *sqlx.Tx, table stri
 			continue
 		}
 		col := strings.ToLower(p.Column.String)
-		info.cols[col] = keyColumn{
-			Name: p.Column.String, DataType: strings.ToLower(p.DataType), ColumnType: strings.ToLower(p.ColumnType),
-			AutoInc: strings.Contains(strings.ToLower(p.Extra), "auto_increment"),
-		}
+		info.cols[col] = keyColumn{Name: p.Column.String, DataType: strings.ToLower(p.DataType), ColumnType: strings.ToLower(p.ColumnType)}
 		byIndex[p.Index] = append(byIndex[p.Index], col)
 		if p.Index == "PRIMARY" && strings.Contains(strings.ToLower(p.Extra), "auto_increment") {
 			info.autoIncPK = col

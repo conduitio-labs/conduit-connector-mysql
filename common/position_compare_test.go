@@ -44,9 +44,9 @@ func TestReplicationEventPosition_Compare(t *testing.T) {
 		{pos("mysql-bin.1000000", 4), pos("mysql-bin.999999", 4000000000), 1},
 		// Different base names order by the base, as go-mysql does.
 		{pos("a.000010", 4), pos("b.000009", 4), -1},
-		// Names the server does not write fall back to text.
+		// Names the server does not write sort before every numbered name.
 		{pos("mysql-bin", 4), pos("mysql-bin.000001", 4), -1},
-		{pos("mysql-bin.00000x", 4), pos("mysql-bin.000001", 4), 1},
+		{pos("mysql-bin.00000x", 4), pos("mysql-bin.000001", 4), -1},
 		{pos("", 4), pos("mysql-bin.000001", 4), -1},
 	}
 	for _, tt := range tests {

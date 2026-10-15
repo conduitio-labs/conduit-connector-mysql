@@ -251,9 +251,11 @@ type CompressedEventRef struct {
 // already delivered (cdcEventHandler.onRows, passedTarget), so it must match
 // the server's order.
 //
-// A name without a numeric suffix, which the server does not write, is
-// compared as text, as before. go-mysql's CompareBinlogFileName is not used
-// because it panics on such a name, and a position is read from storage.
+// Names without a numeric suffix, which the server does not write, sort
+// before every name with one, and in text order among themselves. That keeps
+// the order total and transitive over any mix of names a stored position
+// can hold. go-mysql's CompareBinlogFileName is not used because it panics
+// on such a name, and a position is read from storage.
 func (p ReplicationEventPosition) Compare(o ReplicationEventPosition) int {
 	if c := compareBinlogFileNames(p.Name, o.Name); c != 0 {
 		return c
@@ -261,27 +263,30 @@ func (p ReplicationEventPosition) Compare(o ReplicationEventPosition) int {
 	return cmp.Compare(p.Pos, o.Pos)
 }
 
-// compareBinlogFileNames orders binlog file names by base name, then by
-// sequence number; see ReplicationEventPosition.Compare.
+// compareBinlogFileNames orders binlog file names: names without a numeric
+// suffix first, in text order; then names with one, by base name, then by
+// sequence number, then as text (the same number with other padding). Each
+// step compares a key every name has, so the order is a lexicographic order
+// on (has suffix, base, number, text) and therefore transitive.
 func compareBinlogFileNames(a, b string) int {
 	if a == b {
 		return 0
 	}
 	aBase, aSeq, aOK := splitBinlogFileName(a)
 	bBase, bSeq, bOK := splitBinlogFileName(b)
-	if !aOK || !bOK {
+	switch {
+	case !aOK && !bOK:
 		return strings.Compare(a, b)
+	case !aOK:
+		return -1
+	case !bOK:
+		return 1
 	}
-	if c := strings.Compare(aBase, bBase); c != 0 {
-		return c
-	}
-	if c := cmp.Compare(aSeq, bSeq); c != 0 {
-		return c
-	}
-	// The same number written with other padding ("000010" and "10"): not a
-	// name the server writes, but keep the order total and consistent with
-	// equality.
-	return strings.Compare(a, b)
+	return cmp.Or(
+		strings.Compare(aBase, bBase),
+		cmp.Compare(aSeq, bSeq),
+		strings.Compare(a, b),
+	)
 }
 
 // splitBinlogFileName splits "base.000123" into "base" and 123. ok is false

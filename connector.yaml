@@ -2,7 +2,7 @@ version: "1.0"
 specification:
   name: mysql
   summary: A Conduit Connector for MySQL
-  description: |
+  description: |-
     ## Source
 
     A source connector pulls data from an external resource and pushes it to

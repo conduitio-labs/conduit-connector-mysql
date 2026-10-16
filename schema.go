@@ -36,6 +36,8 @@ import (
 type schemaMapper struct {
 	schema   *schemaSubjectVersion
 	colTypes map[string]*avroNamedType
+	// table is the table the schema describes, for error messages.
+	table string
 }
 
 func newSchemaMapper() *schemaMapper {
@@ -242,12 +244,14 @@ type schemaSubjectVersion struct {
 func (s *schemaMapper) createPayloadSchema(
 	ctx context.Context, schemaName string, colTypes []*avroNamedType,
 ) (*schemaSubjectVersion, error) {
+	s.table = schemaName
 	return s.createSchema(ctx, schemaName+"_payload", colTypes)
 }
 
 func (s *schemaMapper) createKeySchema(
 	ctx context.Context, schemaName string, colTypes []*avroNamedType,
 ) (*schemaSubjectVersion, error) {
+	s.table = schemaName
 	return s.createSchema(ctx, schemaName+"_key", colTypes)
 }
 
@@ -305,14 +309,17 @@ func (s *schemaMapper) createSchema(
 // formatValue uses the stored avro types to format the incoming value as an
 // avro type. This way we can better control what the mysql driver returns. It
 // should be called after creating the schema, otherwise it won't do anything.
-func (s *schemaMapper) formatValue(ctx context.Context, column string, value any) any {
+//
+// It returns an error, and no value, for a value the column's schema type
+// cannot hold (see CodeUnsignedOverflow). The caller must not emit the record.
+func (s *schemaMapper) formatValue(ctx context.Context, column string, value any) (any, error) {
 	t, found := s.colTypes[column]
 	if !found {
 		// In snapshot mode, this should never happen.
 		// In CDC mode, to prevent getting into here we make sure to instantiate the
 		// schema mapper for each row event.
 		sdk.Logger(ctx).Warn().Msgf("column \"%v\" not found", column)
-		return value
+		return value, nil
 	}
 
 	// Each of the following branches handles different datatype parsing
@@ -324,114 +331,117 @@ func (s *schemaMapper) formatValue(ctx context.Context, column string, value any
 	// we don't need to handle NULL complexity into the schema.
 	// However, we might want to reflect nullability of the datatype in the future.
 	if value == nil {
-		return defaultValueForType(t.Type)
+		return defaultValueForType(t.Type), nil
 	}
 
 	switch t.Type {
 	case avro.String:
 		switch v := value.(type) {
 		case []uint8:
-			return string(v)
+			return string(v), nil
 		case string:
 			if !t.isDate {
-				return v
+				return v, nil
 			}
 
 			t, err := time.Parse(time.DateOnly, v)
 			if err != nil {
-				return v
+				// Not a plain date (DATETIME, TIME): delivered as the text.
+				return v, nil //nolint:nilerr // the text is the value
 			}
-			return t
+			return t, nil
 		}
 	case avro.Int:
 		switch v := value.(type) {
 		case int:
 			if v <= math.MaxInt32 && v >= math.MinInt32 {
-				return int32(v)
+				return int32(v), nil
 			}
 			sdk.Logger(ctx).Warn().Msgf("value %v for column %s cannot be encoded in avro int", v, t.Name)
 
 		case int8:
-			return int32(v)
+			return int32(v), nil
 		case int16:
-			return int32(v)
+			return int32(v), nil
 		case int64:
 			if v >= math.MinInt32 && v <= math.MaxInt32 {
-				return int32(v)
+				return int32(v), nil
 			}
 
 			sdk.Logger(ctx).Warn().Msgf("value %v for column %s cannot be encoded in avro int", v, t.Name)
 		case uint8:
-			return int32(v)
+			return int32(v), nil
 		case uint16:
-			return int32(v)
+			return int32(v), nil
 		case uint32:
 			if v <= math.MaxInt32 {
-				return int32(v)
+				return int32(v), nil
 			}
 
 			sdk.Logger(ctx).Warn().Msgf("value %v for column %s cannot be encoded in avro int", v, t.Name)
 		case uint64:
 			if v <= math.MaxInt32 {
-				return int32(v)
+				return int32(v), nil
 			}
 
 			sdk.Logger(ctx).Warn().Msgf("value %v for column %s cannot be encoded in avro int", v, t.Name)
 		}
 
-		return value
+		return value, nil
 	case avro.Long:
 		switch v := value.(type) {
 		case int:
-			return int64(v)
+			return int64(v), nil
 		case []uint8:
-			// this handles the mysql bit datatype. When snapshotting will be
-			// represented as slice of bytes, so we manually convert it to the
-			// corresponding avro.Long datatype.
-
-			if len(v) > 0 {
-				var result int64
-				for i := 0; i < len(v); i++ {
-					result = result<<8 + int64(v[i])
-				}
-				return result
+			// In a snapshot the driver returns a BIGINT UNSIGNED above
+			// 2^63-1 as its decimal digits (it has no Go integer type for
+			// it). This branch used to fold the bytes as a big-endian
+			// integer, a leftover from when BIT mapped to long, and emitted a
+			// valid but wrong number (18446744073709551615 became
+			// 3474867090068222261). BIT maps to fixed. Digits of any
+			// integer are accepted, so the column's signedness does not
+			// matter here.
+			if i, err := strconv.ParseInt(string(v), 10, 64); err == nil {
+				return i, nil
 			}
-			return int64(0)
-
+			u, err := strconv.ParseUint(string(v), 10, 64)
+			if err != nil {
+				return nil, fmt.Errorf("column %s.%s: unexpected value %q for an Avro long: %w", s.table, column, v, err)
+			}
+			return s.unsignedToLong(column, u)
 		case uint32:
-			return int64(v)
+			return int64(v), nil
 		case uint64:
-			if v <= math.MaxInt64 {
-				return int64(v)
-			}
-
-			sdk.Logger(ctx).Warn().Msgf("value %v for column %s cannot be encoded in avro int", v, t.Name)
+			// CDC: canal returns every BIGINT UNSIGNED as uint64.
+			return s.unsignedToLong(column, v)
 		}
 
-		return value
+		return value, nil
 	case avro.Double:
 		switch v := value.(type) {
 		case string:
 			f, err := strconv.ParseFloat(v, 64)
 			if err != nil {
-				return v
+				// Unchanged here: the encoder rejects the text, so the record
+				// is not emitted. A stable error is part of #3040.
+				return v, nil //nolint:nilerr // see above
 			}
 
-			return f
+			return f, nil
 		case []byte:
 			f, err := strconv.ParseFloat(string(v), 64)
 			if err != nil {
-				return v
+				return v, nil //nolint:nilerr // as for string above
 			}
 
-			return f
+			return f, nil
 		}
 	case avro.Boolean:
 		switch v := value.(type) {
 		case int8:
-			return v != 0
+			return v != 0, nil
 		case uint8:
-			return v != 0
+			return v != 0, nil
 		}
 	case avro.Fixed:
 		switch v := value.(type) {
@@ -439,7 +449,7 @@ func (s *schemaMapper) formatValue(ctx context.Context, column string, value any
 			// canal.Canal parses mysql bit column as an int64, so to be
 			// consistent with snapshot mode we need to manually parse the int
 			// into a slice of bytes.
-			return int64ToBytes(v)
+			return int64ToBytes(v), nil
 		case []byte:
 			if t.isBit {
 				// Because of our current limitation at
@@ -454,17 +464,35 @@ func (s *schemaMapper) formatValue(ctx context.Context, column string, value any
 				}
 				copy(byte8Table[8-len(v):], v)
 
-				return byte8Table[:]
+				return byte8Table[:], nil
 			}
 		}
 	case avro.Bytes:
 		if v, ok := value.(string); ok {
-			return []byte(v)
+			return []byte(v), nil
 		}
 	default:
-		return value
+		return value, nil
 	}
-	return value
+	return value, nil
+}
+
+// unsignedToLong converts an unsigned value to an Avro long, or fails with
+// CodeUnsignedOverflow.
+//
+// Invariant 6: a value the schema type cannot represent halts the source with
+// CodeUnsignedOverflow. It is never wrapped, truncated or folded into another
+// number, in a snapshot or in CDC.
+func (s *schemaMapper) unsignedToLong(column string, v uint64) (any, error) {
+	if v <= math.MaxInt64 {
+		return int64(v), nil
+	}
+	return nil, newError(ErrUnsignedOverflow, CodeUnsignedOverflow, "tables",
+		"exclude the table from `tables` (for example \"*,-^"+s.table+"$\") or bring the column's values to "+
+			"9223372036854775807 or below, then restart. Lossless handling of the full BIGINT UNSIGNED range is "+
+			"tracked in ConduitIO/conduit-connector-mysql#86",
+		"column %s.%s holds %d, which is above the largest value its schema type (Avro long) can hold "+
+			"(9223372036854775807); the source stopped instead of emitting a wrong value", s.table, column, v)
 }
 
 func defaultValueForType(t avro.Type) any {

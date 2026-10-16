@@ -97,6 +97,9 @@ const (
 	// CodeDuplicateColumn: a record has two fields that name the same column
 	// (column names are case-insensitive).
 	CodeDuplicateColumn = "mysql.destination.duplicate_column"
+	// CodeUnsignedOverflow: a BIGINT UNSIGNED value is above the largest Avro
+	// long (2^63-1). The source stops instead of emitting a wrong value.
+	CodeUnsignedOverflow = "mysql.types.unsigned_overflow"
 )
 
 // Error is a user-facing configuration or state error with a stable code, the
@@ -189,4 +192,8 @@ var ErrKeyValueTypeMismatch = errors.New("record key value does not fit the key 
 var ErrTableNotFound = errors.New("table not found")
 
 // ErrDuplicateColumn is the sentinel for CodeDuplicateColumn.
-var ErrDuplicateColumn = errors.New("two fields name the same column")
+var (
+	ErrDuplicateColumn = errors.New("two fields name the same column")
+	// ErrUnsignedOverflow is the sentinel for CodeUnsignedOverflow.
+	ErrUnsignedOverflow = errors.New("unsigned value does not fit the column's schema type")
+)

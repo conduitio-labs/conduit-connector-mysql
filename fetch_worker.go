@@ -295,7 +295,11 @@ func (w *fetchWorkerSingleKey) buildFetchData(
 
 	payload := make(opencdc.StructuredData)
 	for key, val := range row {
-		payload[key] = w.payloadSchema.formatValue(ctx, key, val)
+		formatted, err := w.payloadSchema.formatValue(ctx, key, val)
+		if err != nil {
+			return fetchData{}, err
+		}
+		payload[key] = formatted
 	}
 
 	var keyColType *avroNamedType
@@ -318,7 +322,10 @@ func (w *fetchWorkerSingleKey) buildFetchData(
 	if !ok {
 		return fetchData{}, fmt.Errorf("key %s not found in payload", w.primaryKey)
 	}
-	keyVal = w.keySchema.formatValue(ctx, w.primaryKey, keyVal)
+	keyVal, err = w.keySchema.formatValue(ctx, w.primaryKey, keyVal)
+	if err != nil {
+		return fetchData{}, err
+	}
 
 	key := opencdc.StructuredData{w.primaryKey: keyVal}
 	return fetchData{
@@ -624,7 +631,11 @@ func (w *fetchWorkerMultipleKey) buildFetchData(
 
 	payload := make(opencdc.StructuredData)
 	for key, val := range row {
-		payload[key] = w.payloadSchema.formatValue(ctx, key, val)
+		formatted, err := w.payloadSchema.formatValue(ctx, key, val)
+		if err != nil {
+			return fetchData{}, err
+		}
+		payload[key] = formatted
 	}
 
 	var keyColTypes []*avroNamedType
@@ -650,7 +661,11 @@ keyColLoop:
 		if !ok {
 			return fetchData{}, fmt.Errorf("key %s not found in payload", primaryKey)
 		}
-		key[primaryKey] = w.keySchema.formatValue(ctx, primaryKey, keyVal)
+		formatted, err := w.keySchema.formatValue(ctx, primaryKey, keyVal)
+		if err != nil {
+			return fetchData{}, err
+		}
+		key[primaryKey] = formatted
 	}
 
 	return fetchData{

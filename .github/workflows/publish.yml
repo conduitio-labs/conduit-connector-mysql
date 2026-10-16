@@ -30,7 +30,7 @@ jobs:
       resolved-identity: ${{ steps.publish.outputs.resolved-identity }}
       hashes: ${{ steps.hash.outputs.hashes }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # The Action uploads signed assets with `gh release upload` (no create),
       # so the release must exist first. release.yml (GoReleaser) also creates
@@ -94,7 +94,7 @@ jobs:
       id-token: write   # this job's own cosign identity must resolve the same as build's
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Open/update the index-repo PR
         uses: ConduitIO/connector-publish-action@v1

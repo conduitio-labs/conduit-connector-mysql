@@ -283,6 +283,8 @@ The connector is tested against MySQL v8.0. Compatibility with older versions is
 - Binary Log (binlog) must be enabled.
 - Binlog format must be set to ROW.
 - Binlog row image must be set to FULL.
+- Recommended: `binlog_row_metadata=FULL` (MySQL 8.0.1+, MariaDB 10.5+). Without it the connector cannot
+  detect every schema change that happened while it was stopped; see `mysql.cdc.row_columns_mismatch` below.
 - Tables must have **sortable** primary keys.
 
 ### Partial row images
@@ -313,10 +315,27 @@ the writers.
 
 Two more CDC halts are resolved by resetting the position, so the recovery below (deletes) applies to them too:
 
-- `mysql.cdc.row_columns_mismatch`: a binlog event has fewer values than its table now has columns. The
-  connector decodes events with the table's current columns, so an event written before an `ADD COLUMN` and
-  read after it (the connector was stopped or lagging across the DDL) cannot be mapped. Restarting does not
-  help: the event fails the same way every time. Reset the position to snapshot again.
+- `mysql.cdc.row_columns_mismatch`: a binlog event has a different number of values than its table has
+  columns, even after the connector re-read the table's columns (it does that once on a mismatch, because its
+  cached column list can be out of date after a DDL its parser skips, such as `ADD COLUMN ... INVISIBLE`).
+  The connector decodes events with the table's current columns, so an event written before an `ADD COLUMN`
+  or `DROP COLUMN` and read after it (the connector was stopped or lagging across the DDL) cannot be mapped.
+  It also happens when the connector's user cannot see every column: column privileges, or a generated
+  invisible primary key hidden by `show_gipk_in_create_table_and_information_schema=OFF`, which halts by
+  design. Make hidden columns visible first. Then restart the pipeline; if it halts again on the same event,
+  reset the position to snapshot again.
+- `mysql.cdc.row_columns_mismatch` also covers an event whose number of values fits the table but that was
+  written under other columns: after a `DROP COLUMN` plus an `ADD COLUMN` (or a column changing type) ran
+  before the connector read the event, every value after the dropped column would land in the wrong column.
+  The connector compares the types the event was written with against the table's columns (by family, so
+  `INT` to `BIGINT` or a longer `VARCHAR` is fine) and halts on a difference, also after a restart, so
+  restarting does not help: reset the position. With `binlog_row_metadata=FULL` the event also carries its
+  column names, and the connector compares those too; a renamed column then halts as well, because a rename
+  cannot be told from a drop plus an add. **Without `FULL`, a column dropped and another of the same type
+  family added at the same position, while the connector is stopped or lagging, is not detected, and the
+  values are mapped onto the new column.** `binlog_row_metadata=FULL` (MySQL 8.0.1+, MariaDB 10.5+; the default
+  is `MINIMAL`) closes that for events written after it is set, at the cost of a larger binlog. Stop the
+  pipeline before changing a captured table's columns, or set it.
 - `mysql.cdc.resume_event_not_found`: on a restart, the binlog event the saved position names was not where
   the position says. This should not happen; report it with the logged position, and reset the position to
   continue.

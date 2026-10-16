@@ -18,6 +18,7 @@ package chaos
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"database/sql"
 	"fmt"
@@ -37,7 +38,7 @@ import (
 
 func TestMain(m *testing.M) {
 	if os.Getenv(envChild) == "1" {
-		os.Exit(runChild())
+		os.Exit(RunChild())
 	}
 	os.Exit(m.Run())
 }
@@ -55,6 +56,8 @@ type harness struct {
 	table string
 	db    *sql.DB
 	run   int
+	// batch is the children's SDK batch size; "" for the default.
+	batch string
 }
 
 type childProc struct {
@@ -63,14 +66,25 @@ type childProc struct {
 	log  *bytes.Buffer
 }
 
-// start launches the next child, parking at park ("" for none).
+// start launches the next child from this build, parking at park ("" for
+// none).
 func (h *harness) start(park string) *childProc {
+	h.t.Helper()
+	return h.startBinary("", park)
+}
+
+// startBinary launches the next child from the program at bin (a build of
+// cmd/chaos-child), or from this test binary when bin is "".
+func (h *harness) startBinary(bin, park string) *childProc {
 	h.t.Helper()
 	h.run++
 	_ = os.Remove(filepath.Join(h.dir, parkedFile))
 	_ = os.Remove(filepath.Join(h.dir, openedFile))
 
 	cmd := exec.CommandContext(context.Background(), os.Args[0], "-test.run=^$")
+	if bin != "" {
+		cmd = exec.CommandContext(context.Background(), bin)
+	}
 	// A fixed environment: never the parent's, which can hold credentials.
 	cmd.Env = []string{
 		"PATH=" + os.Getenv("PATH"),
@@ -82,6 +96,7 @@ func (h *harness) start(park string) *childProc {
 		envTable + "=" + h.table,
 		envPark + "=" + park,
 		envDSN + "=" + testDSN(),
+		envBatch + "=" + h.batch,
 	}
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
@@ -96,7 +111,7 @@ func (h *harness) start(park string) *childProc {
 			<-c.done
 		}
 	})
-	h.t.Logf("run %d: started child pid %d, park %q", h.run, cmd.Process.Pid, park)
+	h.t.Logf("run %d: started child pid %d (%s), park %q", h.run, cmd.Process.Pid, cmp.Or(bin, "this build"), park)
 	return c
 }
 
@@ -113,20 +128,42 @@ func (h *harness) waitOpened(c *childProc) {
 	h.waitMarker(c, openedFile, "open its source")
 }
 
+// childExitError is a child that exited by itself before it reached a marker.
+type childExitError struct {
+	run  int
+	what string
+	err  error
+	log  string
+}
+
+func (e *childExitError) Error() string {
+	return fmt.Sprintf("run %d: child exited before it did %s: %v\n%s", e.run, e.what, e.err, e.log)
+}
+
 func (h *harness) waitMarker(c *childProc, file, what string) {
+	h.t.Helper()
+	if err := h.awaitMarker(c, file, what); err != nil {
+		h.t.Fatal(err)
+	}
+}
+
+// awaitMarker waits until the child wrote its run number to file. It returns
+// a *childExitError if the child exits first, and another error if the marker
+// does not appear within 90s.
+func (h *harness) awaitMarker(c *childProc, file, what string) error {
 	h.t.Helper()
 	deadline := time.After(90 * time.Second)
 	for {
 		select {
 		case err := <-c.done:
-			h.t.Fatalf("run %d: child exited before it did %s: %v\n%s", h.run, what, err, c.log.String())
+			return &childExitError{run: h.run, what: what, err: err, log: c.log.String()}
 		case <-deadline:
-			h.t.Fatalf("run %d: child did not %s within 90s\n%s", h.run, what, c.log.String())
+			return fmt.Errorf("run %d: child did not %s within 90s\n%s", h.run, what, c.log.String())
 		case <-time.After(20 * time.Millisecond):
 		}
 		b, err := os.ReadFile(filepath.Join(h.dir, file))
 		if err == nil && string(b) == strconv.Itoa(h.run) {
-			return
+			return nil
 		}
 	}
 }
@@ -141,9 +178,9 @@ func (h *harness) kill(c *childProc) {
 	h.t.Logf("run %d: killed (SIGKILL)", h.run)
 }
 
-func (h *harness) exec(q string, args ...any) {
+func (h *harness) exec(q string) {
 	h.t.Helper()
-	if _, err := h.db.ExecContext(context.Background(), q, args...); err != nil {
+	if _, err := h.db.ExecContext(context.Background(), q); err != nil {
 		h.t.Fatalf("%s: %v", q, err)
 	}
 }

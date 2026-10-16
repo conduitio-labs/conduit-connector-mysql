@@ -1,0 +1,92 @@
+name: chaos-upgrade
+
+# Upgrade and downgrade under SIGKILL with real binaries: the last release's
+# source and this one run as separate processes against the same stored
+# positions (test/chaos/upgrade_test.go). Nightly, on demand, and on pull
+# requests that touch the harness. Not a required check.
+on:
+  schedule:
+    - cron: '17 4 * * *'
+  workflow_dispatch:
+    inputs:
+      base_ref:
+        description: 'Release tag or commit to upgrade from (default: see "Pick the base")'
+        required: false
+  pull_request:
+    paths:
+      - 'test/chaos/**'
+      - '.github/workflows/chaos-upgrade.yml'
+
+jobs:
+  upgrade-downgrade:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0.39
+        env:
+          MYSQL_DATABASE: meroxadb
+          MYSQL_USER: meroxauser
+          MYSQL_PASSWORD: meroxapass
+          MYSQL_ROOT_PASSWORD: meroxaadmin
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost"
+          --health-interval=1s
+          --health-timeout=20s
+          --health-retries=30
+          --health-start-period=10s
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+
+      # The base is the latest release tag once a release contains the fix for
+      # #158 (f86aea9, #195): a release without it goes back to the snapshot
+      # after CDC, every exact upgrade check falls back to a gap check, and the
+      # test fails on purpose (an over-skipping source would pass). Until then
+      # the base is 4676f45, the last main commit before #228, the change this
+      # test was written for. No release contains #228 yet; the first one cut
+      # after its merge (8e3f4fa) is the base to switch to, and then
+      # maxBaseDefects in upgrade_test.go goes to 0 (4676f45's source crashes
+      # on its own about one sequence in three).
+      - name: Pick the base
+        id: base
+        env:
+          BASE_REF: ${{ inputs.base_ref }}
+        run: |
+          fixed_158=f86aea9
+          tag="$(git tag --list 'v*' --sort=-v:refname | head -n 1)"
+          if [ -n "$BASE_REF" ]; then
+            base="$BASE_REF"
+          elif [ -n "$tag" ] && git merge-base --is-ancestor "$fixed_158" "$tag"; then
+            base="$tag"
+          else
+            base=4676f45
+            echo "::notice::latest release $tag predates the #158 fix; upgrading from $base instead"
+          fi
+          echo "upgrading from $base"
+          echo "ref=$base" >> "$GITHUB_OUTPUT"
+
+      # The child is built from the base's source with this harness copied
+      # in; it only uses the connector's public API (mysql.NewSource,
+      # mysql.Connector), which the releases share.
+      - name: Build the base's child
+        env:
+          BASE: ${{ steps.base.outputs.ref }}
+        run: |
+          git worktree add "$RUNNER_TEMP/base" "$BASE"
+          mkdir -p "$RUNNER_TEMP/base/test/chaos"
+          cp test/chaos/child.go test/chaos/store.go test/chaos/doc.go "$RUNNER_TEMP/base/test/chaos/"
+          cp -r test/chaos/cmd "$RUNNER_TEMP/base/test/chaos/"
+          go -C "$RUNNER_TEMP/base" build -tags chaos -o "$RUNNER_TEMP/base-child" ./test/chaos/cmd/chaos-child
+
+      - name: Upgrade and downgrade
+        env:
+          MYSQL_CHAOS_BASE_CHILD: ${{ runner.temp }}/base-child
+        run: go test -v -race -count=1 -timeout 20m -tags chaos -run 'TestSIGKILL_UpgradeDowngrade' ./test/chaos/

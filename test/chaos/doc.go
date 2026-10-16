@@ -55,6 +55,30 @@
 // A child exits by itself when the parent test process is gone, or after 15
 // minutes, so it never outlives a killed test run.
 //
+// # Upgrade and downgrade
+//
+// TestSIGKILL_UpgradeDowngrade runs a child built from the last release
+// (cmd/chaos-child, with this harness copied into the release's source) and a
+// child of this build against the same positions, one record per batch, and
+// kills each right after it stored a chosen row's position. It is skipped
+// unless MYSQL_CHAOS_BASE_CHILD names that build; the nightly workflow
+// .github/workflows/chaos-upgrade.yml makes it. By hand:
+//
+//	git worktree add /tmp/base v0.3.0
+//	mkdir -p /tmp/base/test/chaos
+//	cp test/chaos/child.go test/chaos/store.go test/chaos/doc.go /tmp/base/test/chaos/
+//	cp -r test/chaos/cmd /tmp/base/test/chaos/
+//	go -C /tmp/base build -tags chaos -o /tmp/base-child ./test/chaos/cmd/chaos-child
+//	MYSQL_CHAOS_BASE_CHILD=/tmp/base-child MYSQL_TEST_DSN=... \
+//	  go test -race -count=1 -tags chaos -run TestSIGKILL_UpgradeDowngrade ./test/chaos/
+//
+// While the base is 4676f45 (no release contains #228 yet), its source can
+// crash by itself ("concurrent map read and map write", about one sequence in
+// three). A base child that exits before it parks is a base defect: it is
+// logged (and a GitHub warning), its sequence is skipped, and the test fails
+// if more than two of the eleven are skipped. Once the base is a release with
+// #228, remove that allowance.
+//
 // # What it does not prove
 //
 // The child drives the source in process, without sdk.Serve and gRPC, and the

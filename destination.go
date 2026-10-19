@@ -72,8 +72,40 @@ type Destination struct {
 	config DestinationConfig
 }
 
+const (
+	// defaultDestinationBatchSize is the number of records the destination
+	// buffers into one multi-row INSERT before writing them. It matches the
+	// Kafka Connect JDBC sink's default batch.size (3000), so a default
+	// pipeline writes one statement per ~3000 records instead of one
+	// transaction per record. Without it the destination's Write is called
+	// with a single record and every record pays the full per-transaction
+	// cost: BEGIN, a character-set check and two information_schema lookups
+	// (unique indexes and column resolution) plus the INSERT itself, roughly
+	// six round trips per row.
+	defaultDestinationBatchSize = 3000
+
+	// defaultDestinationBatchDelay bounds how long an incomplete batch waits
+	// before it is written, so a low-volume pipeline does not hold records
+	// until it has accumulated defaultDestinationBatchSize of them. It matches
+	// the source's default sdk.batch.delay.
+	defaultDestinationBatchDelay = time.Second
+)
+
 func NewDestination() sdk.Destination {
-	return sdk.DestinationWithMiddleware(&Destination{})
+	// The SDK decodes the configured sdk.batch.* values through these fields,
+	// so the defaults must be set here, before Configure runs. They are value
+	// fields (unlike the source's pointers), so two destinations cannot share
+	// or race on them.
+	return sdk.DestinationWithMiddleware(&Destination{
+		config: DestinationConfig{
+			DefaultDestinationMiddleware: sdk.DefaultDestinationMiddleware{
+				DestinationWithBatch: sdk.DestinationWithBatch{
+					BatchSize:  defaultDestinationBatchSize,
+					BatchDelay: defaultDestinationBatchDelay,
+				},
+			},
+		},
+	})
 }
 
 func (d *Destination) Config() sdk.DestinationConfig {

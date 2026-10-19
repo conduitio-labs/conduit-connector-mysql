@@ -21,7 +21,9 @@ import (
 	"testing"
 	"time"
 
+	testutils "github.com/conduitio-labs/conduit-connector-mysql/test"
 	"github.com/conduitio/conduit-commons/opencdc"
+	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/go-sql-driver/mysql"
 	"github.com/matryer/is"
 )
@@ -31,6 +33,40 @@ func TestDestination_Teardown(t *testing.T) {
 	con := NewDestination()
 	err := con.Teardown(context.Background())
 	is.NoErr(err)
+}
+
+// Regression test: the destination must batch by default. Without a default
+// sdk.batch.size the SDK writes one record per Write call, and every record
+// pays the full per-transaction cost (BEGIN, a character-set check, two
+// information_schema lookups and the INSERT — roughly six round trips per
+// row). The default mirrors the Kafka Connect JDBC sink's batch.size of 3000,
+// with a one-second delay so a low-volume pipeline does not hold records until
+// the batch is full.
+func TestNewDestination_BatchDefaults(t *testing.T) {
+	is := is.New(t)
+
+	params := Connector.NewSpecification().DestinationParams
+
+	t.Run("defaults apply when sdk.batch.* is absent", func(t *testing.T) {
+		is := is.New(t)
+		cfg := NewDestination().Config().(*DestinationConfig)
+		err := sdk.Util.ParseConfig(context.Background(),
+			map[string]string{"dsn": testutils.DSN}, cfg, params)
+		is.NoErr(err)
+		is.Equal(cfg.BatchSize, defaultDestinationBatchSize)
+		is.Equal(cfg.BatchDelay, defaultDestinationBatchDelay)
+	})
+
+	t.Run("explicit values are kept", func(t *testing.T) {
+		is := is.New(t)
+		cfg := NewDestination().Config().(*DestinationConfig)
+		err := sdk.Util.ParseConfig(context.Background(),
+			map[string]string{"dsn": testutils.DSN, "sdk.batch.size": "1", "sdk.batch.delay": "50ms"},
+			cfg, params)
+		is.NoErr(err)
+		is.Equal(cfg.BatchSize, 1)
+		is.Equal(cfg.BatchDelay, 50*time.Millisecond)
+	})
 }
 
 func TestBatchRecords(t *testing.T) {

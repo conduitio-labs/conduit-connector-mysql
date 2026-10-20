@@ -148,14 +148,18 @@ func (h *cdcEventHandler) checkTableMap(e *canal.RowsEvent, refreshMismatch stri
 //     column (INT to BIGINT, VARCHAR(10) to VARCHAR(100)) while the connector
 //     is stopped does not halt it. A type the table map has and this does not
 //     know compares equal.
+//   - the signedness of integer columns (INT to INT UNSIGNED would make canal
+//     turn -5 into 4294967291), and whether a string column is binary or text
+//     (VARCHAR to BLOB), both of which the server logs also under
+//     binlog_row_metadata=MINIMAL, when the event has them;
 //   - each column's name, case-insensitively, when the event has them, that
 //     is when the server logs binlog_row_metadata=FULL. A rename while the
 //     connector is stopped is then indistinguishable from a drop plus an add,
 //     so it halts too.
 //
-// Without names, a column dropped and another of the same family added at the
-// same position cannot be told apart from the original, and the values are
-// mapped onto it. Only binlog_row_metadata=FULL closes that.
+// Without names, a column dropped and another of the same family, signedness
+// and string kind added at the same position cannot be told apart from the
+// original, and the values are mapped onto it. Only binlog_row_metadata=FULL closes that.
 func tableMapMismatch(tm *replication.TableMapEvent, table *schema.Table) string {
 	if tm == nil || table == nil {
 		return ""
@@ -167,6 +171,12 @@ func tableMapMismatch(tm *replication.TableMapEvent, table *schema.Table) string
 	if len(tm.ColumnName) == len(tm.ColumnType) {
 		names = tm.ColumnNameString()
 	}
+	// Without binlog_row_metadata=FULL the server still logs the signedness of
+	// numeric columns and the collation of string columns (MySQL 8.0.1+, and
+	// MariaDB 10.5+ when it logs metadata); nil when it did not. The comparison of
+	// text against binary is limited to plain string columns, see isPlainString.
+	unsigned := integerSignedness(tm)
+	collations := tm.CollationMap()
 	for i, col := range table.Columns {
 		if names != nil && !strings.EqualFold(names[i], col.Name) {
 			return fmt.Sprintf("column %d is %q in the event and %q in the table", i+1, names[i], col.Name)
@@ -175,8 +185,100 @@ func tableMapMismatch(tm *replication.TableMapEvent, table *schema.Table) string
 		if have != kindUnknown && want != kindUnknown && have != want {
 			return fmt.Sprintf("column %d (%q in the table) is %s in the event and %s in the table", i+1, col.Name, have, want)
 		}
+		if have == kindInteger && want == kindInteger {
+			if eventUnsigned, ok := unsigned[i]; ok && eventUnsigned != col.IsUnsigned {
+				return fmt.Sprintf("column %d (%q in the table) is %s integer in the event and %s integer in the table",
+					i+1, col.Name, signedness(eventUnsigned), signedness(col.IsUnsigned))
+			}
+		}
+		if have == kindBytes && want == kindBytes && isPlainString(tm, i, col) {
+			if collation, ok := collations[i]; ok && (collation == binaryCollation) != isBinaryColumn(col) {
+				return fmt.Sprintf("column %d (%q in the table) is %s in the event and %s in the table",
+					i+1, col.Name, stringKind(collation == binaryCollation), stringKind(isBinaryColumn(col)))
+			}
+		}
 	}
 	return ""
+}
+
+// integerSignedness returns, for each integer column of the event, whether it
+// is unsigned, read from the Table_map event's signedness bitmap; nil if the
+// event has none.
+//
+// The bitmap has one bit per numeric column in column order, most significant
+// bit first, and the server counts YEAR among the numeric columns. go-mysql's
+// TableMapEvent.UnsignedMap does not (IsNumericColumn leaves YEAR out), so it
+// reads every bit after a YEAR column one place off and reports integer
+// columns as unsigned that are not. This walks the bitmap itself. YEAR's own
+// bit is consumed but not returned: the server logs it unsigned, canal's
+// schema does not, and YEAR is not converted.
+func integerSignedness(tm *replication.TableMapEvent) map[int]bool {
+	if len(tm.SignednessBitmap) == 0 {
+		return nil
+	}
+	out := map[int]bool{}
+	bit := 0
+	for i, t := range tm.ColumnType {
+		integer := false
+		switch t {
+		case mysql.MYSQL_TYPE_TINY, mysql.MYSQL_TYPE_SHORT, mysql.MYSQL_TYPE_INT24, mysql.MYSQL_TYPE_LONG,
+			mysql.MYSQL_TYPE_LONGLONG:
+			integer = true
+		case mysql.MYSQL_TYPE_NEWDECIMAL, mysql.MYSQL_TYPE_FLOAT, mysql.MYSQL_TYPE_DOUBLE, mysql.MYSQL_TYPE_YEAR:
+		default:
+			continue // not in the bitmap
+		}
+		if bit/8 >= len(tm.SignednessBitmap) {
+			return nil // shorter than the columns say: do not guess
+		}
+		if integer {
+			out[i] = tm.SignednessBitmap[bit/8]&(0x80>>(bit%8)) != 0
+		}
+		bit++
+	}
+	return out
+}
+
+// binaryCollation is the collation id of the "binary" character set, which
+// the Table_map event gives to BINARY, VARBINARY and BLOB columns.
+const binaryCollation = 63
+
+func signedness(unsigned bool) string {
+	if unsigned {
+		return "an unsigned"
+	}
+	return "a signed"
+}
+
+func stringKind(binary bool) string {
+	if binary {
+		return "a binary string"
+	}
+	return "a text string"
+}
+
+// isPlainString reports whether column i is a CHAR, VARCHAR, TEXT, BINARY,
+// VARBINARY or BLOB column on both sides. GEOMETRY and JSON are left out:
+// MariaDB logs them as character columns, JSON as LONGTEXT, and a collation of
+// 63 there says nothing about a change between text and bytes.
+func isPlainString(tm *replication.TableMapEvent, i int, col schema.TableColumn) bool {
+	switch tm.ColumnType[i] {
+	case mysql.MYSQL_TYPE_STRING, mysql.MYSQL_TYPE_VAR_STRING, mysql.MYSQL_TYPE_VARCHAR, mysql.MYSQL_TYPE_BLOB:
+	default:
+		return false
+	}
+	return col.Type == schema.TYPE_STRING || col.Type == schema.TYPE_BINARY
+}
+
+// isBinaryColumn reports whether a string column of the table holds bytes
+// (BINARY, VARBINARY, the BLOB types) and not text. canal maps TEXT and BLOB
+// to the same type, so the declared type tells them apart.
+func isBinaryColumn(col schema.TableColumn) bool {
+	if col.Type == schema.TYPE_BINARY {
+		return true
+	}
+	raw := strings.ToLower(col.RawType)
+	return strings.HasSuffix(raw, "blob")
 }
 
 // columnKind is a family of column types that canal's schema and the binlog's

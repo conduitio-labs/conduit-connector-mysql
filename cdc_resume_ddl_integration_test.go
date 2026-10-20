@@ -17,6 +17,7 @@ package mysql
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -264,4 +265,62 @@ func TestCDCIterator_WideningWhileStoppedDoesNotHaltWithMinimalMetadata(t *testi
 	defer teardown()
 	ids, _ := readIDs(ctx, is, iterator, 1)
 	is.Equal(ids, []int64{2})
+}
+
+// The signedness bitmap of the Table_map event has one bit per numeric column,
+// and the server counts YEAR among them. A table with a YEAR column followed
+// by an integer column must deliver its rows, with the signedness of every
+// column read from the right bit, under MINIMAL and FULL, and across a restart.
+func TestCDCIterator_SignednessBitmapWithYearAndEveryNumericType(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		create string
+		insert string
+	}{
+		{
+			name:   "YEAR before INT",
+			create: "id BIGINT PRIMARY KEY, y YEAR, n INT",
+			insert: "(%d, 2026, -5)",
+		},
+		{
+			name:   "YEAR before INT UNSIGNED",
+			create: "id BIGINT PRIMARY KEY, y YEAR, n INT UNSIGNED",
+			insert: "(%d, 2026, 4294967291)",
+		},
+		{
+			name: "every numeric type in mixed order",
+			create: "id BIGINT PRIMARY KEY, " +
+				"f FLOAT, y1 YEAR, t TINYINT, tu TINYINT UNSIGNED, v VARCHAR(5), " +
+				"d DECIMAL(10,2), s SMALLINT UNSIGNED, y2 YEAR, m MEDIUMINT, mu MEDIUMINT UNSIGNED, " +
+				"db DOUBLE, i INT UNSIGNED, e ENUM('a','b'), b BIGINT, y3 YEAR, bu BIGINT UNSIGNED, " +
+				"du DECIMAL(5,1) UNSIGNED, si SMALLINT, iu INT",
+			insert: "(%d, 1.5, 2026, -3, 200, 'v', 12.34, 60000, 1999, -7, 16777000, 2.5, 4294967291, 'b', " +
+				"-9, 2000, 9007199254740993, 5.5, -300, -2000000000)",
+		},
+	} {
+		for _, mode := range []string{"MINIMAL", "FULL"} {
+			t.Run(tc.name+"/"+mode, func(t *testing.T) {
+				ctx := testutils.TestContext(t)
+				is := is.New(t)
+				setBinlogRowMetadata(ctx, t, is, mode)
+				exec := newSession(ctx, t, is)
+				exec("DROP TABLE IF EXISTS " + ddlResumeTable)
+				exec("CREATE TABLE " + ddlResumeTable + " (" + tc.create + ")")
+				insert := func(id int) { exec("INSERT INTO " + ddlResumeTable + " VALUES " + fmt.Sprintf(tc.insert, id)) }
+
+				iterator, teardown := ddlResumeIterator(ctx, t, is, nil)
+				insert(1)
+				ids, pos := readIDs(ctx, is, iterator, 1)
+				is.Equal(ids, []int64{1}) // the first row halted before the fix
+				teardown()
+
+				insert(2)
+				iterator, teardown = ddlResumeIterator(ctx, t, is, pos)
+				defer teardown()
+				ids, _ = readIDs(ctx, is, iterator, 1)
+				is.Equal(ids, []int64{2})
+				assertNoMoreIDs(ctx, t, iterator)
+			})
+		}
+	}
 }

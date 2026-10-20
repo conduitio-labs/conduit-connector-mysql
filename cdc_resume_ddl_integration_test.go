@@ -16,6 +16,8 @@ package mysql
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
@@ -160,4 +162,106 @@ func TestCDCIterator_UpgradeAfterEarlierTypeChange(t *testing.T) {
 		}
 		assertNoMoreIDs(ctx, t, iterator)
 	})
+}
+
+// binlog_row_metadata=MINIMAL still logs the signedness of integer columns and
+// the collation of string columns in the Table_map event. A change of either
+// while the connector is stopped makes canal decode the event wrongly without
+// any error (INT to INT UNSIGNED turns -5 into 4294967291; VARCHAR to BLOB
+// turns text into bytes), so the source must halt, as it does for other
+// changes of the column type.
+func TestCDCIterator_SignednessOrStringKindChangeWhileStoppedHaltsWithMinimalMetadata(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		create  string
+		written []string // under the original columns; the last statements undo what the ALTER cannot convert
+		alter   string
+		want    string
+	}{
+		{
+			name:    "INT to INT UNSIGNED",
+			create:  "id BIGINT PRIMARY KEY, a INT, b INT",
+			written: []string{"INSERT INTO ddl_resume VALUES (2, -5, 1)", "DELETE FROM ddl_resume WHERE id = 2"},
+			alter:   "MODIFY COLUMN a INT UNSIGNED",
+			want:    "is a signed integer in the event and an unsigned integer in the table",
+		},
+		{
+			name:    "INT UNSIGNED to INT",
+			create:  "id BIGINT PRIMARY KEY, a INT UNSIGNED, b INT",
+			written: []string{"INSERT INTO ddl_resume VALUES (2, 4294967291, 1)", "DELETE FROM ddl_resume WHERE id = 2"},
+			alter:   "MODIFY COLUMN a INT",
+			want:    "is an unsigned integer in the event and a signed integer in the table",
+		},
+		{
+			name:    "VARCHAR to BLOB",
+			create:  "id BIGINT PRIMARY KEY, a VARCHAR(10), b INT",
+			written: []string{"INSERT INTO ddl_resume VALUES (2, 'text', 1)"},
+			alter:   "MODIFY COLUMN a BLOB",
+			want:    "is a text string in the event and a binary string in the table",
+		},
+		{
+			name:    "BLOB to TEXT",
+			create:  "id BIGINT PRIMARY KEY, a BLOB, b INT",
+			written: []string{"INSERT INTO ddl_resume VALUES (2, 'text', 1)"},
+			alter:   "MODIFY COLUMN a TEXT",
+			want:    "is a binary string in the event and a text string in the table",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := testutils.TestContext(t)
+			is := is.New(t)
+			setBinlogRowMetadata(ctx, t, is, "MINIMAL")
+			exec := newSession(ctx, t, is)
+			exec("DROP TABLE IF EXISTS " + ddlResumeTable)
+			exec("CREATE TABLE " + ddlResumeTable + " (" + tc.create + ")")
+
+			iterator, teardown := ddlResumeIterator(ctx, t, is, nil)
+			exec("INSERT INTO " + ddlResumeTable + " (id) VALUES (1)")
+			ids, pos := readIDs(ctx, is, iterator, 1)
+			is.Equal(ids, []int64{1})
+			teardown()
+
+			for _, q := range tc.written {
+				exec(q)
+			}
+			exec("ALTER TABLE " + ddlResumeTable + " " + tc.alter)
+
+			for range 2 { // the halt is the same after a restart
+				iterator, _ = ddlResumeIterator(ctx, t, is, pos)
+				delivered, err := readRecordsUntilError(ctx, iterator)
+				is.Equal(len(delivered), 0)
+				var coded *Error
+				if !errors.As(err, &coded) {
+					t.Fatalf("want a %s halt, got %v", CodeRowColumnsMismatch, err)
+				}
+				is.Equal(coded.Code, CodeRowColumnsMismatch)
+				is.True(strings.Contains(coded.Message, tc.want))
+				_ = iterator.Teardown(ctx)
+			}
+		})
+	}
+}
+
+// Widening an integer or a string column keeps the signedness and the string
+// kind, and must not halt.
+func TestCDCIterator_WideningWhileStoppedDoesNotHaltWithMinimalMetadata(t *testing.T) {
+	ctx := testutils.TestContext(t)
+	is := is.New(t)
+	setBinlogRowMetadata(ctx, t, is, "MINIMAL")
+	exec := newSession(ctx, t, is)
+	exec("DROP TABLE IF EXISTS " + ddlResumeTable)
+	exec("CREATE TABLE " + ddlResumeTable + " (id BIGINT PRIMARY KEY, a INT UNSIGNED, b VARCHAR(10), c TINYBLOB)")
+
+	iterator, teardown := ddlResumeIterator(ctx, t, is, nil)
+	exec("INSERT INTO " + ddlResumeTable + " VALUES (1, 4294967291, 'x', 'y')")
+	_, pos := readIDs(ctx, is, iterator, 1)
+	teardown()
+
+	exec("INSERT INTO " + ddlResumeTable + " VALUES (2, 4294967291, 'x', 'y')")
+	exec("ALTER TABLE " + ddlResumeTable + " MODIFY COLUMN a BIGINT UNSIGNED, MODIFY COLUMN b VARCHAR(100), MODIFY COLUMN c LONGBLOB")
+
+	iterator, teardown = ddlResumeIterator(ctx, t, is, pos)
+	defer teardown()
+	ids, _ := readIDs(ctx, is, iterator, 1)
+	is.Equal(ids, []int64{2})
 }

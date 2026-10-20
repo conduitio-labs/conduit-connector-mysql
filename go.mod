@@ -94,10 +94,9 @@ require (
 //  - canal.RowsEvent.TableMap, the Table_map event the rows were written under, so the handler can check
 //    re-read table columns against the column types (and, with binlog_row_metadata=FULL, names) of the
 //    event before it maps values onto them. ConduitIO/go-mysql#2, not proposed upstream yet.
-// Pinned to the fork PR's commit until the fork is tagged v1.14.0-conduit.2 (the tag is not created here).
 // Do not move to a go-mysql release that contains upstream ace1fb4 (v1.16.0 and later) without reworking the
 // compressed resume of #228 first: ace1fb4 stamps the events of a compressed transaction with the payload's
 // start offset instead of 0, and the resume tells them by offset 0 (see the canary test in #235).
 // Remove this replace (and the ConduitIO/go-mysql fork) once a go-mysql release contains both fields:
 // bump the require above to that release and delete these lines.
-replace github.com/go-mysql-org/go-mysql => github.com/ConduitIO/go-mysql v1.14.1-0.20261015200357-4554b8ef277d
+replace github.com/go-mysql-org/go-mysql => github.com/ConduitIO/go-mysql v1.14.0-conduit.2

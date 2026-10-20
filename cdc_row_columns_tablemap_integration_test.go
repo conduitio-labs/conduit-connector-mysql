@@ -137,8 +137,7 @@ func TestCDCIterator_DropAndAddWhileStoppedHaltsOnNamesWithFullMetadata(t *testi
 	db := testutils.NewDB(t)
 	testutils.CreateUserTable(is, db)
 	exec := newSession(ctx, t, is)
-	exec("SET GLOBAL binlog_row_metadata = FULL")
-	t.Cleanup(func() { exec("SET GLOBAL binlog_row_metadata = MINIMAL") })
+	setBinlogRowMetadata(ctx, t, is, "FULL")
 
 	iterator, teardown := testCdcIterator(ctx, t, is)
 	exec.insertUsers(1, 1)

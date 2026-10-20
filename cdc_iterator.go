@@ -594,7 +594,7 @@ func findKeyColType(avroCols []*avroNamedType, keyCol string) (*avroNamedType, b
 // halts with CodeRowColumnsMismatch instead of guessing. Generated (virtual or
 // stored) and INVISIBLE columns are both logged and listed, so they match.
 // A cached column list that is only out of date (canal skips DDL it cannot
-// parse) is re-read in OnRow before this runs; see refreshStaleTable.
+// parse) is re-read in onRows before this runs; see refreshStaleTable.
 func (h *cdcEventHandler) buildPayload(
 	ctx context.Context,
 	payloadSchema *schemaMapper,
@@ -794,6 +794,17 @@ func (h *cdcEventHandler) onRows(ctx context.Context, e rowEvent) ([]opencdc.Rec
 		}
 	}
 
+	// Invariant 6, checked on what is about to be delivered and not before
+	// the drop decision above: an event the restart reads again but that was
+	// delivered before is dropped, whatever columns the table has now. Checking
+	// it first halted an ordinary restart after a DDL on an already delivered
+	// row, on every restart (#232 review).
+	if len(e.Rows) > 0 {
+		if err := h.checkRowColumns(ctx, e.RowsEvent); err != nil {
+			return nil, err
+		}
+	}
+
 	rows, err := h.buildRecords(ctx, e, h.prevPosition, h.replayPoint, compressed, firstIndex)
 
 	h.prevPosition = event
@@ -879,15 +890,10 @@ func (h *cdcEventHandler) OnRow(e *canal.RowsEvent) error {
 		h.compressedSeen++
 	}
 
-	// A row image wider or narrower than the cached columns may only mean
-	// the cache is stale; re-read it once before deciding to halt.
-	refreshMismatch := h.refreshStaleTable(h.logCtx, e)
-
-	// Invariant 6: a row image with the right number of values may still have
-	// been written under other columns; see checkTableMap.
-	if err := h.checkTableMap(e, refreshMismatch); err != nil {
-		return err
-	}
+	// The column re-read and the Table_map check are not here: they run in
+	// onRows, on the events it will deliver. A restart reads events again
+	// that were delivered before, possibly under columns the table no longer
+	// has; those are dropped by the resume, and must not halt it.
 
 	// Invariant 6: halt before building any record if the row image left a
 	// column out; see checkSkippedColumns.

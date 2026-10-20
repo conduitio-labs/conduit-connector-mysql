@@ -336,8 +336,10 @@ Two more CDC halts are resolved by resetting the position, so the recovery below
   before the connector read the event, every value after the dropped column would land in the wrong column.
   The connector compares the types the event was written with against the table's columns (by family, so
   `INT` to `BIGINT` or a longer `VARCHAR` is fine) and halts on a difference, also after a restart, so
-  restarting does not help: reset the position. With `binlog_row_metadata=FULL` the event also carries its
-  column names, and the connector compares those too; a renamed column then halts as well, because a rename
+  restarting does not help: reset the position. The check runs only on events the connector is about to
+  deliver: after a restart, events it reads again but delivered before the restart are dropped without it,
+  so an ordinary restart after a DDL does not halt on a row that was already delivered. With
+  `binlog_row_metadata=FULL` the event also carries its column names, and the connector compares those too; a renamed column then halts as well, because a rename
   cannot be told from a drop plus an add. **Without `FULL`, a column dropped and another of the same type
   family added at the same position, while the connector is stopped or lagging, is not detected, and the
   values are mapped onto the new column.** `binlog_row_metadata=FULL` (MySQL 8.0.1+, MariaDB 10.5+; the default

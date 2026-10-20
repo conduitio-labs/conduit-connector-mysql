@@ -26,6 +26,21 @@ import (
 	"github.com/go-mysql-org/go-mysql/schema"
 )
 
+// checkRowColumns makes sure the columns a row event will be mapped onto are
+// the ones it was written under. It re-reads the table's columns once if the
+// cache looks stale (refreshStaleTable), then halts if the event was written
+// under other columns (checkTableMap). It must only be called for an event
+// that is about to be delivered: see onRows.
+func (h *cdcEventHandler) checkRowColumns(ctx context.Context, e *canal.RowsEvent) error {
+	// A row image wider or narrower than the cached columns may only mean
+	// the cache is stale; re-read it once before deciding to halt.
+	refreshMismatch := h.refreshStaleTable(ctx, e)
+
+	// Invariant 6: a row image with the right number of values may still have
+	// been written under other columns; see checkTableMap.
+	return h.checkTableMap(e, refreshMismatch)
+}
+
 // refreshStaleTable re-reads the table's columns once when a row image does
 // not have one value per cached column, and uses them when they fit.
 //
@@ -40,7 +55,7 @@ import (
 // COLUMN b, ADD COLUMN e), and mapping the values onto those columns would
 // put every value after the dropped one into the wrong column, silently. So
 // the re-read columns are used only if they also match the event's Table_map
-// (tableMapMismatch). It returns the mismatch when they do not, for OnRow to
+// (tableMapMismatch). It returns the mismatch when they do not, for checkRowColumns to
 // halt with; an event that does not fit even after the re-read is left for
 // buildPayload to halt on.
 //

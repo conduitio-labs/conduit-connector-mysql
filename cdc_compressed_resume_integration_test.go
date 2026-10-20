@@ -194,8 +194,12 @@ func TestCDCIterator_ResumeInsideCompressedTransactionAfterTablesChanged(t *test
 // after an ADD COLUMN that panicked (index out of range) on every restart.
 // They lie before the saved event and must be dropped.
 func TestCDCIterator_UpgradeWithCompressedTransactionAndLaterDDL(t *testing.T) {
-	ctx := testutils.TestContext(t)
-	is := is.New(t)
+	forEachRowMetadata(t, func(t *testing.T, ctx context.Context, is *is.I) {
+		upgradeWithCompressedTransactionAndLaterDDL(ctx, t, is)
+	})
+}
+
+func upgradeWithCompressedTransactionAndLaterDDL(ctx context.Context, t *testing.T, is *is.I) {
 	db := testutils.NewDB(t)
 	testutils.CreateUserTable(is, db)
 	exec := newSession(ctx, t, is)

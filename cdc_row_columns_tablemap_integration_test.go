@@ -92,7 +92,7 @@ func TestCDCIterator_ReReadColumnsOfAnotherSchemaHalt(t *testing.T) {
 	}
 	is.Equal(coded.Code, CodeRowColumnsMismatch)
 	is.True(strings.Contains(coded.Message, "written under other columns"))
-	is.True(strings.Contains(coded.Fix, "restarting does not help"))
+	is.True(strings.Contains(coded.Fix, "every restart halts on it again"))
 	is.True(errors.Is(iterator.Teardown(ctx), ErrRowColumnsMismatch))
 }
 
@@ -137,8 +137,7 @@ func TestCDCIterator_DropAndAddWhileStoppedHaltsOnNamesWithFullMetadata(t *testi
 	db := testutils.NewDB(t)
 	testutils.CreateUserTable(is, db)
 	exec := newSession(ctx, t, is)
-	exec("SET GLOBAL binlog_row_metadata = FULL")
-	t.Cleanup(func() { exec("SET GLOBAL binlog_row_metadata = MINIMAL") })
+	setBinlogRowMetadata(ctx, t, is, "FULL")
 
 	iterator, teardown := testCdcIterator(ctx, t, is)
 	exec.insertUsers(1, 1)

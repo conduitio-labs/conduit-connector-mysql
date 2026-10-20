@@ -127,8 +127,8 @@ func (h *cdcEventHandler) checkTableMap(e *canal.RowsEvent, refreshMismatch stri
 	}
 	return newError(ErrRowColumnsMismatch, CodeRowColumnsMismatch, "tables",
 		"The event was written under other columns than the table has now (a column was dropped and another added, "+
-			"or changed type, after it was written), so its values cannot be mapped to columns, and restarting does "+
-			"not help: it halts the same way on every restart. Reset the pipeline's position to snapshot again "+
+			"or changed type, after it was written), so its values cannot be mapped to columns. Restarting does "+
+			"not help: the event is not delivered yet, so every restart halts on it again. Reset the pipeline's position to snapshot again "+
 			"(expect duplicates; see the README on recovery). To compare column names as well as types, set "+
 			"binlog_row_metadata=FULL on the server (MySQL 8.0.1+, MariaDB 10.5+); it applies to events written after it is set",
 		"a binlog event for table %s.%s in %s (event end offset %d) was written under other columns than the table "+

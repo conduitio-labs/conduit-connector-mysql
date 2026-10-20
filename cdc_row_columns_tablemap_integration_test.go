@@ -92,7 +92,7 @@ func TestCDCIterator_ReReadColumnsOfAnotherSchemaHalt(t *testing.T) {
 	}
 	is.Equal(coded.Code, CodeRowColumnsMismatch)
 	is.True(strings.Contains(coded.Message, "written under other columns"))
-	is.True(strings.Contains(coded.Fix, "restarting does not help"))
+	is.True(strings.Contains(coded.Fix, "every restart halts on it again"))
 	is.True(errors.Is(iterator.Teardown(ctx), ErrRowColumnsMismatch))
 }
 

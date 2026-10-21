@@ -59,7 +59,7 @@ jobs:
           # is the Go module path; update it together with .goreleaser.yml if
           # the module is renamed (a stale -X path is silently ignored).
           build-command: |
-            CGO_ENABLED=0 go build \
+            CGO_ENABLED=0 go build -trimpath \
               -ldflags "-s -w -X 'github.com/conduitio-labs/conduit-connector-mysql.version=${GITHUB_REF_NAME}'" \
               -o "$OUTPUT_PATH" ./cmd/connector
 

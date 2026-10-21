@@ -136,9 +136,9 @@ func (w *fetchWorkerSingleKey) fetchStartEnd(ctx context.Context) (isTableEmpty 
 	w.end = row.MaxValue
 
 	sdk.Logger(ctx).Debug().
-		Any("start", w.start).
+		Str("start_hash", logHash(w.start)).
 		Type("start type", w.start).
-		Any("end", w.end).
+		Str("end_hash", logHash(w.end)).
 		Type("end type", w.end).
 		Msg("fetched start and end")
 
@@ -152,8 +152,8 @@ func (w *fetchWorkerSingleKey) run(ctx context.Context) (err error) {
 	logger := sdk.Logger(ctx).With().Str("table", w.config.table).Logger()
 
 	logger.Debug().
-		Any("start", w.start).
-		Any("end", w.end).
+		Str("start_hash", logHash(w.start)).
+		Str("end_hash", logHash(w.end)).
 		Uint64("fetchSize", w.config.fetchSize).
 		Msg("fetching rows")
 
@@ -164,8 +164,8 @@ func (w *fetchWorkerSingleKey) run(ctx context.Context) (err error) {
 	chunkStart := w.start
 	for {
 		logger.Trace().
-			Any("chunk start", chunkStart).
-			Any("end", w.end).Msg("fetching chunk")
+			Str("chunk_start_hash", logHash(chunkStart)).
+			Str("end_hash", logHash(w.end)).Msg("fetching chunk")
 
 		rowsChunk, err := w.selectRowsChunk(ctx, chunkStart, discardFirst)
 		if err != nil {
@@ -174,7 +174,7 @@ func (w *fetchWorkerSingleKey) run(ctx context.Context) (err error) {
 		discardFirst = true
 
 		for _, row := range rowsChunk.rows {
-			logger.Trace().Msgf("fetched row: %+v", row)
+			logger.Trace().Int("columns", len(row)).Msg("fetched row")
 
 			lastRead := row[w.primaryKey]
 			if lastRead == nil {
@@ -231,7 +231,7 @@ func (w *fetchWorkerSingleKey) selectRowsChunk(
 		return nil, fmt.Errorf("failed to build query: %w", err)
 	}
 
-	sdk.Logger(ctx).Debug().Str("query", query).Any("args", args).Msg("created query")
+	sdk.Logger(ctx).Debug().Str("query", query).Int("args", len(args)).Msg("created query")
 
 	rows, err := w.config.db.QueryxContext(ctx, query, args...)
 	if err != nil {
@@ -396,9 +396,9 @@ func (w *fetchWorkerMultipleKey) fetchStartEnd(ctx context.Context) (tableEmpty 
 	}
 
 	sdk.Logger(ctx).Debug().
-		Any("start", w.start).
+		Str("start_hash", logHash(w.start)).
 		Type("start type", w.start).
-		Any("end", w.end).
+		Str("end_hash", logHash(w.end)).
 		Type("end type", w.end).
 		Msg("fetched start and end")
 
@@ -454,8 +454,8 @@ func (w *fetchWorkerMultipleKey) run(ctx context.Context) error {
 
 	sdk.Logger(ctx).Debug().Msgf("obtained tx for table %v", w.config.table)
 	sdk.Logger(ctx).Info().
-		Any("start", w.start).
-		Any("end", w.end).
+		Str("start_hash", logHash(w.start)).
+		Str("end_hash", logHash(w.end)).
 		Uint64("fetchSize", w.config.fetchSize).
 		Msg("fetching rows")
 
@@ -466,8 +466,8 @@ func (w *fetchWorkerMultipleKey) run(ctx context.Context) error {
 	chunkStart := w.start
 	for {
 		sdk.Logger(ctx).Info().
-			Any("chunk start", chunkStart).
-			Any("end", w.end).Msg("fetching chunk")
+			Str("chunk_start_hash", logHash(chunkStart)).
+			Str("end_hash", logHash(w.end)).Msg("fetching chunk")
 
 		rowsChunk, err := w.selectRowsChunk(ctx, tx, chunkStart, discardFirst)
 		if err != nil {
@@ -476,7 +476,7 @@ func (w *fetchWorkerMultipleKey) run(ctx context.Context) error {
 		discardFirst = true
 
 		for _, row := range rowsChunk.rows {
-			sdk.Logger(ctx).Trace().Msgf("fetched row: %+v", row)
+			sdk.Logger(ctx).Trace().Int("columns", len(row)).Msg("fetched row")
 
 			lastRead, found := w.getKeyPos(row)
 			if !found {
@@ -544,7 +544,7 @@ func (w *fetchWorkerMultipleKey) selectRowsChunk(
 		return nil, fmt.Errorf("failed to build query: %w", err)
 	}
 
-	sdk.Logger(ctx).Debug().Str("query", query).Any("args", args).Msg("created query")
+	sdk.Logger(ctx).Debug().Str("query", query).Int("args", len(args)).Msg("created query")
 
 	rows, err := tx.QueryxContext(ctx, query, args...)
 	if err != nil {
@@ -709,7 +709,6 @@ func getMinMaxValues(
 		Str("query", query).
 		Str("min_value_type", fmt.Sprintf("%T", scannedRow.MinValue)).
 		Str("max_value_type", fmt.Sprintf("%T", scannedRow.MaxValue)).
-		Any("scannedRow", scannedRow).
 		Send()
 
 	return &scannedRow, false, nil

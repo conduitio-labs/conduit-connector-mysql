@@ -357,7 +357,7 @@ func (s *schemaMapper) formatValue(ctx context.Context, column string, value any
 			if v <= math.MaxInt32 && v >= math.MinInt32 {
 				return int32(v), nil
 			}
-			sdk.Logger(ctx).Warn().Msgf("value %v for column %s cannot be encoded in avro int", v, t.Name)
+			sdk.Logger(ctx).Warn().Msgf("value of type %T for column %s is out of range and cannot be encoded in avro int", v, t.Name)
 
 		case int8:
 			return int32(v), nil
@@ -368,7 +368,7 @@ func (s *schemaMapper) formatValue(ctx context.Context, column string, value any
 				return int32(v), nil
 			}
 
-			sdk.Logger(ctx).Warn().Msgf("value %v for column %s cannot be encoded in avro int", v, t.Name)
+			sdk.Logger(ctx).Warn().Msgf("value of type %T for column %s is out of range and cannot be encoded in avro int", v, t.Name)
 		case uint8:
 			return int32(v), nil
 		case uint16:
@@ -378,13 +378,13 @@ func (s *schemaMapper) formatValue(ctx context.Context, column string, value any
 				return int32(v), nil
 			}
 
-			sdk.Logger(ctx).Warn().Msgf("value %v for column %s cannot be encoded in avro int", v, t.Name)
+			sdk.Logger(ctx).Warn().Msgf("value of type %T for column %s is out of range and cannot be encoded in avro int", v, t.Name)
 		case uint64:
 			if v <= math.MaxInt32 {
 				return int32(v), nil
 			}
 
-			sdk.Logger(ctx).Warn().Msgf("value %v for column %s cannot be encoded in avro int", v, t.Name)
+			sdk.Logger(ctx).Warn().Msgf("value of type %T for column %s is out of range and cannot be encoded in avro int", v, t.Name)
 		}
 
 		return value, nil

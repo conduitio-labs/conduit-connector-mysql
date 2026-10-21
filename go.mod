@@ -5,7 +5,7 @@ go 1.26.9
 require (
 	github.com/Masterminds/squirrel v1.5.4
 	github.com/conduitio/conduit-commons v0.11.0
-	github.com/conduitio/conduit-connector-sdk v0.17.0
+	github.com/conduitio/conduit-connector-sdk v0.17.1
 	github.com/go-mysql-org/go-mysql v1.14.0
 	github.com/go-sql-driver/mysql v1.10.1
 	github.com/google/go-cmp v0.7.0
@@ -52,7 +52,7 @@ require (
 	github.com/Masterminds/semver/v3 v3.5.0 // indirect
 	github.com/Masterminds/sprig/v3 v3.3.0 // indirect
 	github.com/bufbuild/protocompile v0.14.2-0.20260127163740-a85d2ef77713 // indirect
-	github.com/conduitio/conduit-connector-protocol v0.11.0 // indirect
+	github.com/conduitio/conduit-connector-protocol v0.11.1 // indirect
 	github.com/fatih/color v1.19.0 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
 	github.com/goccy/go-json v0.11.2 // indirect

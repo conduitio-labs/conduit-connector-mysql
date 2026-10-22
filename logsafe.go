@@ -19,7 +19,9 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"strconv"
 )
 
 // logHashSalt is random per process, so a logged hash cannot be reversed by
@@ -41,4 +43,15 @@ func logHash(v any) string {
 	mac := hmac.New(sha256.New, logHashSalt)
 	fmt.Fprintf(mac, "%T:%#v", v, v)
 	return hex.EncodeToString(mac.Sum(nil)[:8])
+}
+
+// numberCause returns the reason a number failed to parse without the number,
+// which strconv.NumError repeats. Errors reach the DLQ, the API and CLI
+// output, so a row value must not be in them.
+func numberCause(err error) error {
+	var ne *strconv.NumError
+	if errors.As(err, &ne) {
+		return ne.Err
+	}
+	return errors.New("not a valid number")
 }

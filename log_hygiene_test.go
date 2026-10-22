@@ -184,3 +184,29 @@ func TestFormatValue_OutOfRangeWarningDoesNotContainValue(t *testing.T) {
 	is.True(!strings.Contains(out, "9876543210123"))
 	is.True(!strings.Contains(out, "4294967295"))
 }
+
+// Errors reach the DLQ, the API and CLI output, so a row value is never in
+// them: not the digits the driver returned for a BIGINT UNSIGNED, and not the
+// value that overflows.
+func TestFormatValue_ErrorsDoNotContainTheValue(t *testing.T) {
+	ctx := context.Background()
+	s := newSchemaMapper()
+	s.table = "orders"
+	s.colTypes = map[string]*avroNamedType{"qty": {Name: "qty", avroType: avroType{Type: avro.Long}}}
+
+	for name, v := range map[string]any{
+		"digits with garbage": []uint8("99999999999999999999SECRET"),
+		"uint64 overflow":     uint64(18446744073709551615),
+		"bytes overflow":      []uint8("18446744073709551615"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			is := is.New(t)
+			_, err := s.formatValue(ctx, "qty", v)
+			is.True(err != nil)
+			is.True(strings.Contains(err.Error(), "orders.qty"))
+			is.True(!strings.Contains(err.Error(), "SECRET"))
+			is.True(!strings.Contains(err.Error(), "99999999999999999999"))
+			is.True(!strings.Contains(err.Error(), "18446744073709551615"))
+		})
+	}
+}

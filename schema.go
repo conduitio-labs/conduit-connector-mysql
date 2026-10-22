@@ -406,7 +406,7 @@ func (s *schemaMapper) formatValue(ctx context.Context, column string, value any
 			}
 			u, err := strconv.ParseUint(string(v), 10, 64)
 			if err != nil {
-				return nil, fmt.Errorf("column %s.%s: unexpected value %q for an Avro long: %w", s.table, column, v, err)
+				return nil, fmt.Errorf("column %s.%s: unexpected %d byte value for an Avro long: %w", s.table, column, len(v), numberCause(err))
 			}
 			return s.unsignedToLong(column, u)
 		case uint32:
@@ -491,8 +491,8 @@ func (s *schemaMapper) unsignedToLong(column string, v uint64) (any, error) {
 		"exclude the table from `tables` (for example \"*,-^"+s.table+"$\") or bring the column's values to "+
 			"9223372036854775807 or below, then restart. Lossless handling of the full BIGINT UNSIGNED range is "+
 			"tracked in ConduitIO/conduit-connector-mysql#86",
-		"column %s.%s holds %d, which is above the largest value its schema type (Avro long) can hold "+
-			"(9223372036854775807); the source stopped instead of emitting a wrong value", s.table, column, v)
+		"column %s.%s holds a value above the largest value its schema type (Avro long) can hold "+
+			"(9223372036854775807); the source stopped instead of emitting a wrong value", s.table, column)
 }
 
 func defaultValueForType(t avro.Type) any {

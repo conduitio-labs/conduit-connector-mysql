@@ -21,8 +21,10 @@ import (
 	"log/slog"
 	"strconv"
 
+	"github.com/conduitio/conduit-commons/dialer"
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/go-mysql-org/go-mysql/canal"
+	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 	"github.com/rs/zerolog"
@@ -39,6 +41,12 @@ func NewCanal(ctx context.Context, config CanalConfig) (*canal.Canal, error) {
 	cfg.Addr = config.Addr
 	cfg.User = config.User
 	cfg.Password = config.Passwd
+
+	// Host dialer: the binlog syncer and canal's metadata connections (SHOW,
+	// table schema, master position) dial through it, including reconnects.
+	if dial, ok := dialer.FromContext(ctx); ok {
+		cfg.Dialer = client.Dialer(dial)
+	}
 
 	cfg.IncludeTableRegex = config.Tables
 	if config.DisableLogging {

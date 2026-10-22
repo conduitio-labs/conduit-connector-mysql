@@ -557,6 +557,18 @@ pipelines:
 ```
 <!-- /readmegen:destination.parameters.yaml -->
 
+## Host-supplied dialer
+
+A host that runs this connector can supply the function used to open network
+connections by putting it on the context it passes to `Open`, with
+`dialer.WithDialContext` from
+[`conduit-commons/dialer`](https://github.com/ConduitIO/conduit-commons/tree/main/dialer).
+When one is present, every connection the connector makes goes through it: the
+source and destination connection pools (including reconnects), the snapshot
+connections, canal's metadata connections and the binlog syncer. TLS configured
+in the DSN is layered by the driver over the connection the dialer returns.
+Without a host dialer the connector dials as before.
+
 ## Testing
 
 Run `make test` to run all tests.

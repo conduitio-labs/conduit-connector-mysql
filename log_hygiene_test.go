@@ -19,13 +19,17 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
+	"github.com/conduitio/conduit-commons/opencdc"
 	mysqlDriver "github.com/go-sql-driver/mysql"
 	"github.com/iskorotkov/avro/v2"
 	"github.com/jmoiron/sqlx"
@@ -213,26 +217,107 @@ func TestFormatValue_ErrorsDoNotContainTheValue(t *testing.T) {
 	}
 }
 
-// A server error such as "Duplicate entry 'k' for key" quotes the row's value:
-// the code and SQLSTATE stay, the message goes.
-func TestUpsertError_DoesNotContainRowValues(t *testing.T) {
-	for number, message := range map[uint16]string{
-		1062: "Duplicate entry 'customer-SECRET-4711' for key 'PRIMARY'",
-		1292: "Truncated incorrect DOUBLE value: 'customer-SECRET-4711'",
-		1366: "Incorrect string value: '\\xF0\\x9F' for column 'note' at row 1 customer-SECRET-4711",
-	} {
-		t.Run(fmt.Sprint(number), func(t *testing.T) {
-			is := is.New(t)
-			err := upsertError("orders", &mysqlDriver.MySQLError{Number: number, SQLState: [5]byte{'2', '3', '0', '0', '0'}, Message: message})
-			is.True(strings.Contains(err.Error(), fmt.Sprintf("MySQL error %d", number)))
-			is.True(!strings.Contains(err.Error(), "SECRET"))
-			var my *mysqlDriver.MySQLError
-			is.True(errors.As(err, &my)) // the chain is kept
-		})
+// A server error can quote the row's value (a duplicate entry, a truncated
+// value, a trigger's SIGNAL text, a foreign-key message with the key values):
+// the number and SQLSTATE stay, the message goes, for every error number and on
+// the upsert and the delete.
+func TestServerError_DoesNotContainRowValues(t *testing.T) {
+	for _, op := range []string{"upsert", "delete"} {
+		for number, message := range map[uint16]string{
+			1062: "Duplicate entry 'customer-SECRET-4711' for key 'PRIMARY'",
+			1292: "Truncated incorrect DOUBLE value: 'customer-SECRET-4711'",
+			1366: "Incorrect string value: '\\xF0\\x9F' for column 'note' at row 1 customer-SECRET-4711",
+			1146: "Table 'customer-SECRET-4711.orders' doesn't exist",
+			1451: "Cannot delete or update a parent row: a foreign key constraint fails (`db`.`t`, CONSTRAINT `fk` FOREIGN KEY (`id`) REFERENCES `p` (`id`)) customer-SECRET-4711",
+			1644: "customer-SECRET-4711 is not allowed",
+			1265: "Data truncated for column 'a' at row customer-SECRET-4711",
+			9999: "a number nobody has listed customer-SECRET-4711",
+		} {
+			t.Run(fmt.Sprint(op, number), func(t *testing.T) {
+				is := is.New(t)
+				err := serverError(op, "orders", &mysqlDriver.MySQLError{Number: number, SQLState: [5]byte{'2', '3', '0', '0', '0'}, Message: message})
+				is.True(strings.Contains(err.Error(), fmt.Sprintf("MySQL error %d (SQLSTATE 23000)", number)))
+				is.True(strings.Contains(err.Error(), op))
+				is.True(!strings.Contains(err.Error(), "SECRET"))
+				var my *mysqlDriver.MySQLError
+				is.True(errors.As(err, &my)) // the chain is kept
+			})
+		}
 	}
-	// other errors keep their text
-	err := upsertError("orders", &mysqlDriver.MySQLError{Number: 1146, Message: "Table 'db.orders' doesn't exist"})
-	if !strings.Contains(err.Error(), "doesn't exist") {
-		t.Errorf("an error without row values keeps its message: %v", err)
+}
+
+// A record key holds row values: the record key in an error is a hash.
+func TestKeyErrors_DoNotContainKeyValues(t *testing.T) {
+	is := is.New(t)
+	rec := opencdc.Record{Key: opencdc.RawData(`{"id":"customer-SECRET-4711"}`), Payload: opencdc.Change{After: opencdc.RawData("x")}}
+	_, err := columnRuns([]opencdc.Record{rec})
+	is.True(err != nil)
+	is.True(!strings.Contains(err.Error(), "SECRET"))
+	is.True(strings.Contains(err.Error(), "key hash"))
+
+	rec.Payload.After = opencdc.StructuredData{}
+	_, err = columnRuns([]opencdc.Record{rec})
+	is.True(err != nil)
+	is.True(!strings.Contains(err.Error(), "SECRET"))
+
+	_, err = decodeRecordKey(opencdc.RawData(`{"id":"customer-SECRET-4711"} garbage`))
+	is.True(err != nil)
+	is.True(!strings.Contains(err.Error(), "SECRET"))
+	_, err = decodeRecordKey(opencdc.RawData(`customer-SECRET-4711`))
+	is.True(err != nil)
+	is.True(!strings.Contains(err.Error(), "SECRET"))
+
+	// field names that collide on one column are not repeated either
+	_, err = keyValue(keyColumn{Name: "id", DataType: "int", ColumnType: "int"},
+		map[string]any{"ID-SECRET-4711": 1, "id": 2}, columnResolver{"ID-SECRET-4711": "id", "id": "id"})
+	is.True(err != nil)
+	is.True(!strings.Contains(err.Error(), "SECRET"))
+}
+
+// A key that does not fit the column's type is refused before it reaches the
+// server, whose own error would quote it, and the refusal does not quote it.
+func TestTypeKeyValue_RefusesKeysThatDoNotFit(t *testing.T) {
+	dec := keyColumn{Name: "price", DataType: "decimal", ColumnType: "decimal(6,2)"}
+	dt := keyColumn{Name: "at", DataType: "datetime", ColumnType: "datetime(6)"}
+	date := keyColumn{Name: "d", DataType: "date", ColumnType: "date"}
+	flt := keyColumn{Name: "f", DataType: "double", ColumnType: "double"}
+	for name, tc := range map[string]struct {
+		col keyColumn
+		val any
+		ok  bool
+	}{
+		"decimal string":       {dec, "1234.50", true},
+		"decimal number":       {dec, json.Number("12.5"), true},
+		"decimal int":          {dec, 12, true},
+		"decimal garbage":      {dec, "customer-SECRET-4711", false},
+		"decimal exponent":     {dec, "1e3", false},
+		"decimal too scaled":   {dec, "1.234", false},
+		"decimal too big":      {dec, "12345.67", false},
+		"decimal bool":         {dec, true, false},
+		"decimal NaN":          {dec, math.NaN(), false},
+		"datetime":             {dt, "2026-10-22 09:30:00.123456", true},
+		"datetime T":           {dt, "2026-10-22T09:30:00", true},
+		"datetime time.Time":   {dt, time.Date(2026, 10, 22, 9, 30, 0, 0, time.UTC), true},
+		"datetime garbage":     {dt, "customer-SECRET-4711", false},
+		"datetime day 31 of 2": {dt, "2026-02-31 00:00:00", false},
+		"datetime hour 24":     {dt, "2026-02-01 24:00:00", false},
+		"datetime number":      {dt, json.Number("20261022"), false},
+		"date":                 {date, "2026-10-22", true},
+		"date with time":       {date, "2026-10-22 09:30:00", false},
+		"float":                {flt, json.Number("1.5"), true},
+		"float string":         {flt, "customer-SECRET-4711", false},
+		"float inf":            {flt, math.Inf(1), false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			is := is.New(t)
+			_, err := typeKeyValue(tc.col, tc.val, ".Key.k")
+			if tc.ok {
+				is.NoErr(err)
+				return
+			}
+			is.True(err != nil)
+			is.True(!strings.Contains(err.Error(), "SECRET"))
+			is.True(!strings.Contains(err.Error(), "1234"))
+		})
 	}
 }

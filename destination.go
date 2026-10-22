@@ -25,6 +25,7 @@ import (
 	"math/big"
 	"net/url"
 	"reflect"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -388,9 +389,9 @@ func (d *Destination) upsertRecords(ctx context.Context, tx *sqlx.Tx, table stri
 				return newError(ErrUnknownColumn, CodeUnknownColumn, ".Payload.After",
 					"add the column to the table before records with the field arrive (the destination does not alter tables), "+
 						"or remove the field before the destination with a field.exclude processor",
-					"table %q has no column for a field of the records: %s", table, myErr.Message)
+					"table %q has no column for a field of the records", table)
 			}
-			return upsertError(table, err)
+			return serverError("upsert", table, err)
 		}
 	}
 
@@ -416,37 +417,34 @@ func quoteTable(name string) string {
 	return quoteIdent(name)
 }
 
-// keyString renders a record key for error messages. A nil key is valid input
-// and must not panic.
+// keyString renders a record key for error messages as a salted hash: the key
+// holds row values. A nil key is valid input and must not panic.
 func keyString(rec opencdc.Record) string {
 	if rec.Key == nil {
-		return ""
+		return "(no key)"
 	}
-	return string(rec.Key.Bytes())
+	return "(key hash " + logHash(string(rec.Key.Bytes())) + ")"
 }
 
-// upsertError wraps the error of the batch upsert. The message of the server
-// errors in valueBearingMySQLErrors quotes a value of the row ("Duplicate entry
-// 'k' for key", "Incorrect string value: 'x' for column"), and errors reach the
-// DLQ, the API and CLI output: for those the code and SQLSTATE are kept and the
-// message is dropped.
-func upsertError(table string, err error) error {
+// serverError wraps the error of a statement. The message of a server error
+// can quote a value of the row ("Duplicate entry 'k' for key", "Incorrect
+// string value: 'x' for column", a trigger's SIGNAL text, ...) and errors
+// reach the DLQ, the API and CLI output, so the message of every
+// *mysql.MySQLError is withheld, whatever its number: only the number and
+// SQLSTATE are kept. An allowlist of numbers whose message is safe would be
+// the opposite choice, and the server has more than a thousand of them. The
+// original stays in the chain.
+func serverError(op, table string, err error) error {
 	var myErr *mysql.MySQLError
-	if errors.As(err, &myErr) && valueBearingMySQLErrors[myErr.Number] {
+	if errors.As(err, &myErr) {
 		return &mysqlValueError{
-			msg: fmt.Sprintf("failed to execute batch upsert on table %q: MySQL error %d (SQLSTATE %s), message withheld: it can quote row values",
-				table, myErr.Number, string(myErr.SQLState[:])),
+			msg: fmt.Sprintf("failed to execute batch %s on table %q: MySQL error %d (SQLSTATE %s), message withheld: it can quote row values",
+				op, table, myErr.Number, string(myErr.SQLState[:])),
 			err: err,
 		}
 	}
-	return fmt.Errorf("failed to execute batch upsert: %w", err)
+	return fmt.Errorf("failed to execute batch %s: %w", op, err)
 }
-
-// valueBearingMySQLErrors are the server errors whose message quotes a value of
-// the row: ER_DUP_ENTRY (1062), ER_TRUNCATED_WRONG_VALUE (1292),
-// ER_TRUNCATED_WRONG_VALUE_FOR_FIELD (1366), ER_WRONG_VALUE_FOR_TYPE (1411)
-// and ER_ILLEGAL_VALUE_FOR_TYPE (1367, 1525).
-var valueBearingMySQLErrors = map[uint16]bool{1062: true, 1292: true, 1366: true, 1367: true, 1411: true, 1525: true}
 
 // mysqlValueError is a server error without its message. The original stays in
 // the chain, so errors.As finds the *mysql.MySQLError.
@@ -477,12 +475,12 @@ func columnRuns(recs []opencdc.Record) ([]upsertRun, error) {
 		if !ok {
 			return nil, newError(ErrPayloadNotStructured, CodePayloadNotStructured, ".Payload.After",
 				"decode the payload into structured data before the destination, for JSON with a json.decode processor on .Payload.After",
-				"record %q has a %T payload, the destination writes only structured data", keyString(rec), rec.Payload.After)
+				"record %s has a %T payload, the destination writes only structured data", keyString(rec), rec.Payload.After)
 		}
 		if len(payload) == 0 {
 			return nil, newError(ErrPayloadEmpty, CodePayloadEmpty, ".Payload.After",
 				"make sure create, update and snapshot records carry the row in .Payload.After",
-				"record %q has no fields to write", keyString(rec))
+				"record %s has no fields to write", keyString(rec))
 		}
 
 		columns := make([]string, 0, len(payload))
@@ -576,7 +574,7 @@ func (d *Destination) deleteRecords(ctx context.Context, tx *sqlx.Tx, table stri
 		return 0, fmt.Errorf("failed to build query: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, sql, args...); err != nil {
-		return 0, fmt.Errorf("failed to execute batch delete: %w", err)
+		return 0, serverError("delete", table, err)
 	}
 	return len(recs), nil
 }
@@ -640,7 +638,7 @@ func decodeRecordKey(keyVal opencdc.Data) (map[string]any, error) {
 		if err != nil {
 			return nil, newError(ErrKeyColumnMissing, CodeKeyColumnMissing, ".Key",
 				"send delete records with a structured key or a JSON object key that holds the table's primary-key columns",
-				"the record key %q is not a JSON object: %v", string(key), err)
+				"the record key (key hash %s) is not one JSON object", logHash(string(key)))
 		}
 	}
 	return fields, nil
@@ -661,7 +659,7 @@ func keyValue(col keyColumn, key map[string]any, resolved columnResolver) (any, 
 		if found != "" {
 			return nil, newError(ErrDuplicateColumn, CodeDuplicateColumn, ".Key",
 				"send each key column once; MySQL resolves both field names to the same column",
-				"the record key has the fields %q and %q, which both name the column %q", found, field, col.Name)
+				"the record key has two fields that both name the column %q", col.Name)
 		}
 		val, found = v, field
 	}
@@ -692,7 +690,7 @@ func typeKeyValue(col keyColumn, val any, path string) (any, error) {
 	mismatch := func(why string) error {
 		return newError(ErrKeyValueTypeMismatch, CodeKeyValueTypeMismatch, path,
 			"send key values that fit the key column's type",
-			"the record has %v (%T) for the %s key column %q: %s", val, val, col.ColumnType, col.Name, why)
+			"the record has a %T value for the %s key column %q: %s", val, col.ColumnType, col.Name, why)
 	}
 
 	switch {
@@ -741,12 +739,164 @@ func typeKeyValue(col keyColumn, val any, path string) (any, error) {
 			return n.Int64(), nil
 		}
 		return n.Uint64(), nil // in range of an unsigned bigint
+	case col.DataType == "decimal" || col.DataType == "numeric": //nolint:goconst // MySQL DATA_TYPE names
+		return decimalKeyValue(col, val, mismatch)
+	case floatTypes[col.DataType]:
+		return floatKeyValue(val, mismatch)
+	case temporalPatterns[col.DataType] != nil:
+		return temporalKeyValue(col, val, mismatch)
 	default:
 		if num, ok := val.(json.Number); ok {
 			return exactNumber(num), nil
 		}
 		return val, nil
 	}
+}
+
+var (
+	decimalPattern = regexp.MustCompile(`^[+-]?(\d+(\.\d*)?|\.\d+)$`)
+	// scalePattern reads (M,D) of a decimal(M,D) COLUMN_TYPE.
+	scalePattern = regexp.MustCompile(`\((\d+)(?:,\s*(\d+))?\)`)
+
+	floatTypes = map[string]bool{"float": true, "double": true, "real": true} //nolint:goconst // MySQL DATA_TYPE names
+
+	// temporalPatterns hold the literal each temporal type is compared with.
+	// MySQL reads a malformed one as zero or as a different date, and a key
+	// that does not fit matches the wrong row or none, so it is refused.
+	//
+	//nolint:goconst // MySQL DATA_TYPE names
+	temporalPatterns = map[string]*regexp.Regexp{
+		"date":      regexp.MustCompile(`^(\d{4})-(\d{2})-(\d{2})$`),
+		"datetime":  regexp.MustCompile(`^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})(\.\d{1,6})?$`),
+		"timestamp": regexp.MustCompile(`^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})(\.\d{1,6})?$`),
+		"time":      regexp.MustCompile(`^-?(\d{1,3}):(\d{2}):(\d{2})(\.\d{1,6})?$`),
+		"year":      regexp.MustCompile(`^\d{4}$`),
+	}
+)
+
+// decimalKeyValue accepts a decimal literal, as a JSON number or a string, that
+// fits the column's precision and scale. A value with more fraction digits than
+// the scale is rounded by the server and matches the wrong row.
+func decimalKeyValue(col keyColumn, val any, mismatch func(string) error) (any, error) {
+	var lit string
+	switch v := val.(type) {
+	case json.Number:
+		lit = v.String()
+	case string:
+		lit = v
+	case []byte:
+		lit = string(v)
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+		lit = fmt.Sprint(v)
+	case float32, float64:
+		f := reflect.ValueOf(v).Float()
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			return nil, mismatch("not a finite number")
+		}
+		lit = strconv.FormatFloat(f, 'f', -1, 64)
+	default:
+		return nil, mismatch("a DECIMAL column needs a number or a decimal string")
+	}
+	if !decimalPattern.MatchString(lit) {
+		return nil, mismatch("not a decimal number")
+	}
+	if m := scalePattern.FindStringSubmatch(col.ColumnType); m != nil {
+		prec, _ := strconv.Atoi(m[1])
+		scale := 0
+		if m[2] != "" {
+			scale, _ = strconv.Atoi(m[2])
+		}
+		intPart, frac, _ := strings.Cut(strings.TrimLeft(lit, "+-"), ".")
+		intPart = strings.TrimLeft(intPart, "0")
+		frac = strings.TrimRight(frac, "0")
+		if len(frac) > scale {
+			return nil, mismatch(fmt.Sprintf("more than %d fraction digits", scale))
+		}
+		if len(intPart) > prec-scale {
+			return nil, mismatch(fmt.Sprintf("more than %d integer digits", prec-scale))
+		}
+	}
+	if num, ok := val.(json.Number); ok {
+		return exactNumber(num), nil
+	}
+	return lit, nil
+}
+
+// floatKeyValue accepts a finite number.
+func floatKeyValue(val any, mismatch func(string) error) (any, error) {
+	switch v := val.(type) {
+	case json.Number:
+		f, err := v.Float64()
+		if err != nil || math.IsInf(f, 0) {
+			return nil, mismatch("not a finite number")
+		}
+		return exactNumber(v), nil
+	case float32, float64:
+		if f := reflect.ValueOf(v).Float(); math.IsNaN(f) || math.IsInf(f, 0) {
+			return nil, mismatch("not a finite number")
+		}
+		return v, nil
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+		return v, nil
+	default:
+		return nil, mismatch("a FLOAT or DOUBLE column needs a number")
+	}
+}
+
+// temporalKeyValue accepts a time.Time or a literal in the format of the
+// column's type with a calendar-valid date and a time of day in range.
+func temporalKeyValue(col keyColumn, val any, mismatch func(string) error) (any, error) {
+	if t, ok := val.(time.Time); ok {
+		return t, nil
+	}
+	var lit string
+	switch v := val.(type) {
+	case string:
+		lit = v
+	case []byte:
+		lit = string(v)
+	case json.Number:
+		if col.DataType != "year" {
+			return nil, mismatch("a temporal column needs a string in the column's format")
+		}
+		lit = v.String()
+	case int, int64, uint64:
+		if col.DataType != "year" {
+			return nil, mismatch("a temporal column needs a string in the column's format")
+		}
+		lit = fmt.Sprint(v)
+	default:
+		return nil, mismatch("a temporal column needs a string in the column's format")
+	}
+	m := temporalPatterns[col.DataType].FindStringSubmatch(lit)
+	if m == nil {
+		return nil, mismatch("not in the format of the column's type")
+	}
+	switch col.DataType {
+	case "date", "datetime", "timestamp":
+		y, _ := strconv.Atoi(m[1])
+		mo, _ := strconv.Atoi(m[2])
+		d, _ := strconv.Atoi(m[3])
+		if t := time.Date(y, time.Month(mo), d, 0, 0, 0, 0, time.UTC); t.Year() != y || int(t.Month()) != mo || t.Day() != d {
+			return nil, mismatch("not a calendar date")
+		}
+		if col.DataType != "date" {
+			h, _ := strconv.Atoi(m[4])
+			mi, _ := strconv.Atoi(m[5])
+			sec, _ := strconv.Atoi(m[6])
+			if h > 23 || mi > 59 || sec > 59 {
+				return nil, mismatch("not a time of day")
+			}
+		}
+	case "time":
+		h, _ := strconv.Atoi(m[1])
+		mi, _ := strconv.Atoi(m[2])
+		sec, _ := strconv.Atoi(m[3])
+		if h > 838 || mi > 59 || sec > 59 {
+			return nil, mismatch("not a TIME value")
+		}
+	}
+	return lit, nil
 }
 
 // DATA_TYPE values with their own key rules in typeKeyValue.
@@ -944,10 +1094,10 @@ func (r columnResolver) checkDistinct(fields []string, path string) error {
 		if !ok {
 			continue // names no column: the statement fails with unknown_column
 		}
-		if other, dup := byColumn[col]; dup {
+		if _, dup := byColumn[col]; dup {
 			return newError(ErrDuplicateColumn, CodeDuplicateColumn, path,
 				"send each column once; MySQL resolves both field names to the same column",
-				"the record has the fields %q and %q, which both name the column %q", other, f, col)
+				"the record has two fields that both name the column %q", col)
 		}
 		byColumn[col] = f
 	}

@@ -44,3 +44,23 @@ func TestFormatErrors_DoNotContainTheValue(t *testing.T) {
 		})
 	}
 }
+
+func TestTemporalAndDecimalErrors_DoNotContainTheValue(t *testing.T) {
+	cases := map[string]func() error{
+		"time of day": func() error { _, err := parseTimeString("SECRET:xx:yy"); return err },
+		"time parts":  func() error { _, err := parseTimeString("SECRET"); return err },
+		"fractional":  func() error { _, err := parseTimeString("01:02:03.SECRET"); return err },
+		"decimal":     func() error { _, err := formatDecimal(Field{Name: "c", Type: TypeFloat64}, "SECRET-1"); return err },
+	}
+	for name, call := range cases {
+		t.Run(name, func(t *testing.T) {
+			err := call()
+			if err == nil {
+				t.Fatal("want an error")
+			}
+			if strings.Contains(err.Error(), "SECRET") {
+				t.Errorf("error repeats the value: %v", err)
+			}
+		})
+	}
+}

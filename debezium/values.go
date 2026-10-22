@@ -110,7 +110,7 @@ func formatDecimal(f Field, v any) (any, error) {
 	if f.Type == TypeFloat64 {
 		fl, err := strconv.ParseFloat(s, 64)
 		if err != nil {
-			return nil, fmt.Errorf("column %s: decimal %q is not a number: %w", f.Name, s, err)
+			return nil, fmt.Errorf("column %s: a %d byte decimal is not a number: %w", f.Name, len(s), numberCause(err))
 		}
 		return fl, nil
 	}
@@ -363,7 +363,7 @@ func parseUTCTime(s string, layouts []string) (time.Time, error) {
 			return t.UTC(), nil
 		}
 	}
-	return time.Time{}, fmt.Errorf("cannot parse temporal value %q", s)
+	return time.Time{}, fmt.Errorf("cannot parse a %d byte temporal value", len(s))
 }
 
 func timeOfDayMicros(t time.Time) int64 {
@@ -388,19 +388,19 @@ func parseTimeString(s string) (int64, error) {
 		}
 		f, err := strconv.ParseInt(digits, 10, 64)
 		if err != nil {
-			return 0, fmt.Errorf("invalid fractional time %q", digits)
+			return 0, fmt.Errorf("invalid fractional time")
 		}
 		frac = f
 	}
 	parts := strings.Split(s, ":")
 	if len(parts) != 3 {
-		return 0, fmt.Errorf("invalid time value %q", s)
+		return 0, fmt.Errorf("invalid time value (%d bytes)", len(s))
 	}
 	h, err1 := strconv.Atoi(parts[0])
 	m, err2 := strconv.Atoi(parts[1])
 	sec, err3 := strconv.Atoi(parts[2])
 	if err1 != nil || err2 != nil || err3 != nil {
-		return 0, fmt.Errorf("invalid time value %q", s)
+		return 0, fmt.Errorf("invalid time value (%d bytes)", len(s))
 	}
 	return int64(h*3600+m*60+sec)*1_000_000 + frac, nil
 }

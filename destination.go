@@ -754,7 +754,9 @@ func typeKeyValue(col keyColumn, val any, path string) (any, error) {
 }
 
 var (
-	decimalPattern = regexp.MustCompile(`^[+-]?(\d+(\.\d*)?|\.\d+)$`)
+	// decimalPattern is a decimal literal with an optional exponent, which
+	// JSON numbers (1e5) and MySQL both accept; decimalKeyValue expands it.
+	decimalPattern = regexp.MustCompile(`^([+-]?)(\d+(?:\.\d*)?|\.\d+)(?:[eE]([+-]?\d+))?$`)
 	// scalePattern reads (M,D) of a decimal(M,D) COLUMN_TYPE.
 	scalePattern = regexp.MustCompile(`\((\d+)(?:,\s*(\d+))?\)`)
 
@@ -766,9 +768,10 @@ var (
 	//
 	//nolint:goconst // MySQL DATA_TYPE names
 	temporalPatterns = map[string]*regexp.Regexp{
-		"date":      regexp.MustCompile(`^(\d{4})-(\d{2})-(\d{2})$`),
-		"datetime":  regexp.MustCompile(`^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})(\.\d{1,6})?$`),
-		"timestamp": regexp.MustCompile(`^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})(\.\d{1,6})?$`),
+		"date": regexp.MustCompile(`^(\d{4})-(\d{2})-(\d{2})$`),
+		// datetime and timestamp take an offset (+00:00, -05:30) from MySQL 8.0.19.
+		"datetime":  regexp.MustCompile(`^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})(\.\d{1,6})?([+-]\d{2}:\d{2})?$`),
+		"timestamp": regexp.MustCompile(`^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})(\.\d{1,6})?([+-]\d{2}:\d{2})?$`),
 		"time":      regexp.MustCompile(`^-?(\d{1,3}):(\d{2}):(\d{2})(\.\d{1,6})?$`),
 		"year":      regexp.MustCompile(`^\d{4}$`),
 	}
@@ -797,7 +800,8 @@ func decimalKeyValue(col keyColumn, val any, mismatch func(string) error) (any, 
 	default:
 		return nil, mismatch("a DECIMAL column needs a number or a decimal string")
 	}
-	if !decimalPattern.MatchString(lit) {
+	lit, ok := expandDecimal(lit)
+	if !ok {
 		return nil, mismatch("not a decimal number")
 	}
 	if m := scalePattern.FindStringSubmatch(col.ColumnType); m != nil {
@@ -816,10 +820,55 @@ func decimalKeyValue(col keyColumn, val any, mismatch func(string) error) (any, 
 			return nil, mismatch(fmt.Sprintf("more than %d integer digits", prec-scale))
 		}
 	}
-	if num, ok := val.(json.Number); ok {
-		return exactNumber(num), nil
+	if _, ok := val.(json.Number); ok {
+		return exactNumber(json.Number(lit)), nil
 	}
 	return lit, nil
+}
+
+// maxDecimalExponent bounds the exponent expandDecimal accepts: a larger one
+// cannot fit any DECIMAL column (at most 65 digits) and would only cost memory.
+const maxDecimalExponent = 1000
+
+// expandDecimal returns the plain decimal form of a decimal literal, with
+// its exponent applied ("1.5e2" is "150", "25e-1" is "2.5"). It reports false
+// for text that is not a decimal literal and for an exponent outside
+// ±maxDecimalExponent. Nothing of the literal is echoed by the caller.
+func expandDecimal(lit string) (string, bool) {
+	m := decimalPattern.FindStringSubmatch(lit)
+	if m == nil {
+		return "", false
+	}
+	sign, mantissa, expText := m[1], m[2], m[3]
+	exp := 0
+	if expText != "" {
+		e, err := strconv.Atoi(expText)
+		if err != nil || e > maxDecimalExponent || e < -maxDecimalExponent {
+			return "", false
+		}
+		exp = e
+	}
+	intPart, frac, _ := strings.Cut(mantissa, ".")
+	digits := intPart + frac
+	point := len(intPart) + exp // position of the decimal point in digits
+	switch {
+	case point <= 0:
+		digits = strings.Repeat("0", -point+1) + digits
+		point = 1
+	case point > len(digits):
+		digits += strings.Repeat("0", point-len(digits))
+	}
+	intPart, frac = digits[:point], digits[point:]
+	if intPart = strings.TrimLeft(intPart, "0"); intPart == "" {
+		intPart = "0"
+	}
+	if frac = strings.TrimRight(frac, "0"); frac != "" {
+		frac = "." + frac
+	}
+	if sign == "+" {
+		sign = ""
+	}
+	return sign + intPart + frac, true
 }
 
 // floatKeyValue accepts a finite number.
@@ -886,6 +935,14 @@ func temporalKeyValue(col keyColumn, val any, mismatch func(string) error) (any,
 			sec, _ := strconv.Atoi(m[6])
 			if h > 23 || mi > 59 || sec > 59 {
 				return nil, mismatch("not a time of day")
+			}
+			if off := m[8]; off != "" {
+				oh, _ := strconv.Atoi(off[1:3])
+				om, _ := strconv.Atoi(off[4:])
+				// MySQL accepts -13:59 to +14:00
+				if om > 59 || oh > 14 || (oh == 14 && (om > 0 || off[0] == '-')) {
+					return nil, mismatch("not a UTC offset")
+				}
 			}
 		}
 	case "time":

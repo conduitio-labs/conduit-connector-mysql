@@ -807,3 +807,47 @@ func TestDestination_FieldNamesResolveLikeMySQL(t *testing.T) {
 		is.True(errors.Is(err, ErrDuplicateColumn))
 	})
 }
+
+// MySQL 8.0.19+ reads a UTC offset in a datetime or timestamp literal, and a
+// JSON number with an exponent is a valid DECIMAL: the key check refused both,
+// so a delete for such a key failed although MySQL would have matched the row.
+func TestDestination_Delete_KeyShapesMySQLAccepts(t *testing.T) {
+	ctx := testutils.TestContext(t)
+	is := is.New(t)
+	db := testutils.NewDB(t)
+
+	is.NoErr(db.Exec("DROP TABLE IF EXISTS dest_keyshape_dt, dest_keyshape_ts, dest_keyshape_dec").Error)
+	is.NoErr(db.Exec("CREATE TABLE dest_keyshape_dt (id DATETIME(6) PRIMARY KEY, v VARCHAR(10))").Error)
+	is.NoErr(db.Exec("CREATE TABLE dest_keyshape_ts (id TIMESTAMP(6) PRIMARY KEY, v VARCHAR(10))").Error)
+	is.NoErr(db.Exec("CREATE TABLE dest_keyshape_dec (id DECIMAL(20,4) PRIMARY KEY, v VARCHAR(10))").Error)
+	t.Cleanup(func() { db.Exec("DROP TABLE IF EXISTS dest_keyshape_dt, dest_keyshape_ts, dest_keyshape_dec") })
+
+	dest, cleanup := testDestination(ctx, is)
+	defer cleanup()
+
+	for _, tc := range []struct {
+		name, table, insert string
+		key                 opencdc.Data
+	}{
+		{"datetime offset", "dest_keyshape_dt", "'2026-10-22 09:30:00'", opencdc.StructuredData{"id": "2026-10-22 09:30:00+00:00"}},
+		{"datetime offset, T and fraction", "dest_keyshape_dt", "'2026-10-22 09:30:00.5'", opencdc.StructuredData{"id": "2026-10-22T09:30:00.5+00:00"}},
+		{"datetime offset, raw key", "dest_keyshape_dt", "'2026-10-22 09:30:00'", opencdc.RawData(`{"id":"2026-10-22 14:30:00+05:00"}`)},
+		{"timestamp offset", "dest_keyshape_ts", "'2026-10-22 09:30:00'", opencdc.StructuredData{"id": "2026-10-22 09:30:00+00:00"}},
+		{"decimal exponent, raw key", "dest_keyshape_dec", "100000", opencdc.RawData(`{"id":1e5}`)},
+		{"decimal fraction and exponent", "dest_keyshape_dec", "125", opencdc.RawData(`{"id":1.25E+2}`)},
+		{"decimal negative exponent", "dest_keyshape_dec", "1.25", opencdc.RawData(`{"id":125e-2}`)},
+		{"decimal exponent, string", "dest_keyshape_dec", "1000", opencdc.StructuredData{"id": "1e3"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			is := is.New(t)
+			is.NoErr(db.Exec("DELETE FROM " + tc.table).Error)
+			is.NoErr(db.Exec("INSERT INTO " + tc.table + " VALUES (" + tc.insert + ", 'x')").Error)
+			written, err := dest.Write(ctx, []opencdc.Record{keysTestDelete(tc.table, tc.key)})
+			is.NoErr(err)
+			is.Equal(written, 1)
+			var n int64
+			is.NoErr(db.Raw("SELECT COUNT(*) FROM " + tc.table).Scan(&n).Error)
+			is.Equal(n, int64(0)) // the row the key names is gone
+		})
+	}
+}

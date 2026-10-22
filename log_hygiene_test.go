@@ -281,32 +281,51 @@ func TestTypeKeyValue_RefusesKeysThatDoNotFit(t *testing.T) {
 	dt := keyColumn{Name: "at", DataType: "datetime", ColumnType: "datetime(6)"}
 	date := keyColumn{Name: "d", DataType: "date", ColumnType: "date"}
 	flt := keyColumn{Name: "f", DataType: "double", ColumnType: "double"}
+	wide := keyColumn{Name: "price", DataType: "decimal", ColumnType: "decimal(20,4)"}
+	ts := keyColumn{Name: "at", DataType: "timestamp", ColumnType: "timestamp"}
 	for name, tc := range map[string]struct {
 		col keyColumn
 		val any
 		ok  bool
 	}{
-		"decimal string":       {dec, "1234.50", true},
-		"decimal number":       {dec, json.Number("12.5"), true},
-		"decimal int":          {dec, 12, true},
-		"decimal garbage":      {dec, "customer-SECRET-4711", false},
-		"decimal exponent":     {dec, "1e3", false},
-		"decimal too scaled":   {dec, "1.234", false},
-		"decimal too big":      {dec, "12345.67", false},
-		"decimal bool":         {dec, true, false},
-		"decimal NaN":          {dec, math.NaN(), false},
-		"datetime":             {dt, "2026-10-22 09:30:00.123456", true},
-		"datetime T":           {dt, "2026-10-22T09:30:00", true},
-		"datetime time.Time":   {dt, time.Date(2026, 10, 22, 9, 30, 0, 0, time.UTC), true},
-		"datetime garbage":     {dt, "customer-SECRET-4711", false},
-		"datetime day 31 of 2": {dt, "2026-02-31 00:00:00", false},
-		"datetime hour 24":     {dt, "2026-02-01 24:00:00", false},
-		"datetime number":      {dt, json.Number("20261022"), false},
-		"date":                 {date, "2026-10-22", true},
-		"date with time":       {date, "2026-10-22 09:30:00", false},
-		"float":                {flt, json.Number("1.5"), true},
-		"float string":         {flt, "customer-SECRET-4711", false},
-		"float inf":            {flt, math.Inf(1), false},
+		"decimal string":               {dec, "1234.50", true},
+		"decimal number":               {dec, json.Number("12.5"), true},
+		"decimal int":                  {dec, 12, true},
+		"decimal garbage":              {dec, "customer-SECRET-4711", false},
+		"decimal exponent":             {dec, "1e3", true},
+		"decimal exponent big":         {dec, "1e5", false},
+		"decimal huge exponent":        {dec, json.Number("1e999999999"), false},
+		"decimal too scaled":           {dec, "1.234", false},
+		"decimal too big":              {dec, "12345.67", false},
+		"decimal bool":                 {dec, true, false},
+		"decimal NaN":                  {dec, math.NaN(), false},
+		"datetime":                     {dt, "2026-10-22 09:30:00.123456", true},
+		"datetime T":                   {dt, "2026-10-22T09:30:00", true},
+		"datetime time.Time":           {dt, time.Date(2026, 10, 22, 9, 30, 0, 0, time.UTC), true},
+		"datetime garbage":             {dt, "customer-SECRET-4711", false},
+		"datetime day 31 of 2":         {dt, "2026-02-31 00:00:00", false},
+		"datetime hour 24":             {dt, "2026-02-01 24:00:00", false},
+		"datetime number":              {dt, json.Number("20261022"), false},
+		"datetime offset":              {dt, "2026-10-22 09:30:00+00:00", true},
+		"datetime fraction and offset": {dt, "2026-10-22T09:30:00.5-05:30", true},
+		"timestamp offset":             {ts, "2026-10-22 09:30:00+14:00", true},
+		"timestamp offset max":         {ts, "2026-10-22 09:30:00-13:59", true},
+		"timestamp offset too big":     {ts, "2026-10-22 09:30:00+14:01", false},
+		"timestamp offset minus 14":    {ts, "2026-10-22 09:30:00-14:00", false},
+		"timestamp offset minutes":     {ts, "2026-10-22 09:30:00+01:60", false},
+		"timestamp offset no colon":    {ts, "2026-10-22 09:30:00+0100", false},
+		"timestamp Z":                  {ts, "2026-10-22 09:30:00Z", false},
+		"date offset":                  {date, "2026-10-22+00:00", false},
+		"date":                         {date, "2026-10-22", true},
+		"date with time":               {date, "2026-10-22 09:30:00", false},
+		"decimal json exponent":        {wide, json.Number("1e5"), true},
+		"decimal json frac exponent":   {wide, json.Number("1.25E+2"), true},
+		"decimal json neg exponent":    {wide, json.Number("125e-2"), true},
+		"decimal exponent scale":       {wide, json.Number("1e-5"), false},
+		"decimal exponent digits":      {wide, json.Number("1e17"), false},
+		"float":                        {flt, json.Number("1.5"), true},
+		"float string":                 {flt, "customer-SECRET-4711", false},
+		"float inf":                    {flt, math.Inf(1), false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			is := is.New(t)
@@ -318,6 +337,28 @@ func TestTypeKeyValue_RefusesKeysThatDoNotFit(t *testing.T) {
 			is.True(err != nil)
 			is.True(!strings.Contains(err.Error(), "SECRET"))
 			is.True(!strings.Contains(err.Error(), "1234"))
+		})
+	}
+}
+
+func TestExpandDecimal(t *testing.T) {
+	for in, want := range map[string]string{
+		"1e5": "100000", "1E5": "100000", "1.5e2": "150", "25e-1": "2.5", "125e-2": "1.25", "1e-5": "0.00001",
+		"-1.5e1": "-15", "+3": "3", ".5": "0.5", "5.": "5", "0.0": "0", "-0": "-0", "00012.3400": "12.34",
+		"1e0": "1", "0e5": "0", "100e-2": "1", "12.5": "12.5", "1.2e0": "1.2",
+	} {
+		t.Run(in, func(t *testing.T) {
+			got, ok := expandDecimal(in)
+			if !ok || got != want {
+				t.Fatalf("expandDecimal(%q) = %q, %v; want %q", in, got, ok, want)
+			}
+		})
+	}
+	for _, in := range []string{"", "e5", "1e", "1e+", "abc", "1.2.3", "1e1001", "1e-1001", "--1", "1 e5", "0x10", "NaN"} {
+		t.Run("bad "+in, func(t *testing.T) {
+			if got, ok := expandDecimal(in); ok {
+				t.Fatalf("expandDecimal(%q) = %q, want a refusal", in, got)
+			}
 		})
 	}
 }

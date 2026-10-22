@@ -40,6 +40,18 @@ func TestDecodeSnapshotKey_ErrorsDoNotContainTheValue(t *testing.T) {
 			_, err := decodeTagged(taggedKeyValue{Type: keyTypeFloat64, Value: "SECRET-key-4711"})
 			return err
 		},
+		"time": func() error {
+			_, err := decodeTagged(taggedKeyValue{Type: keyTypeTime, Value: "SECRET-4711"})
+			return err
+		},
+		"bool": func() error {
+			_, err := decodeTagged(taggedKeyValue{Type: keyTypeBool, Value: "SECRET-4711"})
+			return err
+		},
+		"bytes": func() error {
+			_, err := decodeTagged(taggedKeyValue{Type: keyTypeBytes, Value: "SECRET-4711!"})
+			return err
+		},
 		"float64 NaN": func() error { _, err := decodeTagged(taggedKeyValue{Type: keyTypeFloat64, Value: "NaN"}); return err },
 	}
 	for name, call := range cases {

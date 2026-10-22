@@ -390,7 +390,7 @@ func (d *Destination) upsertRecords(ctx context.Context, tx *sqlx.Tx, table stri
 						"or remove the field before the destination with a field.exclude processor",
 					"table %q has no column for a field of the records: %s", table, myErr.Message)
 			}
-			return fmt.Errorf("failed to execute batch upsert: %w", err)
+			return upsertError(table, err)
 		}
 	}
 
@@ -424,6 +424,39 @@ func keyString(rec opencdc.Record) string {
 	}
 	return string(rec.Key.Bytes())
 }
+
+// upsertError wraps the error of the batch upsert. The message of the server
+// errors in valueBearingMySQLErrors quotes a value of the row ("Duplicate entry
+// 'k' for key", "Incorrect string value: 'x' for column"), and errors reach the
+// DLQ, the API and CLI output: for those the code and SQLSTATE are kept and the
+// message is dropped.
+func upsertError(table string, err error) error {
+	var myErr *mysql.MySQLError
+	if errors.As(err, &myErr) && valueBearingMySQLErrors[myErr.Number] {
+		return &mysqlValueError{
+			msg: fmt.Sprintf("failed to execute batch upsert on table %q: MySQL error %d (SQLSTATE %s), message withheld: it can quote row values",
+				table, myErr.Number, string(myErr.SQLState[:])),
+			err: err,
+		}
+	}
+	return fmt.Errorf("failed to execute batch upsert: %w", err)
+}
+
+// valueBearingMySQLErrors are the server errors whose message quotes a value of
+// the row: ER_DUP_ENTRY (1062), ER_TRUNCATED_WRONG_VALUE (1292),
+// ER_TRUNCATED_WRONG_VALUE_FOR_FIELD (1366), ER_WRONG_VALUE_FOR_TYPE (1411)
+// and ER_ILLEGAL_VALUE_FOR_TYPE (1367, 1525).
+var valueBearingMySQLErrors = map[uint16]bool{1062: true, 1292: true, 1366: true, 1367: true, 1411: true, 1525: true}
+
+// mysqlValueError is a server error without its message. The original stays in
+// the chain, so errors.As finds the *mysql.MySQLError.
+type mysqlValueError struct {
+	msg string
+	err error
+}
+
+func (e *mysqlValueError) Error() string { return e.msg }
+func (e *mysqlValueError) Unwrap() error { return e.err }
 
 // mysqlErrBadFieldError is ER_BAD_FIELD_ERROR, "Unknown column".
 const mysqlErrBadFieldError = 1054

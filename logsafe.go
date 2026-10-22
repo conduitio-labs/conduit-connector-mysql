@@ -53,5 +53,6 @@ func numberCause(err error) error {
 	if errors.As(err, &ne) {
 		return ne.Err
 	}
-	return errors.New("not a valid number")
+	// any other parser (time, base64, bool, ...) can quote its input in its text
+	return errors.New("not a valid value")
 }

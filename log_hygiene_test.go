@@ -20,11 +20,13 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
 
 	"github.com/conduitio-labs/conduit-connector-mysql/common"
+	mysqlDriver "github.com/go-sql-driver/mysql"
 	"github.com/iskorotkov/avro/v2"
 	"github.com/jmoiron/sqlx"
 	"github.com/matryer/is"
@@ -208,5 +210,29 @@ func TestFormatValue_ErrorsDoNotContainTheValue(t *testing.T) {
 			is.True(!strings.Contains(err.Error(), "99999999999999999999"))
 			is.True(!strings.Contains(err.Error(), "18446744073709551615"))
 		})
+	}
+}
+
+// A server error such as "Duplicate entry 'k' for key" quotes the row's value:
+// the code and SQLSTATE stay, the message goes.
+func TestUpsertError_DoesNotContainRowValues(t *testing.T) {
+	for number, message := range map[uint16]string{
+		1062: "Duplicate entry 'customer-SECRET-4711' for key 'PRIMARY'",
+		1292: "Truncated incorrect DOUBLE value: 'customer-SECRET-4711'",
+		1366: "Incorrect string value: '\\xF0\\x9F' for column 'note' at row 1 customer-SECRET-4711",
+	} {
+		t.Run(fmt.Sprint(number), func(t *testing.T) {
+			is := is.New(t)
+			err := upsertError("orders", &mysqlDriver.MySQLError{Number: number, SQLState: [5]byte{'2', '3', '0', '0', '0'}, Message: message})
+			is.True(strings.Contains(err.Error(), fmt.Sprintf("MySQL error %d", number)))
+			is.True(!strings.Contains(err.Error(), "SECRET"))
+			var my *mysqlDriver.MySQLError
+			is.True(errors.As(err, &my)) // the chain is kept
+		})
+	}
+	// other errors keep their text
+	err := upsertError("orders", &mysqlDriver.MySQLError{Number: 1146, Message: "Table 'db.orders' doesn't exist"})
+	if !strings.Contains(err.Error(), "doesn't exist") {
+		t.Errorf("an error without row values keeps its message: %v", err)
 	}
 }

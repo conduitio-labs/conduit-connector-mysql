@@ -227,6 +227,20 @@ func TestNewCanal_NoDialerUnchanged(t *testing.T) {
 	is.True(strings.Contains(err.Error(), "refused") || strings.Contains(err.Error(), "connect"))
 }
 
+// The binlog/replication connection must inherit the DSN's TLS: canal dials it
+// separately from the sqlx pool, and without this it would stream the binlog in
+// plaintext while the snapshot and destination used TLS.
+func TestBuildCanalConfig_TLSFromDSN(t *testing.T) {
+	is := is.New(t)
+
+	tlsCfg := buildCanalConfig(CanalConfig{Config: mustParse(t, "u:p@tcp(db.example.test:3306)/d?tls=skip-verify")})
+	is.True(tlsCfg.TLSConfig != nil)
+	is.True(tlsCfg.TLSConfig.InsecureSkipVerify)
+
+	plain := buildCanalConfig(CanalConfig{Config: mustParse(t, "u:p@tcp(db.example.test:3306)/d")})
+	is.True(plain.TLSConfig == nil) // without tls= the binlog connection stays plaintext, as before
+}
+
 // TestOpenDSN_TLSLayeredOverDialedConn proves the driver runs its TLS handshake
 // over the connection the host dialer returned (not over a connection it dialed
 // itself): a minimal server on the dialer's side of a pipe advertises SSL, reads

@@ -21,8 +21,10 @@ import (
 	"log/slog"
 	"strconv"
 
+	"github.com/conduitio/conduit-commons/dialer"
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/go-mysql-org/go-mysql/canal"
+	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 	"github.com/rs/zerolog"
@@ -35,12 +37,14 @@ type CanalConfig struct {
 }
 
 func NewCanal(ctx context.Context, config CanalConfig) (*canal.Canal, error) {
-	cfg := canal.NewDefaultConfig()
-	cfg.Addr = config.Addr
-	cfg.User = config.User
-	cfg.Password = config.Passwd
+	cfg := buildCanalConfig(config)
 
-	cfg.IncludeTableRegex = config.Tables
+	// Host dialer: the binlog syncer and canal's metadata connections (SHOW,
+	// table schema, master position) dial through it, including reconnects.
+	if dial, ok := dialer.FromContext(ctx); ok {
+		cfg.Dialer = client.Dialer(dial)
+	}
+
 	if config.DisableLogging {
 		cfg.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	} else {
@@ -48,16 +52,31 @@ func NewCanal(ctx context.Context, config CanalConfig) (*canal.Canal, error) {
 		cfg.Logger = slog.New(&zerologHandler{logger: zerologLogger})
 	}
 
-	// Disable dumping
-	cfg.Dump.ExecutionPath = ""
-	cfg.ParseTime = true
-
 	c, err := canal.NewCanal(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create mysql canal: %w", err)
 	}
 
 	return c, nil
+}
+
+// buildCanalConfig returns the canal configuration derived from the connector's
+// settings. The binlog syncer and canal's metadata connections inherit the DSN's
+// TLS configuration (config.TLS), so a `tls=` parameter encrypts the replication
+// connection too, not only the sqlx pool: canal would otherwise stream the binlog
+// in plaintext while the snapshot and destination used TLS.
+func buildCanalConfig(config CanalConfig) *canal.Config {
+	cfg := canal.NewDefaultConfig()
+	cfg.Addr = config.Addr
+	cfg.User = config.User
+	cfg.Password = config.Passwd
+	cfg.TLSConfig = config.TLS
+	cfg.IncludeTableRegex = config.Tables
+
+	// Disable dumping
+	cfg.Dump.ExecutionPath = ""
+	cfg.ParseTime = true
+	return cfg
 }
 
 type zerologHandler struct {

@@ -146,7 +146,7 @@ func (s *Source) Config() sdk.SourceConfig {
 }
 
 func (s *Source) Open(ctx context.Context, sdkPos opencdc.Position) (err error) {
-	s.db, err = sqlx.Open("mysql", s.config.MysqlCfg().FormatDSN())
+	s.db, err = common.OpenConfig(ctx, s.config.MysqlCfg())
 	if err != nil {
 		return fmt.Errorf("failed to connect to mysql: %w", err)
 	}

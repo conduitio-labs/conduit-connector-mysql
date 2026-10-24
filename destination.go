@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/Masterminds/squirrel"
+	"github.com/conduitio-labs/conduit-connector-mysql/common"
 	"github.com/conduitio/conduit-commons/opencdc"
 	sdk "github.com/conduitio/conduit-connector-sdk"
 	"github.com/go-sql-driver/mysql"
@@ -118,7 +119,7 @@ func (d *Destination) Open(ctx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
-	d.db, err = sqlx.Open("mysql", dsn)
+	d.db, err = common.OpenDSN(ctx, dsn)
 	if err != nil {
 		return fmt.Errorf("failed to connect to mysql: %w", err)
 	}

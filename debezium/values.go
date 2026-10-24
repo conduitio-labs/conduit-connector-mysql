@@ -16,6 +16,7 @@ package debezium
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math"
 	"strconv"
@@ -32,8 +33,8 @@ type UnsignedOverflowError struct {
 }
 
 func (e UnsignedOverflowError) Error() string {
-	return fmt.Sprintf("BIGINT UNSIGNED value %d for column %s exceeds the maximum int64; "+
-		"set bigint.unsigned.handling.mode to precise or string to carry it losslessly", e.Value, e.Column)
+	return fmt.Sprintf("BIGINT UNSIGNED value for column %s exceeds the maximum int64; "+
+		"set bigint.unsigned.handling.mode to precise or string to carry it losslessly", e.Column)
 }
 
 // FormatValue converts one decoded MySQL value to the Connect-typed Go value
@@ -109,7 +110,7 @@ func formatDecimal(f Field, v any) (any, error) {
 	if f.Type == TypeFloat64 {
 		fl, err := strconv.ParseFloat(s, 64)
 		if err != nil {
-			return nil, fmt.Errorf("column %s: decimal %q is not a number: %w", f.Name, s, err)
+			return nil, fmt.Errorf("column %s: a %d byte decimal is not a number: %w", f.Name, len(s), numberCause(err))
 		}
 		return fl, nil
 	}
@@ -188,7 +189,7 @@ func formatYear(f Field, v any) (any, error) {
 	case string:
 		y, err := strconv.ParseInt(x, 10, 32)
 		if err != nil {
-			return nil, fmt.Errorf("column %s: year %q is not a number: %w", f.Name, x, err)
+			return nil, fmt.Errorf("column %s: a %d byte year is not a number: %w", f.Name, len(x), numberCause(err))
 		}
 		return int32(y), nil
 	default:
@@ -253,7 +254,7 @@ func formatInt(f Field, v any, lo, hi int64) (any, error) {
 		return nil, fmt.Errorf("column %s: %w", f.Name, err)
 	}
 	if n < lo || n > hi {
-		return nil, fmt.Errorf("column %s: value %d does not fit %s", f.Name, n, f.Type)
+		return nil, fmt.Errorf("column %s: value does not fit %s", f.Name, f.Type)
 	}
 	switch f.Type {
 	case TypeInt16:
@@ -293,7 +294,7 @@ func formatFloat(f Field, v any, bits int) (any, error) {
 	case string:
 		fl, err := strconv.ParseFloat(x, bits)
 		if err != nil {
-			return nil, fmt.Errorf("column %s: %q is not a number: %w", f.Name, x, err)
+			return nil, fmt.Errorf("column %s: a %d byte value is not a number: %w", f.Name, len(x), numberCause(err))
 		}
 		return fl, nil
 	case []byte:
@@ -362,7 +363,7 @@ func parseUTCTime(s string, layouts []string) (time.Time, error) {
 			return t.UTC(), nil
 		}
 	}
-	return time.Time{}, fmt.Errorf("cannot parse temporal value %q", s)
+	return time.Time{}, fmt.Errorf("cannot parse a %d byte temporal value", len(s))
 }
 
 func timeOfDayMicros(t time.Time) int64 {
@@ -387,19 +388,19 @@ func parseTimeString(s string) (int64, error) {
 		}
 		f, err := strconv.ParseInt(digits, 10, 64)
 		if err != nil {
-			return 0, fmt.Errorf("invalid fractional time %q", digits)
+			return 0, fmt.Errorf("invalid fractional time")
 		}
 		frac = f
 	}
 	parts := strings.Split(s, ":")
 	if len(parts) != 3 {
-		return 0, fmt.Errorf("invalid time value %q", s)
+		return 0, fmt.Errorf("invalid time value (%d bytes)", len(s))
 	}
 	h, err1 := strconv.Atoi(parts[0])
 	m, err2 := strconv.Atoi(parts[1])
 	sec, err3 := strconv.Atoi(parts[2])
 	if err1 != nil || err2 != nil || err3 != nil {
-		return 0, fmt.Errorf("invalid time value %q", s)
+		return 0, fmt.Errorf("invalid time value (%d bytes)", len(s))
 	}
 	return int64(h*3600+m*60+sec)*1_000_000 + frac, nil
 }
@@ -424,7 +425,7 @@ func toInt64(v any) (int64, error) {
 		return int64(x), nil
 	case uint64:
 		if x > math.MaxInt64 {
-			return 0, fmt.Errorf("unsigned value %d exceeds int64", x)
+			return 0, fmt.Errorf("unsigned value exceeds int64")
 		}
 		return int64(x), nil
 	default:
@@ -460,4 +461,16 @@ func reverseBytes(b []byte) {
 	for i, j := 0, len(b)-1; i < j; i, j = i+1, j-1 {
 		b[i], b[j] = b[j], b[i]
 	}
+}
+
+// numberCause returns the reason a number failed to parse without the number,
+// which strconv.NumError repeats. Errors reach the DLQ, the API and CLI
+// output, so a record value must not be in them.
+func numberCause(err error) error {
+	var ne *strconv.NumError
+	if errors.As(err, &ne) {
+		return ne.Err
+	}
+	// any other parser (time, base64, bool, ...) can quote its input in its text
+	return errors.New("not a valid value")
 }

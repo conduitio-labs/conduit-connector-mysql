@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"strconv"
@@ -172,7 +173,7 @@ func decodeLegacyNumber(s string) (any, error) {
 	}
 	f, err := strconv.ParseFloat(s, 64)
 	if err != nil {
-		return nil, fmt.Errorf("invalid snapshot key number %q: %w", s, err)
+		return nil, fmt.Errorf("invalid snapshot key number (%d bytes): %w", len(s), numberCause(err))
 	}
 	return f, nil
 }
@@ -185,31 +186,31 @@ func decodeTagged(t taggedKeyValue) (any, error) {
 	case keyTypeInt64:
 		v, err := strconv.ParseInt(t.Value, 10, 64)
 		if err != nil {
-			return wrap(err)
+			return wrap(numberCause(err))
 		}
 		return v, nil
 	case keyTypeUint64:
 		v, err := strconv.ParseUint(t.Value, 10, 64)
 		if err != nil {
-			return wrap(err)
+			return wrap(numberCause(err))
 		}
 		return v, nil
 	case keyTypeFloat32:
 		v, err := strconv.ParseFloat(t.Value, 32)
 		if err != nil {
-			return wrap(err)
+			return wrap(numberCause(err))
 		}
 		return float32(v), nil
 	case keyTypeFloat64:
 		v, err := strconv.ParseFloat(t.Value, 64)
 		if err != nil || math.IsNaN(v) {
-			return wrap(fmt.Errorf("not a usable float: %q", t.Value))
+			return wrap(fmt.Errorf("not a usable float (%d bytes)", len(t.Value)))
 		}
 		return v, nil
 	case keyTypeBytes:
 		v, err := base64.StdEncoding.DecodeString(t.Value)
 		if err != nil {
-			return wrap(err)
+			return wrap(numberCause(err))
 		}
 		return v, nil
 	case keyTypeString:
@@ -217,13 +218,13 @@ func decodeTagged(t taggedKeyValue) (any, error) {
 	case keyTypeTime:
 		v, err := time.Parse(time.RFC3339Nano, t.Value)
 		if err != nil {
-			return wrap(err)
+			return wrap(numberCause(err))
 		}
 		return v, nil
 	case keyTypeBool:
 		v, err := strconv.ParseBool(t.Value)
 		if err != nil {
-			return wrap(err)
+			return wrap(numberCause(err))
 		}
 		return v, nil
 	default:
@@ -310,4 +311,16 @@ func (p *TablePositionMultipleKeyItem) UnmarshalJSON(data []byte) error {
 	}
 	p.KeyName, p.LastRead, p.SnapshotEnd, p.KeyType = aux.KeyName, lr, se, aux.KeyType
 	return nil
+}
+
+// numberCause returns the reason a number failed to parse without the number,
+// which strconv.NumError repeats. Errors reach the DLQ, the API and CLI
+// output, so a snapshot key value must not be in them.
+func numberCause(err error) error {
+	var ne *strconv.NumError
+	if errors.As(err, &ne) {
+		return ne.Err
+	}
+	// any other parser (time, base64, bool, ...) can quote its input in its text
+	return errors.New("not a valid value")
 }

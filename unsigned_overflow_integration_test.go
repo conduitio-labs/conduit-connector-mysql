@@ -63,7 +63,7 @@ func requireOverflowHalt(t *testing.T, is *is.I, err error, recs []opencdc.Recor
 	is.True(errors.As(err, &coded))
 	is.Equal(coded.Code, CodeUnsignedOverflow)
 	is.True(strings.Contains(coded.Message, table+".u"))
-	is.True(strings.Contains(coded.Message, maxUint64Text))
+	is.True(!strings.Contains(coded.Message, maxUint64Text)) // the overflowing value is record data: never in the error
 
 	for _, r := range recs {
 		after, ok := r.Payload.After.(opencdc.StructuredData)
